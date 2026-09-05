@@ -1,0 +1,8 @@
+{
+  "tailnetName": "bramble-dev-c91e55e9.eth",
+  "tailnetRegistry": "0xEdA4b78CcA4472522bf2b521A6D2987306579058",
+  "deviceLabel": "device1",
+  "deviceFullname": "device1.bramble-dev-c91e55e9.eth",
+  "expectedPubkey": "bramble-dev-tailnet-test-wireguard-pubkey",
+  "provisionedAt": "2026-09-05T12:41:28.477Z"
+}
