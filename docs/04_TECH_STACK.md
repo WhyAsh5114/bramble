@@ -10,8 +10,9 @@ Verified Sept 4, 2026 where marked. Everything else: check on Day 0 and pin.
 | Rendezvous relay | Custom Go service | Candidate exchange only, x402-metered, used on every connection attempt. See `adr/0003-rendezvous-relay-split.md` |
 | Data relay | Custom Go service | Forwards opaque UDP, x402-gated per byte, used only if hole punching fails. See `adr/0003-rendezvous-relay-split.md` |
 | Naming / admission | **ENSv2 on Sepolia** | Beta since ~mid-Aug 2026. Permissioned Registry, Permissioned Resolver, Enhanced Access Control |
-| ENS client | `ensjs` **≥ 4.2.3** for ENSv2 support | Go never calls contracts directly — decided, not discretionary. See `adr/0002-node-agent-language.md` |
-| ENS sidecar | **Hono**, one per node, local HTTP only | Wraps `ensjs`/`viem`; the Go agent's only path to ENS state. Per-node, not shared — see `adr/0002-node-agent-language.md` for why that matters |
+| ENS client | `viem` directly, not `ensjs` | Gate 0.3 (the only thing proven against this deployment's custom addresses and the `UserRegistryImpl.initialize` signature drift) used raw `viem`; Phase 1 Section A implemented the sidecar the same way. `ensjs` on top remains possible future work, not required. Go never calls contracts directly either way — decided, not discretionary. See `adr/0002-node-agent-language.md` |
+| ENS sidecar | **Hono on Bun**, one per node, local HTTP only | Wraps `viem`; the Go agent's only path to ENS state. Per-node, not shared — see `adr/0002-node-agent-language.md`. Runs on Bun (not plain Node) so TypeScript executes directly, no `tsx`/`ts-node` transpile step |
+| TS package manager | **pnpm**, everywhere | Sidecar, provisioning/dev scripts, and the admin CLI all use `pnpm install` / committed `pnpm-lock.yaml` |
 | ENS agent records | ENSIP-25, ENSIP-26 | Use standard record keys, do not invent |
 | Hardware signer | `@ledgerhq/wallet-cli` **v1.0.1** (verified) | Install `npm i -g @ledgerhq/wallet-cli`. **Marked v1 experimental; flags and behavior may change** |
 | Ledger key encryption | `wallet-cli ring` (`init/encrypt/decrypt/keys/destroy`) | LKRP-backed **encryption**, not signing. See `adr/0001-ledger-ring-vs-send-split.md` |

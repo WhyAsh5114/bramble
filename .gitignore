@@ -3,3 +3,6 @@
 .tmp
 
 node_modules
+
+# Go build artifacts (we only `go run`, but guard against stray builds)
+/brambled/brambled
