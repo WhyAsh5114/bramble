@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: brambled/go.mod
-          cache: false # no go.sum yet — brambled has zero external dependencies
+          cache-dependency-path: brambled/go.sum
 
       - run: pnpm install --frozen-lockfile
 
