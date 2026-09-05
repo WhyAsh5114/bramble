@@ -1,0 +1,8 @@
+node_modules
+dist
+bin
+pnpm-lock.yaml
+docs
+.tmp
+scripts/gate0.3-eac-check
+sidecar/test/fixtures

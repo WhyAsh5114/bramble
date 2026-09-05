@@ -1,0 +1,12 @@
+{
+  "name": "brambled",
+  "private": true,
+  "scripts": {
+    "build": "go build -o bin/brambled .",
+    "typecheck": "go build -o /dev/null ./...",
+    "lint": "go vet ./...",
+    "format": "gofmt -w .",
+    "format:check": "test -z \"$(gofmt -l .)\"",
+    "test": "go test ./..."
+  }
+}

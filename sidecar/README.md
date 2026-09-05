@@ -12,7 +12,7 @@ expiry, tokenId }`.
 
 **Deviations from the ADR's illustrative sketch, made while implementing:**
 
-- **`roleBitmap` is not returned.** Gate 0.3 proved EAC *write* restriction
+- **`roleBitmap` is not returned.** Gate 0.3 proved EAC _write_ restriction
   (a delegated account can be blocked from writing outside its grant) but
   never exercised a read-only "what roles does this account hold" call —
   there's no verified ABI for that yet. Deferred to Phase 2, when EAC's read

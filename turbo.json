@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "globalDependencies": ["tsconfig.base.json", "eslint.config.js", ".prettierrc", ".prettierignore"],
+  "tasks": {
+    "build": {
+      "outputs": ["dist/**", "bin/**"]
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "format": {
+      "cache": false,
+      "outputs": []
+    },
+    "format:check": {
+      "outputs": []
+    },
+    "test": {
+      "outputs": []
+    }
+  }
+}

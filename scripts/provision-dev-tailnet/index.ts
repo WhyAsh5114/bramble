@@ -1,6 +1,3 @@
-/// <reference types="node" />
-/// <reference types="bun" />
-
 // One-time setup script for Phase 1 Section A: registers a persistent test
 // tailnet (a name + subregistry + one device subname) on the hackathon
 // ENSv2 Sepolia deployment, so the sidecar has real on-chain data to resolve

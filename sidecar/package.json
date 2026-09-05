@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -11,8 +13,8 @@
     "viem": "^2.56.3"
   },
   "devDependencies": {
-    "bun-types": "^1.4.2",
-    "typescript": "^7.0.2",
+    "@types/bun": "^1.4.1",
+    "typescript": "^6.0.3",
     "vitest": "^5.0.0"
   }
 }

@@ -4,5 +4,9 @@
 
 node_modules
 
-# Go build artifacts (we only `go run`, but guard against stray builds)
-/brambled/brambled
+# Turborepo cache
+.turbo
+
+# Build outputs
+dist
+bin

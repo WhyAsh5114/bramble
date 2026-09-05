@@ -1,0 +1,4 @@
+packages:
+  - sidecar
+  - brambled
+  - scripts/provision-dev-tailnet

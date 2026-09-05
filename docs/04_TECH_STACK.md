@@ -23,6 +23,8 @@ Verified Sept 4, 2026 where marked. Everything else: check on Day 0 and pin.
 | Chain (payments) | Hedera testnet | Watch HTS token association — no EVM analogue |
 | Admin CLI / demo UI | Node + TypeScript, optionally Next.js 16 | Keep it minimal; the demo is terminals, not a dashboard |
 | Tests | Go stdlib testing + Vitest for TS parts | |
+| Monorepo tooling | **Turborepo** | Root `pnpm typecheck / lint / format / build / test` fan out to every package (`brambled` via Go toolchain commands wrapped in a `package.json`, TS packages via their own scripts); `pnpm verify` runs all five in CI order. ESLint + Prettier are configured once at the repo root and run directly (not per-package — pnpm's strict `node_modules` means a workspace package can't see root devDependencies). `scripts/gate0.3-eac-check/` is deliberately outside the workspace — frozen historical artifact, not linted/formatted going forward |
+| CI | GitHub Actions, push-triggered only | No PR or release workflows yet — hackathon scope. `.github/workflows/ci.yml` runs `pnpm verify` on every push |
 
 ## Two-chain note
 

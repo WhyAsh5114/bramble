@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: brambled/go.mod
+          cache: false # no go.sum yet — brambled has zero external dependencies
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm verify
