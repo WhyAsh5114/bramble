@@ -1,0 +1,15 @@
+{
+  "name": "@bramble/provision-dev-tailnet",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "provision": "bun run index.ts"
+  },
+  "dependencies": {
+    "viem": "^2.56.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.1",
+    "@types/node": "^26.4.1"
+  }
+}
