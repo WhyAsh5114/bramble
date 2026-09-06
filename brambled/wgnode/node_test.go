@@ -43,13 +43,13 @@ func TestGate1_1_PeerRejectsUnregisteredKey(t *testing.T) {
 	underTestAddr := netip.MustParseAddr("10.99.0.1")
 	peerAddr := netip.MustParseAddr("10.99.0.2")
 
-	underTest, err := New(Config{PrivateKeyHex: underTestPriv, ListenPort: 51920, LocalAddress: underTestAddr})
+	underTest, err := New(Config{PrivateKeyHex: underTestPriv, ListenPort: 51920, LocalAddress: underTestAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting node under test: %v", err)
 	}
 	defer underTest.Close()
 
-	peer, err := New(Config{PrivateKeyHex: peerPriv, ListenPort: 51921, LocalAddress: peerAddr})
+	peer, err := New(Config{PrivateKeyHex: peerPriv, ListenPort: 51921, LocalAddress: peerAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting peer node: %v", err)
 	}

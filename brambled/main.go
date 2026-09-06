@@ -3,10 +3,15 @@
 // Phase 1 Section A: spawn its own local ENS sidecar (docs/adr/0002) and
 // resolve a real device subname through it (`resolve`).
 // Phase 1 Section B: the admission verifier (Gate 1.1) — keep a WireGuard
-// device's peer table synced to ENS state (`serve`). See
-// docs/05_BUILD_PLAN.md Phase 1 and the Section B plan for what's next
-// (Gate 1.2 rendezvous/hole-punching is not implemented yet — `serve` only
-// manages the peer table, it does not attempt cross-machine connectivity).
+// device's peer table synced to ENS state (`serve`).
+// Phase 1 Section C: real OS TUN by default (Gate 0.2's "ping and one TCP
+// connection across the tunnel" needs a genuine OS-visible interface, not
+// just an in-process one — see brambled/wgnode) and rendezvous-relay
+// candidate exchange (`-rendezvous`, see brambled/rendezvous and ../relay),
+// so two nodes on different networks can find each other without a trusted
+// coordinator. STUN/hole-punching for the harder two-NAT case is still not
+// implemented — see docs/11_DAY0_GATES.md Gate 0.2's note on laptop-to-VPS
+// being the easier, currently-supported topology.
 package main
 
 import (
@@ -21,6 +26,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -62,7 +68,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: brambled resolve <device-label>")
-	fmt.Fprintln(os.Stderr, "       brambled serve [-peer label=allowed-ip/prefix ...]")
+	fmt.Fprintln(os.Stderr, "       brambled serve [-peer label=allowed-ip/prefix ...] [-rendezvous host:port] [-netstack]")
 	fmt.Fprintln(os.Stderr, "       brambled genkey")
 }
 
@@ -129,10 +135,14 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
 	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix (repeatable)")
-	localAddr := fs.String("local-addr", "10.77.0.1", "this node's virtual address on its own WireGuard interface")
+	localPrefix := fs.String("local-addr", "10.77.0.1/24", "this node's address and mesh subnet (CIDR)")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
 	privateKeyHex := fs.String("private-key", os.Getenv("BRAMBLE_PRIVATE_KEY"), "hex-encoded WireGuard private key (generated ephemerally if unset — not persisted)")
+	interfaceName := fs.String("interface", "", "real OS interface name (auto-picked if unset: \"utun\" on macOS, \"bramble0\" on linux)")
+	netstackMode := fs.Bool("netstack", false, "use a virtual (gVisor) TUN instead of a real OS interface — testing/local dev only, never the demo")
+	rendezvousAddr := fs.String("rendezvous", "", "rendezvous relay address (host:port) for candidate exchange; omit for static/dial-in-first peers only")
+	myCandidate := fs.String("my-candidate", "", "this node's own reachable address (ip:port) to publish via the rendezvous relay, e.g. a VPS's public IP:listen-port")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -140,7 +150,7 @@ func runServe(args []string) error {
 		return fmt.Errorf("at least one -peer label=allowed-ip/prefix is required")
 	}
 
-	addr, err := netip.ParseAddr(*localAddr)
+	prefix, err := netip.ParsePrefix(*localPrefix)
 	if err != nil {
 		return fmt.Errorf("parsing -local-addr: %w", err)
 	}
@@ -152,6 +162,10 @@ func runServe(args []string) error {
 		}
 		*privateKeyHex = generated
 		fmt.Fprintln(os.Stderr, "no -private-key/BRAMBLE_PRIVATE_KEY set — generated an ephemeral one (not persisted; this node's identity changes every restart)")
+	}
+	ownPubkey, err := wgnode.PublicKeyFromPrivateHex(*privateKeyHex)
+	if err != nil {
+		return fmt.Errorf("deriving own public key: %w", err)
 	}
 
 	scfg := sidecarConfig()
@@ -166,7 +180,14 @@ func runServe(args []string) error {
 	}
 	defer m.Stop()
 
-	node, err := wgnode.New(wgnode.Config{PrivateKeyHex: *privateKeyHex, ListenPort: uint16(*listenPort), LocalAddress: addr})
+	node, err := wgnode.New(wgnode.Config{
+		PrivateKeyHex: *privateKeyHex,
+		ListenPort:    uint16(*listenPort),
+		LocalAddress:  prefix.Addr(),
+		LocalPrefix:   prefix,
+		InterfaceName: *interfaceName,
+		Netstack:      *netstackMode,
+	})
 	if err != nil {
 		return fmt.Errorf("starting WireGuard node: %w", err)
 	}
@@ -186,13 +207,37 @@ func runServe(args []string) error {
 			default:
 				fmt.Fprintf(os.Stderr, "admission: %s: not authorized\n", e.Label)
 			}
+			if e.EndpointErr != nil {
+				fmt.Fprintf(os.Stderr, "admission: %s: endpoint exchange failed (will retry next sync): %v\n", e.Label, e.EndpointErr)
+			}
 		},
+	}
+
+	if *rendezvousAddr != "" {
+		relayAddr, own, ownCandidate := *rendezvousAddr, ownPubkey, *myCandidate
+		loop.EndpointResolver = func(_ admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
+			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, ownCandidate, *ttl)
+			if err != nil {
+				return nil, err
+			}
+			if candidate == "" {
+				return nil, nil // peer published no reachable address of its own
+			}
+			endpoint, err := netip.ParseAddrPort(candidate)
+			if err != nil {
+				return nil, fmt.Errorf("peer %s published an unparseable candidate %q: %w", peerPubkey, candidate, err)
+			}
+			return &endpoint, nil
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Fprintf(os.Stderr, "serving on %s:%d, tracking %d peer(s), ttl=%s (Ctrl+C to stop)\n", addr, *listenPort, len(peers), *ttl)
+	if iface := node.InterfaceName(); iface != "" {
+		fmt.Fprintf(os.Stderr, "interface: %s (check with `ifconfig %s` / `netstat -rn | grep %s`)\n", iface, iface, prefix.Masked())
+	}
+	fmt.Fprintf(os.Stderr, "serving on %s:%d (pubkey %s), tracking %d peer(s), ttl=%s (Ctrl+C to stop)\n", prefix.Addr(), *listenPort, ownPubkey, len(peers), *ttl)
 	err = loop.Run(ctx)
 	if err == context.Canceled {
 		return nil
