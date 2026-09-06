@@ -3,6 +3,9 @@
   "tailnetRegistry": "0xEdA4b78CcA4472522bf2b521A6D2987306579058",
   "deviceLabel": "device1",
   "deviceFullname": "device1.bramble-dev-c91e55e9.eth",
-  "expectedPubkey": "6a00d82a195126efb21dc78b2382828ac862b65c3e04c1423d804fc48ec7085f",
-  "provisionedAt": "2026-09-05T12:41:28.477Z"
+  "expectedPubkey": "3aecd3d39c7c878e64f48258e41548e37fe5cf97a4edc53511ebe71170b77360",
+  "provisionedAt": "2026-09-05T12:41:28.477Z",
+  "device2Label": "device2",
+  "device2Fullname": "device2.bramble-dev-c91e55e9.eth",
+  "device2ExpectedPubkey": "76158fe000ffdcc4b0870fafc26f1c95187423381d79e905cc4e6dc33317ec3a"
 }
