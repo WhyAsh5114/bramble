@@ -35,6 +35,8 @@ importers:
 
   brambled: {}
 
+  relay: {}
+
   scripts/provision-dev-tailnet:
     dependencies:
       viem:
