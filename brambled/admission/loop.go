@@ -36,18 +36,21 @@ type PeerTable interface {
 // Peer is a mesh member this node should track. AllowedIP is supplied by the
 // caller, not derived from ENS — a mesh IP addressing scheme is a record
 // schema question Phase 2 owns (docs/05_BUILD_PLAN.md Phase 2 discretion),
-// not decided here.
+// not decided here. Endpoint, if set, is used as-is (static config) and
+// EndpointResolver is never consulted for this peer.
 type Peer struct {
 	Label     string
 	AllowedIP netip.Prefix
+	Endpoint  *netip.AddrPort
 }
 
 // Event reports one peer's admission decision after a sync pass, for logging.
 type Event struct {
-	Label      string
-	Authorized bool
-	PublicKey  string // empty if never registered
-	Err        error  // resolution error, if any — treated as not-authorized
+	Label       string
+	Authorized  bool
+	PublicKey   string // empty if never registered
+	Err         error  // resolution or peer-table sync error, if any
+	EndpointErr error  // EndpointResolver error, if any — non-fatal, peer is still added
 }
 
 type Loop struct {
@@ -56,10 +59,24 @@ type Loop struct {
 	Peers    []Peer
 	TTL      time.Duration
 
+	// EndpointResolver, if set, discovers a reachable endpoint for an
+	// authorized peer that didn't already have a static Peer.Endpoint — e.g.
+	// candidate exchange via the rendezvous relay (brambled/rendezvous). It's
+	// consulted at most once per peer for the life of the Loop: once an
+	// endpoint has been set, later sync passes don't re-resolve or re-set it,
+	// both to avoid needless relay traffic and because WireGuard's own
+	// roaming keeps the endpoint current once a real handshake happens. A
+	// resolver error is logged via Event.EndpointErr but doesn't block
+	// admission — the peer is still added without an endpoint (dial-in-first
+	// still works, per wgnode.AddPeer's doc comment).
+	EndpointResolver func(p Peer, publicKeyHex string) (*netip.AddrPort, error)
+
 	// Now overrides the clock; tests set this. Defaults to time.Now.
 	Now func() time.Time
 	// OnEvent, if set, is called once per peer after every sync pass.
 	OnEvent func(Event)
+
+	resolvedEndpoints map[string]struct{} // pubkey -> already resolved via EndpointResolver
 }
 
 func (l *Loop) now() time.Time {
@@ -87,18 +104,48 @@ func (l *Loop) SyncOnce() {
 			pubkey = *record.Pubkey
 		}
 
-		var syncErr error
+		var syncErr, endpointErr error
 		switch {
 		case authorized:
-			syncErr = l.Table.AddPeer(pubkey, p.AllowedIP, nil)
+			endpoint, epErr := l.resolveEndpoint(p, pubkey)
+			endpointErr = epErr
+			syncErr = l.Table.AddPeer(pubkey, p.AllowedIP, endpoint)
 		case pubkey != "":
 			// Only known keys can be meaningfully removed; a peer that was
 			// never registered was never added in the first place.
 			syncErr = l.Table.RemovePeer(pubkey)
+			delete(l.resolvedEndpoints, pubkey)
 		}
 
-		l.emit(Event{Label: p.Label, Authorized: authorized, PublicKey: pubkey, Err: syncErr})
+		l.emit(Event{Label: p.Label, Authorized: authorized, PublicKey: pubkey, Err: syncErr, EndpointErr: endpointErr})
 	}
+}
+
+// resolveEndpoint returns p.Endpoint if set (static config wins outright),
+// otherwise consults EndpointResolver at most once per pubkey for the life
+// of the Loop. A resolver error is returned alongside a nil endpoint —
+// callers add the peer anyway and surface the error via Event.EndpointErr.
+func (l *Loop) resolveEndpoint(p Peer, pubkey string) (*netip.AddrPort, error) {
+	if p.Endpoint != nil {
+		return p.Endpoint, nil
+	}
+	if l.EndpointResolver == nil {
+		return nil, nil
+	}
+	if _, done := l.resolvedEndpoints[pubkey]; done {
+		return nil, nil
+	}
+
+	endpoint, err := l.EndpointResolver(p, pubkey)
+	if err != nil {
+		return nil, err
+	}
+
+	if l.resolvedEndpoints == nil {
+		l.resolvedEndpoints = make(map[string]struct{})
+	}
+	l.resolvedEndpoints[pubkey] = struct{}{}
+	return endpoint, nil
 }
 
 func (l *Loop) expiryInFuture(expiry string) bool {
