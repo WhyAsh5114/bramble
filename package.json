@@ -10,7 +10,8 @@
     "format": "prettier --write . && turbo run format",
     "format:check": "prettier --check . && turbo run format:check",
     "test": "turbo run test",
-    "verify": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm build && pnpm test"
+    "check:no-endpoints": "node scripts/check-no-endpoints.mjs",
+    "verify": "pnpm format:check && pnpm check:no-endpoints && pnpm typecheck && pnpm lint && pnpm build && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -85,6 +85,43 @@ func TestSyncOnce_RemovesExpiredPeer(t *testing.T) {
 	}
 }
 
+// TestSyncOnce_RemovesPeerWhosePubkeyWasCleared covers the revocation shape
+// TestSyncOnce_RemovesExpiredPeer doesn't: a device that revokes by clearing
+// its own `pubkey` text record (what scripts/provision-dev-tailnet/set-pubkey.ts
+// actually does on-chain for Gate 1.3), rather than letting its expiry lapse.
+// The record reports no pubkey at all in this case — SyncOnce must remember
+// the last pubkey this label was authorized under to remove it (see
+// knownPubkeys in loop.go), since the current record can no longer supply it.
+func TestSyncOnce_RemovesPeerWhosePubkeyWasCleared(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	future := now.Add(time.Hour).Unix()
+
+	resolver := fakeResolver{
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+	}
+	table := newFakeTable()
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return now },
+	}
+
+	loop.SyncOnce()
+	if _, ok := table.added["abc123"]; !ok {
+		t.Fatal("setup failed: expected the peer to be added while authorized")
+	}
+
+	// Revoke by clearing pubkey — the record now reports none at all, not
+	// just an expired one.
+	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"}
+	loop.SyncOnce()
+
+	if !table.removed["abc123"] {
+		t.Fatal("expected the peer to be removed after its pubkey was cleared, even though the current record no longer reports that pubkey")
+	}
+}
+
 func TestSyncOnce_NeverRegisteredPeerIsNeitherAddedNorRemoved(t *testing.T) {
 	resolver := fakeResolver{
 		"device1": {Fullname: "device1.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"},

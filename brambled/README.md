@@ -123,6 +123,57 @@ on the VPS too, since it already has a reachable address.
    topology, and the date — only once actually run this way. A CI-only or
    same-machine run does not count (see "Known gaps").
 
+## Gate 1.3 runbook — measuring real revocation latency
+
+`docs/05_BUILD_PLAN.md` Gate 1.3 requires the actual measured time from
+revocation transaction confirmation to connection drop, published in this
+README, for the harder and more attack-relevant case: a peer that's
+**already connected**, not one that hasn't dialed in yet. The mechanism is
+proven by `admission/gate1_3_test.go`'s
+`TestGate1_3_RevocationDropsAlreadyConnectedPeer` — this section is for
+getting a real number against the live dev-tailnet fixture. Reuses the same
+VPS + laptop setup as the Gate 0.2 runbook above (no NAT-traversal concerns
+here, so the two sides don't need to be on different networks — but real OS
+TUN interfaces on the same host can't be trusted to `ping` correctly either,
+per "Known gaps" below, so keep using the two real machines).
+
+The revocation primitive is clearing a device's `pubkey` text record — the
+only proven ENS write path this repo has (no `setExpiry`/`renew`-to-the-past
+primitive is verified safe to use; ENSv2 renewals only extend). This is a
+real, on-chain, reversible action:
+[`scripts/provision-dev-tailnet/set-pubkey.ts`](../scripts/provision-dev-tailnet/set-pubkey.ts).
+
+1. Start both sides as in the Gate 0.2 runbook, but with a short `-ttl` (e.g.
+   `-ttl 5s`) so the measured window is small enough to be legible on camera.
+   Confirm both sides show `admission: <label>: authorized` and a real `ping`
+   round trip is working first.
+2. From one machine, start a continuous ping at the other's mesh address and
+   let it run in the foreground:
+   ```
+   ping 10.77.0.2   # from the VPS, pinging the laptop, or vice versa
+   ```
+3. From wherever you have `SEPOLIA_PRIVATE_KEY` configured, revoke the
+   pinged side's device:
+   ```
+   cd scripts/provision-dev-tailnet && bun run set-pubkey.ts device2 ""
+   ```
+   Note the script's printed confirmation timestamp — that's t=0.
+4. Watch three things and record their timestamps: the `set-pubkey.ts`
+   confirmation time (t=0), the pinging side's `ping` output for the last
+   successful reply and first failure, and the _other_ side's `brambled
+serve` stderr for its `admission: device2: not authorized` line. The
+   number to publish is the delta between t=0 and the last successful ping
+   reply — that's the actually-connected-peer drop time the gate cares
+   about, and per `TestGate1_3_RevocationDropsAlreadyConnectedPeer` it
+   should be bounded by `-ttl`, not by WireGuard's ~2 minute rekey timer.
+5. Restore the fixture afterward so future runs aren't left broken:
+   ```
+   bun run set-pubkey.ts device2 <pubkey set-pubkey.ts printed in step 3>
+   ```
+6. Record the measured number, the `-ttl` used, and the date in
+   `docs/05_BUILD_PLAN.md`'s Gate 1.3 entry — only once actually run this
+   way, same standard as Gate 0.2.
+
 ## Known gaps, deliberately not solved yet
 
 - **Real OS TUN is the unconditional default, not a flag you have to
@@ -148,8 +199,9 @@ on the VPS too, since it already has a reachable address.
   two-NAT case — only the laptop-to-VPS topology (VPS has a public IP,
   needs no traversal on its side) is currently supported end to end.
   `11_DAY0_GATES.md` Gate 0.2's own note explicitly separates this easier
-  case from the harder one; Gate 1.2's hostile-relay test and multi-relay
-  failover are also deferred until this exists.
+  case from the harder one. Multi-relay failover is still deferred until this
+  exists — Gate 1.2's hostile-relay test itself doesn't need it (see
+  `docs/05_BUILD_PLAN.md` Gate 1.2, ✅ verified).
 - **Authorization ignores the registry's `status` field**, using only
   `pubkey != nil && expiry > now`. `status`'s enum meaning isn't documented
   anywhere verified (our one fixture reads back `2`) — see

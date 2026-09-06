@@ -10,6 +10,14 @@
 // meaning isn't documented anywhere verified yet (see docs/12_SOURCE_NOTES.md).
 // Revocation may turn out to need status once that's confirmed; using only
 // expiry for now is a known, flagged gap, not a guess dressed up as one.
+//
+// Two revocation shapes exist and both must actually remove a live peer, not
+// just refuse future handshakes (docs/05_BUILD_PLAN.md Gate 1.3): expiry
+// lapsing (the record still reports a pubkey, just past expiry) and a
+// cleared pubkey text record (the record reports none at all). The second
+// shape needs Loop to remember the last pubkey a label was authorized under
+// — see knownPubkeys in SyncOnce — otherwise a peer that revokes by clearing
+// its own record could never be found again to remove.
 package admission
 
 import (
@@ -77,6 +85,7 @@ type Loop struct {
 	OnEvent func(Event)
 
 	resolvedEndpoints map[string]struct{} // pubkey -> already resolved via EndpointResolver
+	knownPubkeys      map[string]string   // label -> last pubkey this label was authorized under
 }
 
 func (l *Loop) now() time.Time {
@@ -110,11 +119,27 @@ func (l *Loop) SyncOnce() {
 			endpoint, epErr := l.resolveEndpoint(p, pubkey)
 			endpointErr = epErr
 			syncErr = l.Table.AddPeer(pubkey, p.AllowedIP, endpoint)
-		case pubkey != "":
-			// Only known keys can be meaningfully removed; a peer that was
-			// never registered was never added in the first place.
-			syncErr = l.Table.RemovePeer(pubkey)
-			delete(l.resolvedEndpoints, pubkey)
+			if l.knownPubkeys == nil {
+				l.knownPubkeys = make(map[string]string)
+			}
+			l.knownPubkeys[p.Label] = pubkey
+		default:
+			// The record's own pubkey covers "expired but not cleared" (it's
+			// still reported, just past expiry). A *cleared* pubkey text
+			// record reports none at all, so without remembering the last
+			// pubkey this label was authorized under, a peer that revokes by
+			// clearing its own record could never be found again to remove
+			// from the live peer table — see docs/05_BUILD_PLAN.md Gate 1.3,
+			// TestGate1_3_RevocationDropsAlreadyConnectedPeer.
+			removeKey := pubkey
+			if removeKey == "" {
+				removeKey = l.knownPubkeys[p.Label]
+			}
+			if removeKey != "" {
+				syncErr = l.Table.RemovePeer(removeKey)
+				delete(l.resolvedEndpoints, removeKey)
+				delete(l.knownPubkeys, p.Label)
+			}
 		}
 
 		l.emit(Event{Label: p.Label, Authorized: authorized, PublicKey: pubkey, Err: syncErr, EndpointErr: endpointErr})
