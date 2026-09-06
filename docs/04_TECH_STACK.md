@@ -46,7 +46,7 @@ A dedicated ENSv2 deployment is live on Sepolia for ETHOnline 2026, separate fro
 ## Unknowns to resolve Day 0
 
 1. Does a physical Ledger device exist to test with? (`11_DAY0_GATES.md`, Gate 0.1)
-2. Can two peers on different networks connect with only STUN plus a dumb relay? (Gate 0.2)
+2. ~~Can two peers on different networks connect with only STUN plus a dumb relay?~~ — resolved for the laptop-to-VPS topology, **without needing STUN at all**: the VPS already has a public IP, so the dumb relay (`relay/`) carries candidate exchange and WireGuard's own roaming picks up the return address once the laptop dials in. See `11_DAY0_GATES.md` Gate 0.2's ✅ entry. The harder two-NAT case (where STUN/hole-punching would actually be load-bearing) is still open.
 3. ~~ENSv2 Sepolia contract addresses~~ — resolved, see above. Whether EAC role delegation works as documented is now also resolved — see Gate 0.3 in `11_DAY0_GATES.md`.
 4. `@x402/hedera` + Blocky402: one paid request end to end. Blocky402 is confirmed required by the official track page; still open whether Scaffold-HBAR's bundled x402 starter facilitator *is* Blocky402 or needs swapping — see `12_SOURCE_NOTES.md`.
 5. Whether `wallet-cli ring init` can be run once on a laptop and the resulting ring used on a headless VPS without the device present. **This is the entire premise of the Ledger enrollment story.**

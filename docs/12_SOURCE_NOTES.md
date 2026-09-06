@@ -131,14 +131,22 @@ A rogue rendezvous relay can withhold or lie about a candidate address, but it c
 
 The one genuine residual risk: a rogue relay operator could selectively drop messages for one targeted pair, indistinguishable from ordinary packet loss. **Fix, folded into `adr/0003-rendezvous-relay-split.md`:** the published rendezvous set must have more than one relay, with node-agent failover across the whole set — a requirement that wasn't previously stated (the ADR only said "a small set," without specifying what happens if one member of it misbehaves). Applied to `03_ARCHITECTURE.md` ("Signaling, stated precisely"), `05_BUILD_PLAN.md` Gate 1.2 (now scoped explicitly to admission-integrity, with the availability caveat and failover requirement), and `10_JUDGING.md` objection 14.
 
-### Gate 0.2 is not de-risked by having relay infrastructure available
+### ✅ RESOLVED — Gate 0.2 is not de-risked by having relay infrastructure available
 
 Having a funded cloud account to run a relay on guarantees the relay *can run*; it does not guarantee two peers on two genuinely different networks actually complete a tunnel through it. `11_DAY0_GATES.md` Gate 0.2 is unrun until it is actually executed and measured — this is the only gate whose failure (K1) ends the project outright, and it should not be treated as solved by infrastructure availability alone.
+
+**Run and measured Sept 6, 2026.** Laptop (home NAT) to a fresh AWS EC2 instance, real ENS-resolved admission on both sides (two independently registered on-chain devices, not a stand-in), real dumb relay, real bidirectional ping and one real TCP round trip. Full writeup in `11_DAY0_GATES.md` Gate 0.2. K1 does not apply; the topology tested is the easier one (VPS has a public IP) — the harder two-NAT case remains genuinely open, see the next finding.
+
+### A real protocol bug the relay-mediated exchange exposed, found only by testing both directions racing
+
+While writing the relay client (`brambled/rendezvous`), a two-sided candidate exchange test failed intermittently: whichever side received the other's candidate *first* would return immediately, closing its connection — but if that side's own first offer had raced ahead of the peer's registration (a near-certainty when both sides start at roughly the same instant) and gotten an immediate "not registered" error, it would never get retried. The second side would then hang forever waiting for an offer that was never resent. Not a timing edge case that only shows up under artificial delay — it reproduced on the very first real two-machine run's startup ordering too, before the fix.
+
+**Fix:** the relay now acks a successfully forwarded offer (`{"type":"ack"}`), and `Exchange` doesn't return until it has *both* received the peer's candidate *and* had its own offer acked — so a side can't vanish mid-retry and strand the other. See `relay/main.go`'s protocol comment and `brambled/rendezvous/client.go`. Caught by a unit test before the real run, not by the real run itself — worth noting as a case where the CI-safe loopback test earned its keep.
 
 ## Open items for whoever reads this next
 
 - Resolve the Blocky402-vs-starter-kit-facilitator question before Gate 0.4.
 - Check whether `wallet-cli ring` works under Speculos specifically, and whether `wallet-cli send` accepts arbitrary calldata — both cheap, both currently unverified.
-- Run and measure Gate 0.2 for real; do not treat it as solved.
 - When building Phase 4, make sure the demo's chosen topologies include at least one that can't hole-punch, so the data-relay path (not just rendezvous) gets shown live.
+- The two-NAT case (STUN/hole-punching) is still unproven — Gate 0.2's real run only exercised the easier laptop-to-VPS topology. Needed before claiming general NAT traversal, not before Gate 0.2 itself (which explicitly blesses this topology as valid).
 - Append a `## Ledger` section here once "Ledger tracks explained" airs.

@@ -1,6 +1,6 @@
 # ADR 0003 — Separate rendezvous relays (signaling) from the data-plane relay market, and meter both
 
-**Status:** Decided, Sept 5 2026, not yet implemented. Recorded here because it changes Phase 4's shape and should not be discovered mid-build.
+**Status:** Decided, Sept 5 2026. Rendezvous relay + candidate exchange implemented and verified end-to-end Sept 6 2026 (`relay/`, `brambled/rendezvous/`, `11_DAY0_GATES.md` Gate 0.2). x402 metering of rendezvous usage (Phase 4) and the data-plane relay market are still unimplemented.
 
 ## Background, for anyone reading this without the rest of the NAT-traversal context
 

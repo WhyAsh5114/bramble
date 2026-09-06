@@ -95,6 +95,16 @@ All gate tests green from a clean checkout. README covering setup, architecture,
 
 **Never cut:** peer-side admission verification, the malicious-relay test, no-endpoints-on-chain, revocation, commit cadence.
 
+## Future work (explicitly not scoped for this hackathon)
+
+Ideas that are good next steps but not needed for any gate above, and would add integration risk if pulled in now. Recorded so they don't get silently forgotten or re-litigated in every conversation.
+
+- **Auto-discover peers from the tailnet registry, instead of manual `-peer label=allowed-ip` flags.** Requires two things not yet verified: (1) the deployed `PermissionedRegistry` may not expose an enumeration view function (`ownerOf`/`getState` need an ID you already have) — enumerating registered subnames would likely mean scanning registration/Transfer-style event logs from the deployment block forward, untested against this deployment; (2) a mesh-IP assignment scheme, since `AllowedIP` today is operator-supplied and not derivable from ENS state (`admission/loop.go`'s `Peer` struct explicitly defers this to "a record schema question Phase 2 owns"). `admission.Loop.SyncOnce` already just iterates whatever's in `l.Peers`, so a discovery source slotting in later wouldn't require touching the sync/endpoint-resolution logic. Not a security downgrade to defer — the actual admission boundary is the WireGuard handshake against ENS-resolved keys either way; `-peer` only controls which labels a node bothers polling.
+- **Automatic AllowedIP assignment**, e.g. a deterministic mesh-IP-from-ENS-record scheme, so operators stop hand-assigning `/32`s. Blocks on the same mesh-IP record schema as the point above.
+- **Admin UI / web dashboard** — see all peers in a tailnet with live routing info (AllowedIPs, current endpoint, last handshake), node info (pubkey, ENS fullname, role/expiry), and rendezvous info (which relay(s) a peer is reachable through). Effectively a live view over what `brambled serve`'s stderr log already prints per-event, rendered instead of scrolled.
+- **ENS registry explorer** scoped to a tailnet — browse registered devices/agents and their record state without needing `brambled resolve` per label, useful for debugging admission issues live during a demo or dev session.
+- **"Test connection to peer" tooling** — a one-shot ping/handshake-status check against a specific peer from the UI or CLI, surfaced without needing to shell out to `ifconfig`/`ping`/`nc` manually (see `brambled/README.md`'s Gate 0.2 runbook, which currently requires exactly that).
+
 ## Reporting checkpoints
 
 - End of Day 0: all gates.

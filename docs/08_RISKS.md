@@ -2,7 +2,7 @@
 
 ## Kill criteria
 
-- **K1.** Gate 0.2 fails: two peers on different networks cannot connect without a trusted coordinator, by end of Sunday Sept 6. → Stop and reassess whether to continue this project. Decide Sunday, not day eight.
+- **K1.** Gate 0.2 fails: two peers on different networks cannot connect without a trusted coordinator, by end of Sunday Sept 6. → Stop and reassess whether to continue this project. Decide Sunday, not day eight. **Resolved Sept 6 — see `11_DAY0_GATES.md` Gate 0.2. Does not apply; project continues. Note the topology caveat there (laptop-to-VPS, not yet the harder two-NAT case).**
 - **K2.** EAC delegation does not actually restrict on ENSv2 Sepolia. The ACL story and the ENS pitch both collapse; rethink before continuing. **Resolved Sept 5 — see `11_DAY0_GATES.md` Gate 0.3. Does not apply.**
 - **K3.** No physical Ledger device. Ledger slot dies (project survives on two slots).
 - **K4.** Direct-connection success rate is so low that nearly everything relays. The cost argument in `01_WHY.md` inverts and the pitch needs rewriting.
@@ -11,7 +11,7 @@
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| NAT traversal without a coordinator fails or is flaky | **High** | Fatal | Gate 0.2 on Day 1–2. Relay fallback must work first; hole punching is the optimization |
+| NAT traversal without a coordinator fails or is flaky | Medium (was **High**) | Fatal | Gate 0.2 passed Sept 6 for laptop-to-VPS via relay-only candidate exchange, no hole punching needed. Residual risk is now scoped to the harder two-NAT case, where STUN/hole-punching (still unimplemented) would actually be load-bearing |
 | ENSv2 Sepolia instability (beta ~3 weeks old, under audit competition) | Medium | High | Pin working addresses Day 0, do not chase upgrades. Keep a recorded backup of the ENS beats |
 | `wallet-cli` v1 experimental, flags may change | Medium | Medium | Pin the version. Cut order step 3–4 removes Ledger cleanly |
 | LKRP key rotation destroys prior ciphertext | Medium | Medium | Do not build flows depending on decrypting old data after membership changes. Document it |
