@@ -1,10 +1,27 @@
 # Build Plan
 
-Sept 4–16. Gates are non-negotiable; discretion zones are the agent and user's call, recorded in `/docs/adr/`.
+Gates are non-negotiable; discretion zones are the agent and user's call, recorded in `/docs/adr/`.
 
 Complete `11_DAY0_GATES.md` first.
 
-## Phase 1 — Node agent core (Days 1–3)
+## Calendar (corrected Sept 7, verified against ethglobal.com/events/ethonline2026)
+
+The event page lists the *finale* on Sept 16, but **project submissions close Sept 13, 16:00 UTC** — the original "Days 10–12" Phase 6 window (Sept 13–15) was scheduled entirely after the deadline and no longer exists. Real build time from Sept 7: **6.5 days.**
+
+| Date (UTC) | Date (IST) | Milestone |
+|---|---|---|
+| Sept 4–6 | Sept 4–6 | Phase 1 complete (Days 1–3); Gates 0.2/0.3, 1.1–1.4 done |
+| Sept 7 | Sept 7 | Watch the Ledger "Tracks Explained" recording (aired Sept 7 14:00 UTC / 19:30 IST — may resolve the `wallet-cli send` calldata question); resolve Gate 0.1; **run Gate 0.4 (Blocky402)** |
+| **Sept 8, 03:59** | **Sept 8, 09:29** | **ETHGlobal Project Check-in #1 due** (showcase checkpoint — not optional) |
+| Sept 8, 18:00 | Sept 8, 23:30 | Project Feedback Session #1 (cheap judge-proxy scrutiny — use it on the Phase 2 ACL story) |
+| Sept 10, 13:00 | Sept 10, 18:30 | Project Feedback Session #2 |
+| **Sept 11, 03:59** | **Sept 11, 09:29** | **ETHGlobal Project Check-in #2 due** |
+| Sept 12 | Sept 12 | Build freeze. Record the video (human voice, 2–4 min; Hedera ≤5) |
+| **Sept 13, 16:00** | **Sept 13, 21:30** | **Project submissions due** (video attached — `requireVideoSubmission` is on). Judging Round 1 (async) starts 19:00 UTC / Sept 14, 00:30 IST |
+| Sept 14, 16:00 | Sept 14, 21:30 | Judging Round 2: live project judging |
+| Sept 16, 16:00 | Sept 16, 21:30 | ETHOnline 2026 Finale (nothing is due after Sept 13) |
+
+## Phase 1 — Node agent core (Days 1–3 — Sept 4–6; ✅ complete)
 
 Userspace WireGuard, STUN, hole punching, relay fallback, and the admission verifier.
 
@@ -28,7 +45,7 @@ Userspace WireGuard, STUN, hole punching, relay fallback, and the admission veri
 
 **Discretion:** cache TTL, resolution strategy, ICE configuration, relay protocol framing. ENS interaction is decided, not discretionary: the node agent calls a local per-node Hono/TypeScript sidecar over HTTP rather than making contract calls directly — see `adr/0002-node-agent-language.md`.
 
-## Phase 2 — ENSv2 registry and ACLs (Days 3–5)
+## Phase 2 — ENSv2 registry and ACLs (Days 4–5 — Sept 7–8)
 
 `HARD GATE 2.1 — EAC is load-bearing, not decorative.` Enrollment, revocation, and key rotation are governed by distinct EAC roles, and an account without a role genuinely cannot perform the action.
 **Test:** table-driven test, one case per role × action, asserting permitted and denied cases on Sepolia. ENS judges explicitly require features to be central, not cosmetic.
@@ -42,9 +59,11 @@ Userspace WireGuard, STUN, hole punching, relay fallback, and the admission veri
 
 **Discretion:** record schema, whether to use wildcard resolution or a deployed subname registry, ENSIP-25/26 record keys (recommended), expiry granularity.
 
-## Phase 3 — Ledger enrollment (Days 5–7)
+## Phase 3 — Ledger enrollment (Days 6–7 — Sept 9–10)
 
 Skip entirely if Gate 0.1 failed.
+
+**Prerequisite, due Sept 7:** Gate 0.1 (physical device) *and* the `wallet-cli send` calldata question (`adr/0001`'s open verification) must both be resolved before this phase starts — Phase 3 gets 2 days and cannot absorb a mid-phase discovery. The Ledger "Tracks Explained" workshop aired Sept 7; check its recording first.
 
 `HARD GATE 3.1 — Device confirmation gates permission changes.` Enrolling or revoking requires a physical button press. No software path bypasses it.
 **Test:** attempt enrollment with the device disconnected; assert failure.
@@ -57,7 +76,9 @@ Skip entirely if Gate 0.1 failed.
 
 **Discretion:** enrollment UX, whether the admin CLI wraps `wallet-cli` or instructs the user to run it.
 
-## Phase 4 — Relay and x402 metering (Days 7–9)
+## Phase 4 — Relay and x402 metering (Days 7–8 — Sept 10–11)
+
+**Prerequisite:** Gate 0.4 (one real Blocky402 payment) must be run by Sept 8 — it is still unrun, and this entire phase sits on top of it.
 
 `HARD GATE 4.1 — One real paid request settles on Hedera testnet via Blocky402, on camera.` Hedera qualification requirement. Not mocked, not local.
 **Test:** E2E script prints a transaction ID viewable on HashScan.
@@ -75,7 +96,7 @@ Skip entirely if Gate 0.1 failed.
 
 **Discretion:** pricing units, settlement batching, whether relays register in an ENS directory (recommended — Hedera extra points for agent discovery), HCS audit trail (extra points, optional).
 
-## Phase 5 — Agent path (Days 9–10)
+## Phase 5 — Agent path (Days 8.5–9 — Sept 11–12)
 
 `HARD GATE 5.1 — The agent is real but thin.` A genuine process needing private access, not an LLM demo. If agent framework code is being written on day 10, that is drift.
 **Test:** the agent completes a real task through the mesh (query the private database, hit the internal API) and the transcript shows it.
@@ -83,11 +104,15 @@ Skip entirely if Gate 0.1 failed.
 `HARD GATE 5.2 — The agent holds no transferable credential.` No API key, no password, no long-lived token anywhere in the agent's environment.
 **Test:** dump the agent's environment and config; assert the only secret is a node key that is worthless off-host and once revoked.
 
-## Phase 6 — Demo, README, submission (Days 10–12)
+## Phase 6 — Demo, README, submission (Days 9–10 — Sept 12 to Sept 13 AM)
+
+Video recorded by Sept 12; Sept 13 morning is upload/rehearsal buffer only. **Submissions close Sept 13, 16:00 UTC / 21:30 IST — hard.**
 
 All gate tests green from a clean checkout. README covering setup, architecture, the on-chain boundary, measured revocation latency, and declared dependencies. `/docs/AI_USAGE.md` and `/docs/adr/`. Select ENS, Ledger, Hedera.
 
 ## Cut order
+
+With 6.5 build days remaining as of Sept 7, treat this as a **decision to make by end of Sept 10** (end of Phase 3), not a day-11 contingency. If Phases 3 and 4 are both behind schedule on Sept 10, pre-commit to ENS + Hedera (the rendezvous fee alone satisfies Gate 4.1's "one real paid request" requirement) rather than discovering the cut on Sept 12 while the video is due.
 
 1. HCS audit trail
 2. Second relay (keep the selection mechanism, demo with one and say so)
@@ -110,8 +135,10 @@ Ideas that are good next steps but not needed for any gate above, and would add 
 
 ## Reporting checkpoints
 
-- End of Day 0: all gates.
-- **Sunday Sept 6 night: Gate 0.2 status. This is the go/no-go for the whole project.**
-- End of Phase 1: the malicious-relay test passing, plus measured revocation latency.
+- Day 0 gates: 0.2/0.3 resolved Sept 5–6. **Gate 0.1 (Ledger device) and Gate 0.4 (Blocky402) are still open, due Sept 7–8** — with submissions closing Sept 13, an unverified Ledger rail or Blocky402 discovered late kills a sponsor slot, not just a phase.
+- Gate 0.2 status: resolved Sept 6 (laptop-to-VPS; the harder two-NAT case remains open).
+- End of Phase 1: ✅ malicious-relay test passing, plus measured revocation latency (3.7s @ 5s TTL, Sept 6).
+- **Sept 8, 03:59 UTC / 09:29 IST: Project Check-in #1. Sept 11, 03:59 UTC / 09:29 IST: Check-in #2.** ETHGlobal showcase requirements — see `09_EVENT_RULES.md`.
+- **End of Phase 3 (Sept 10): cut-order decision** (see Cut order).
 - Immediately if EAC delegation does not actually restrict (Gate 2.1).
 - Immediately if relay fallback rate is so high that direct connections rarely succeed — that changes the cost story in `01_WHY.md`.

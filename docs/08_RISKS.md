@@ -16,7 +16,8 @@
 | `wallet-cli` v1 experimental, flags may change | Medium | Medium | Pin the version. Cut order step 3–4 removes Ledger cleanly |
 | LKRP key rotation destroys prior ciphertext | Medium | Medium | Do not build flows depending on decrypting old data after membership changes. Document it |
 | Blocky402 / Hedera friction | Medium | Medium | Gate 0.4 on Day 0, before anything is built on top |
-| Scope: three sponsors, two chains, hardest networking problem, 12 days | **High** | High | Cut order in `05_BUILD_PLAN.md`. A tight two-sponsor submission beats a thin three-sponsor one |
+| Scope: three sponsors, two chains, hardest networking problem — **6.5 build days remain: submissions close Sept 13 16:00 UTC / 21:30 IST, not Sept 16** (see `09_EVENT_RULES.md`) | **High** | High | Cut order in `05_BUILD_PLAN.md` — **decide it by Sept 10**, don't discover it Sept 12. A tight two-sponsor submission beats a thin three-sponsor one |
+| ETHGlobal check-ins / showcase compliance missed (Sept 8 and Sept 11, 03:59 UTC / 09:29 IST) | Medium | High | Calendar them and track against `09_EVENT_RULES.md`. Missing an ETHGlobal checkpoint risks eligibility independent of code |
 | Revocation slower than Tailscale, judge notices | High | Medium | Measure it, publish it, say it out loud in the video |
 | Judge says "just run Headscale" | High | High | `07_ADJACENT_WORK.md` line. The answer is that Headscale is the server you are removing, and it lacks Tailnet Lock |
 | Judge says "passkeys do this" | High | High | Concede most of it. Fall back to bootstrap, non-equivocation, unwithholdable revocation |

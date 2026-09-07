@@ -149,4 +149,22 @@ While writing the relay client (`brambled/rendezvous`), a two-sided candidate ex
 - Check whether `wallet-cli ring` works under Speculos specifically, and whether `wallet-cli send` accepts arbitrary calldata — both cheap, both currently unverified.
 - When building Phase 4, make sure the demo's chosen topologies include at least one that can't hole-punch, so the data-relay path (not just rendezvous) gets shown live.
 - The two-NAT case (STUN/hole-punching) is still unproven — Gate 0.2's real run only exercised the easier laptop-to-VPS topology. Needed before claiming general NAT traversal, not before Gate 0.2 itself (which explicitly blesses this topology as valid).
-- Append a `## Ledger` section here once "Ledger tracks explained" airs.
+- ~~Append a `## Ledger` section here once "Ledger tracks explained" airs~~ — it aired Sept 7, 14:00 UTC (recording linked from the event schedule page, speakers Etienne Waldron & Oscar Chaix). Watch it, extract anything that touches `ring`/`send`, and append the section.
+
+---
+
+## Event schedule — submissions close Sept 13, 16:00 UTC / 21:30 IST, not Sept 16
+
+Verified Sept 7 against the live ETHGlobal pages (`ethglobal.com/events/ethonline2026` and its `/prizes` page). The event JSON lists `submissionDeadline: 2026-09-13T16:00:00.000Z` — Sept 16 is the **finale**, after two judging rounds. `05_BUILD_PLAN.md`'s original Phase 6 window (Days 10–12 = Sept 13–15) was scheduled entirely after the deadline.
+
+**Full schedule (UTC / IST):** signup closed Sept 6 17:00 / 22:30 · **Check-in #1 Sept 8 03:59 / 09:29** · Feedback Sessions Sept 8 18:00 / 23:30 and Sept 10 13:00 / 18:30 · **Check-in #2 Sept 11 03:59 / 09:29** · **Submissions Sept 13 16:00 / 21:30** (`requireVideoSubmission` is on — video due with the showcase, no post-deadline window) · Judging Round 1 (async) Sept 13 19:00 UTC / Sept 14 00:30 IST · Round 2 (live) Sept 14 16:00 / 21:30 · Finale Sept 16 16:00 / 21:30.
+
+**Applied:** calendar + phase dates rewritten in `05_BUILD_PLAN.md`; key-dates table + commit-cadence status added in `09_EVENT_RULES.md`; risk-register rows added in `08_RISKS.md`; Gate 0.1/0.4 urgency notes in `11_DAY0_GATES.md`; event line in `00_START_HERE.md`.
+
+## Track pages verified verbatim (Sept 7) — three deltas worth acting on
+
+The three target tracks (ENS "Best Use of ENSv2", Ledger "AI Agents x Ledger", Hedera "AI & Agentic Payments") read exactly as `02_TRACK_FIT.md` and this file already describe them — quoted phrases, prize amounts, and qualification text all match the live pages. Ledger's and ENS's second prizes ("Continuity", $1,500; "Best Integration of ENSv2", $500) are **Continuity-track only** and correctly not targeted. Deltas:
+
+- **Hedera's extra-points list is longer than documented.** Besides metering, ERC-8004 identity, agent discovery, and HCS audit trails (already known): **HTS tokens or custom fee schedules in the settlement path**, **recurring/streamed payments via Scheduled Transactions**, and **A2A/ACP** multi-agent negotiation. The first two are simple add-ons for the relay settlement path (batch-settle accumulated usage via a Scheduled Transaction). Folded into `02_TRACK_FIT.md`.
+- **"Ledger Tracks Explained" aired Sept 7, 14:00 UTC / 19:30 IST** (recording linked from the event schedule page). Still to be watched; it is the most likely source to resolve the `wallet-cli send` calldata question (`adr/0001`'s open verification) before Phase 3 starts Sept 9.
+- **Project Check-ins and Feedback Sessions are ETHGlobal showcase requirements** (Sept 8 and Sept 11, 03:59 UTC / 09:29 IST), tracked in `05_BUILD_PLAN.md`'s calendar and `08_RISKS.md`'s register.

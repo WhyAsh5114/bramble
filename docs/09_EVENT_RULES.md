@@ -1,5 +1,19 @@
 # Event Rules
 
+## Key dates (verified against ethglobal.com/events/ethonline2026, Sept 7)
+
+| Date (UTC) | Date (IST, UTC+5:30) | What |
+|---|---|---|
+| Sept 4, 05:00 | Sept 4, 10:30 | Event opened |
+| Sept 6, 17:00 | Sept 6, 22:30 | Signup deadline (passed) |
+| **Sept 8, 03:59** | **Sept 8, 09:29** | **Project Check-in #1 due** |
+| Sept 8, 18:00 / Sept 10, 13:00 | Sept 8, 23:30 / Sept 10, 18:30 | Project Feedback Sessions #1 / #2 (optional, recommended) |
+| **Sept 11, 03:59** | **Sept 11, 09:29** | **Project Check-in #2 due** |
+| **Sept 13, 16:00** | **Sept 13, 21:30** | **Project submissions due — video included (`requireVideoSubmission` is on). The Sept 16 finale is not the deadline** |
+| Sept 13, 19:00 | Sept 14, 00:30 | Judging Round 1: asynchronous project judging (note the IST date rolls to Sept 14) |
+| Sept 14, 16:00 | Sept 14, 21:30 | Judging Round 2: live project judging |
+| Sept 16, 16:00 | Sept 16, 21:30 | ETHOnline 2026 Finale |
+
 ## Start Fresh
 
 All project-specific code written after the event opened (Sept 4). Public libraries and starter kits are fine and should be declared in the README: `wireguard-go`, `pion`, `ensjs`, `@ledgerhq/wallet-cli`, `@x402/*`. Nothing from any prior project is copied in.
@@ -18,7 +32,7 @@ Attribution required: document where and how AI tools were used. Spec-driven wor
 
 ## Video
 
-2–4 minutes for finalist judging; Hedera allows up to 5. 720p minimum. **No TTS or AI voiceover.** Not phone-recorded. Not sped up. Must show the live paid request executing for Hedera.
+**Required at submission** — the event has `requireVideoSubmission` enabled, so the Sept 13 showcase upload must include it; there is no post-deadline video window. 2–4 minutes for finalist judging; Hedera allows up to 5. 720p minimum. **No TTS or AI voiceover.** Not phone-recorded. Not sped up. Must show the live paid request executing for Hedera. **Record by Sept 12** (build freeze) — see `05_BUILD_PLAN.md`'s calendar.
 
 ## Partner prize selection
 

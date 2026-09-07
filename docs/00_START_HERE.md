@@ -2,9 +2,9 @@
 
 **Working name:** `bramble`. Check npm and GitHub, use it everywhere from the first commit.
 
-**Event:** ETHOnline 2026, Sept 4–16. Started today.
+**Event:** ETHOnline 2026. The event runs to the Sept 16 finale, but **project submissions (video included) close Sept 13, 16:00 UTC / 21:30 IST** — see `09_EVENT_RULES.md`. ETHGlobal check-ins due Sept 8 and Sept 11 (03:59 UTC / 09:29 IST).
 **Track:** Start Fresh.
-**Written:** Sept 4, 2026. Re-verify anything version-dependent.
+**Written:** Sept 4, 2026. Re-verify anything version-dependent. (Event schedule corrected Sept 7 against the official event page.)
 
 ## The project in one paragraph
 

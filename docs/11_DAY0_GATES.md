@@ -11,7 +11,7 @@ The Ledger track requires the Agent Stack, and specifically `wallet-cli ring`. `
 
 **Test:** `wallet-cli --version` returns v1.0.1 or later; `wallet-cli ring init` completes; `ring encrypt` on the laptop and `ring decrypt` on a second machine with no device attached.
 
-**Status:** still pending, waiting on physical device access. See `12_SOURCE_NOTES.md`, "Day 1 technical sanity check," item 2.
+**Status:** still pending as of Sept 7, waiting on physical device access. **This is a Sept 7–8 item:** Phase 3 (Sept 9–10) cannot start without it. The Ledger "Tracks Explained" workshop aired Sept 7, 14:00 UTC / 19:30 IST (recording linked from the event schedule) — check it, plus the `wallet-cli send` calldata question, before writing Phase 3 off. See `12_SOURCE_NOTES.md`, "Day 1 technical sanity check," item 2.
 
 ## Gate 0.2 — Two peers, two networks, no trusted coordinator (target: end of Sat Sept 5, hard deadline Sun Sept 6)
 
@@ -53,7 +53,7 @@ One trivial paid request, end to end, transaction confirmed on HashScan.
 
 A team shipped Hedera x402 settlement inside a 36-hour event in July, so this should pass. If it does not pass in two hours, that is a finding and the Hedera slot is at risk. Watch HTS token association: a recipient that has not associated with the token, with no free auto-association slot, cannot receive it.
 
-**Status:** not started. See `12_SOURCE_NOTES.md` for the open question on whether Scaffold-HBAR's bundled facilitator is actually Blocky402.
+**Status:** not started as of Sept 7. **This is now urgent, not "Day 0":** submissions close Sept 13 16:00 UTC / 21:30 IST (`09_EVENT_RULES.md`), and Phase 4 (Sept 10–11) is built entirely on this gate. Run it Sept 7–8. See `12_SOURCE_NOTES.md` for the open question on whether Scaffold-HBAR's bundled facilitator is actually Blocky402.
 
 ## Gate 0.5 — Name (10 minutes)
 
