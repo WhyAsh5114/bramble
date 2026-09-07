@@ -6,16 +6,30 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
 type Manager struct {
 	Port int
 	cmd  *exec.Cmd
+
+	// wantTailnetName/wantTailnetRegistry are the identity waitHealthy
+	// checks a /health response against — see its doc comment.
+	wantTailnetName     string
+	wantTailnetRegistry string
+}
+
+// healthResponse mirrors sidecar/src/index.ts's /health payload.
+type healthResponse struct {
+	OK              bool   `json:"ok"`
+	TailnetName     string `json:"tailnetName"`
+	TailnetRegistry string `json:"tailnetRegistry"`
 }
 
 type Config struct {
@@ -56,7 +70,7 @@ func Start(cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("starting sidecar: %w", err)
 	}
 
-	m := &Manager{Port: cfg.Port, cmd: cmd}
+	m := &Manager{Port: cfg.Port, cmd: cmd, wantTailnetName: cfg.TailnetName, wantTailnetRegistry: cfg.TailnetRegistry}
 	if err := m.waitHealthy(5 * time.Second); err != nil {
 		_ = m.Stop()
 		return nil, err
@@ -64,17 +78,32 @@ func Start(cfg Config) (*Manager, error) {
 	return m, nil
 }
 
+// waitHealthy polls /health until it reports ok for *this* node's tailnet,
+// not just ok:true from whatever happens to be listening on the port. The
+// sidecar's port is fixed (Config.Port, default 7890) and a bare ok:true
+// check can't tell "my sidecar came up" from "a stray sidecar left running
+// from another node on this host is answering instead" — a silent
+// wrong-tailnet resolution, not a startup failure, and much harder to
+// notice. A response for a different tailnet is treated as not-yet-healthy
+// and polling continues; if the timeout is reached with only mismatched
+// responses seen, the error says so explicitly instead of just timing out.
 func (m *Manager) waitHealthy(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	url := fmt.Sprintf("http://localhost:%d/health", m.Port)
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", m.Port)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+
+	var lastMismatch *healthResponse
 
 	for {
 		select {
 		case <-ctx.Done():
+			if lastMismatch != nil {
+				return fmt.Errorf("sidecar did not become healthy within %s: port %d is answering /health for tailnet %q (registry %s), not %q (registry %s) — a stray sidecar from another node may be using this port",
+					timeout, m.Port, lastMismatch.TailnetName, lastMismatch.TailnetRegistry, m.wantTailnetName, m.wantTailnetRegistry)
+			}
 			return fmt.Errorf("sidecar did not become healthy within %s", timeout)
 		case <-ticker.C:
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -85,10 +114,17 @@ func (m *Manager) waitHealthy(timeout time.Duration) error {
 			if err != nil {
 				continue
 			}
+			var body healthResponse
+			decodeErr := json.NewDecoder(resp.Body).Decode(&body)
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
+			if resp.StatusCode != http.StatusOK || decodeErr != nil || !body.OK {
+				continue
 			}
+			if !strings.EqualFold(body.TailnetRegistry, m.wantTailnetRegistry) || body.TailnetName != m.wantTailnetName {
+				lastMismatch = &body
+				continue
+			}
+			return nil
 		}
 	}
 }

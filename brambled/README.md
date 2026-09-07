@@ -216,3 +216,12 @@ serve` stderr for its `admission: device2: not authorized` line. The
   this daemon.
 - **x402 metering of rendezvous relay usage is not implemented** — the
   relay is currently free to use. That's Phase 4's job.
+- **Resolver errors fail open by default.** If the sidecar dies or its RPC
+  breaks, `SyncOnce` logs the error but does not by itself remove an
+  already-admitted peer — Gate 1.3's "bounded by TTL" revocation-latency
+  claim implicitly assumes sidecar+RPC liveness. `-max-stale` bounds this
+  (remove a peer once resolution has been failing for that long); it
+  defaults to `0` (unbounded fail-open, unchanged prior behavior). See
+  `admission/loop.go`'s package comment for the full reasoning, and set
+  `-max-stale` for any real demo or deployment rather than relying on the
+  default.

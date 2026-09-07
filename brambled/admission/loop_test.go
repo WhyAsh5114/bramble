@@ -18,6 +18,21 @@ func (f fakeResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error)
 	return f[label], nil
 }
 
+// erroringResolver lets a test simulate resolver failures (sidecar down,
+// RPC unreachable) for specific labels, independent of what fakeResolver
+// would otherwise return.
+type erroringResolver struct {
+	records map[string]*sidecar.DeviceRecord
+	failing map[string]bool
+}
+
+func (f *erroringResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+	if f.failing[label] {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return f.records[label], nil
+}
+
 type fakeTable struct {
 	added   map[string]netip.Prefix
 	removed map[string]bool
@@ -222,6 +237,134 @@ func TestSyncOnce_ResolverErrorDoesNotBlockAdmission(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].EndpointErr == nil {
 		t.Fatalf("expected EndpointErr to be surfaced on the event, got: %+v", events)
+	}
+}
+
+// TestSyncOnce_KeyRotationRemovesOldPeer is a regression test for a bug
+// found reviewing the admission loop: a label whose pubkey changes while
+// remaining authorized (rotation, not revocation) used to be added under
+// the new key without ever removing the old one. Because wgnode's IpcSet
+// keys peers by public key, the old key stayed in the live peer table
+// forever — a real hole under 02_TRACK_FIT.md's "a device can rotate its
+// own key" pitch line.
+func TestSyncOnce_KeyRotationRemovesOldPeer(t *testing.T) {
+	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
+	resolver := fakeResolver{
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("old-key"), Status: 2, Expiry: itoa(future)},
+	}
+	table := newFakeTable()
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return time.Unix(1_800_000_000, 0) },
+	}
+
+	loop.SyncOnce()
+	if _, ok := table.added["old-key"]; !ok {
+		t.Fatal("setup failed: expected the peer to be added under its original key")
+	}
+
+	// Rotate: same label, still authorized, different pubkey.
+	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("new-key"), Status: 2, Expiry: itoa(future)}
+	loop.SyncOnce()
+
+	if !table.removed["old-key"] {
+		t.Fatal("expected the old key to be removed from the peer table after rotation")
+	}
+	if _, ok := table.added["new-key"]; !ok {
+		t.Fatal("expected the new key to be added after rotation")
+	}
+}
+
+// TestSyncOnce_ResolverErrorLeavesPeerAdmittedWithoutMaxStale documents the
+// default fail-open behavior: with MaxStale unset (zero), a resolver error
+// never revokes an already-admitted peer, no matter how long resolution
+// keeps failing.
+func TestSyncOnce_ResolverErrorLeavesPeerAdmittedWithoutMaxStale(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	future := now.Add(time.Hour).Unix()
+	resolver := &erroringResolver{
+		records: map[string]*sidecar.DeviceRecord{
+			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		},
+		failing: map[string]bool{},
+	}
+	table := newFakeTable()
+	clock := now
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return clock },
+	}
+
+	loop.SyncOnce()
+	if _, ok := table.added["abc123"]; !ok {
+		t.Fatal("setup failed: expected the peer to be added while authorized")
+	}
+
+	resolver.failing["device1"] = true
+	clock = clock.Add(24 * time.Hour)
+	loop.SyncOnce()
+
+	if table.removed["abc123"] {
+		t.Fatal("expected the peer to remain admitted on resolver error when MaxStale is unset (fail-open default)")
+	}
+}
+
+// TestSyncOnce_MaxStaleRemovesPeerAfterSustainedResolverFailure is the
+// regression test for the fail-open finding: MaxStale bounds how long a
+// resolver error can leave an already-admitted peer in place. Below the
+// bound the peer must stay (a transient RPC hiccup shouldn't tear down a
+// legitimate connection); past the bound it must be removed.
+func TestSyncOnce_MaxStaleRemovesPeerAfterSustainedResolverFailure(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	future := now.Add(time.Hour).Unix()
+	resolver := &erroringResolver{
+		records: map[string]*sidecar.DeviceRecord{
+			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		},
+		failing: map[string]bool{},
+	}
+	table := newFakeTable()
+	clock := now
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return clock },
+		MaxStale: 10 * time.Second,
+	}
+
+	loop.SyncOnce()
+	if _, ok := table.added["abc123"]; !ok {
+		t.Fatal("setup failed: expected the peer to be added while authorized")
+	}
+
+	resolver.failing["device1"] = true
+
+	// Still within MaxStale — must remain fail-open.
+	clock = clock.Add(5 * time.Second)
+	loop.SyncOnce()
+	if table.removed["abc123"] {
+		t.Fatal("expected the peer to remain admitted before MaxStale elapses")
+	}
+
+	// Past MaxStale — must flip to fail-closed.
+	clock = clock.Add(10 * time.Second)
+	loop.SyncOnce()
+	if !table.removed["abc123"] {
+		t.Fatal("expected the peer to be removed once the resolver error outlasted MaxStale")
+	}
+
+	// Recovery: resolution succeeds again, peer should be re-admitted
+	// cleanly (not blocked by stale internal state from the removal).
+	resolver.failing["device1"] = false
+	clock = clock.Add(time.Second)
+	loop.SyncOnce()
+	if _, ok := table.added["abc123"]; !ok {
+		t.Fatal("expected the peer to be re-admitted once resolution recovers")
 	}
 }
 

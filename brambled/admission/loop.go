@@ -11,13 +11,31 @@
 // Revocation may turn out to need status once that's confirmed; using only
 // expiry for now is a known, flagged gap, not a guess dressed up as one.
 //
-// Two revocation shapes exist and both must actually remove a live peer, not
-// just refuse future handshakes (docs/05_BUILD_PLAN.md Gate 1.3): expiry
-// lapsing (the record still reports a pubkey, just past expiry) and a
-// cleared pubkey text record (the record reports none at all). The second
-// shape needs Loop to remember the last pubkey a label was authorized under
-// — see knownPubkeys in SyncOnce — otherwise a peer that revokes by clearing
-// its own record could never be found again to remove.
+// Three revocation/change shapes exist and all three must actually mutate a
+// live peer, not just refuse future handshakes (docs/05_BUILD_PLAN.md Gate
+// 1.3): expiry lapsing (the record still reports a pubkey, just past
+// expiry), a cleared pubkey text record (the record reports none at all),
+// and key rotation (the record reports a *different* pubkey than before,
+// while remaining authorized — 02_TRACK_FIT.md's "a device can rotate its
+// own key" pitch line). All three need Loop to remember the last pubkey a
+// label was authorized under — see knownPubkeys in SyncOnce — otherwise a
+// peer that revokes by clearing its own record could never be found again
+// to remove, and a rotated-away-from key would simply accumulate as a
+// second, still-admitted peer entry forever (WireGuard's IpcSet keys peers
+// by public key, so adding a new one never implicitly removes an old one).
+//
+// Fail-open posture on resolver errors: a resolution error (sidecar down,
+// RPC unreachable) does not by itself revoke a peer — see SyncOnce's error
+// branch. This is deliberate: a transient RPC hiccup shouldn't tear down an
+// otherwise-legitimate connection. Left unbounded, though, it also means a
+// genuinely revoked peer stays admitted for as long as resolution keeps
+// failing — an unstated assumption behind Gate 1.3's "bounded by TTL" claim,
+// which implicitly assumes sidecar+RPC liveness. MaxStale bounds this: once
+// a label has gone MaxStale past its last successful resolve, SyncOnce flips
+// from fail-open to fail-closed and removes the peer. MaxStale's zero value
+// preserves the original unbounded fail-open behavior; operators running a
+// real demo or deployment should set it (a small multiple of TTL is
+// reasonable) rather than rely on the default.
 package admission
 
 import (
@@ -67,6 +85,13 @@ type Loop struct {
 	Peers    []Peer
 	TTL      time.Duration
 
+	// MaxStale bounds the fail-open window on resolver errors: once a label
+	// has gone this long since its last successful resolve, SyncOnce removes
+	// it from the peer table instead of leaving it admitted indefinitely.
+	// Zero (the default) means unbounded fail-open — see the package
+	// comment's "Fail-open posture" section before relying on the default.
+	MaxStale time.Duration
+
 	// EndpointResolver, if set, discovers a reachable endpoint for an
 	// authorized peer that didn't already have a static Peer.Endpoint — e.g.
 	// candidate exchange via the rendezvous relay (brambled/rendezvous). It's
@@ -84,8 +109,9 @@ type Loop struct {
 	// OnEvent, if set, is called once per peer after every sync pass.
 	OnEvent func(Event)
 
-	resolvedEndpoints map[string]struct{} // pubkey -> already resolved via EndpointResolver
-	knownPubkeys      map[string]string   // label -> last pubkey this label was authorized under
+	resolvedEndpoints map[string]struct{}  // pubkey -> already resolved via EndpointResolver
+	knownPubkeys      map[string]string    // label -> last pubkey this label was authorized under
+	lastSuccess       map[string]time.Time // label -> time of last successful resolve
 }
 
 func (l *Loop) now() time.Time {
@@ -103,8 +129,10 @@ func (l *Loop) SyncOnce() {
 		record, err := l.Resolver.ResolveDevice(p.Label)
 		if err != nil {
 			l.emit(Event{Label: p.Label, Authorized: false, Err: err})
+			l.handleResolveError(p)
 			continue
 		}
+		l.markResolveSucceeded(p.Label)
 
 		authorized := record.Pubkey != nil && *record.Pubkey != "" && l.expiryInFuture(record.Expiry)
 
@@ -116,6 +144,15 @@ func (l *Loop) SyncOnce() {
 		var syncErr, endpointErr error
 		switch {
 		case authorized:
+			if old, rotated := l.knownPubkeys[p.Label]; rotated && old != pubkey {
+				// Key rotation: the label is still authorized, but under a
+				// different pubkey than last sync. WireGuard's IpcSet keys
+				// peers by public key, so AddPeer below would add a second,
+				// parallel entry rather than replacing this one — the old
+				// key has to be explicitly removed first.
+				_ = l.Table.RemovePeer(old)
+				delete(l.resolvedEndpoints, old)
+			}
 			endpoint, epErr := l.resolveEndpoint(p, pubkey)
 			endpointErr = epErr
 			syncErr = l.Table.AddPeer(pubkey, p.AllowedIP, endpoint)
@@ -144,6 +181,39 @@ func (l *Loop) SyncOnce() {
 
 		l.emit(Event{Label: p.Label, Authorized: authorized, PublicKey: pubkey, Err: syncErr, EndpointErr: endpointErr})
 	}
+}
+
+// markResolveSucceeded records that label resolved successfully just now,
+// resetting its staleness clock for handleResolveError.
+func (l *Loop) markResolveSucceeded(label string) {
+	if l.lastSuccess == nil {
+		l.lastSuccess = make(map[string]time.Time)
+	}
+	l.lastSuccess[label] = l.now()
+}
+
+// handleResolveError enforces MaxStale: once a label has gone longer than
+// MaxStale since its last successful resolve, the peer is removed from the
+// live table (fail closed) instead of staying admitted indefinitely on a
+// stuck resolver. A zero MaxStale disables this — see the package comment's
+// "Fail-open posture" section.
+func (l *Loop) handleResolveError(p Peer) {
+	if l.MaxStale <= 0 {
+		return
+	}
+	last, ok := l.lastSuccess[p.Label]
+	if !ok || l.now().Sub(last) < l.MaxStale {
+		return
+	}
+	removeKey, known := l.knownPubkeys[p.Label]
+	if !known || removeKey == "" {
+		return
+	}
+	syncErr := l.Table.RemovePeer(removeKey)
+	delete(l.resolvedEndpoints, removeKey)
+	delete(l.knownPubkeys, p.Label)
+	delete(l.lastSuccess, p.Label)
+	l.emit(Event{Label: p.Label, Authorized: false, Err: syncErr})
 }
 
 // resolveEndpoint returns p.Endpoint if set (static config wins outright),

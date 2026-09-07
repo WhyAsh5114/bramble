@@ -138,6 +138,7 @@ func runServe(args []string) error {
 	localPrefix := fs.String("local-addr", "10.77.0.1/24", "this node's address and mesh subnet (CIDR)")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
+	maxStale := fs.Duration("max-stale", 0, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; 0 disables this and fails open forever (see admission package doc)")
 	privateKeyHex := fs.String("private-key", os.Getenv("BRAMBLE_PRIVATE_KEY"), "hex-encoded WireGuard private key (generated ephemerally if unset — not persisted)")
 	interfaceName := fs.String("interface", "", "real OS interface name (auto-picked if unset: \"utun\" on macOS, \"bramble0\" on linux)")
 	netstackMode := fs.Bool("netstack", false, "use a virtual (gVisor) TUN instead of a real OS interface — testing/local dev only, never the demo")
@@ -198,6 +199,7 @@ func runServe(args []string) error {
 		Table:    node,
 		Peers:    peers,
 		TTL:      *ttl,
+		MaxStale: *maxStale,
 		OnEvent: func(e admission.Event) {
 			switch {
 			case e.Err != nil:
