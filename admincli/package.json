@@ -1,0 +1,20 @@
+{
+  "name": "@bramble/admincli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "enroll": "bun run src/enroll.ts",
+    "rotate": "bun run src/rotate.ts",
+    "revoke": "bun run src/revoke.ts",
+    "grant-role": "bun run src/grant-role.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.56.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.1",
+    "@types/node": "^26.4.1",
+    "typescript": "6.0.3"
+  }
+}

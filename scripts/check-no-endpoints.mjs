@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const SCAN_DIRS = ['sidecar/src', 'scripts/provision-dev-tailnet', 'brambled']
+const SCAN_DIRS = ['sidecar/src', 'scripts/provision-dev-tailnet', 'brambled', 'admincli']
 const EXCLUDE_SEGMENTS = new Set(['node_modules', '.git', 'dist'])
 const EXCLUDE_PREFIXES = ['scripts/gate0.3-eac-check', 'relay']
 const SCAN_EXTENSIONS = new Set(['.ts', '.go'])

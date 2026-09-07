@@ -3,3 +3,4 @@ packages:
   - brambled
   - relay
   - scripts/provision-dev-tailnet
+  - admincli
