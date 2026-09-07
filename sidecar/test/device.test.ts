@@ -17,6 +17,9 @@ describe('resolveDevice', () => {
     // expiry, so this must be active.
     expect(record.status).not.toBe(0)
     expect(BigInt(record.expiry)).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)))
+    // No `revoked` record has ever been written for this fixture device —
+    // must read as false, not throw or come back true on an absent record.
+    expect(record.revoked).toBe(false)
   })
 
   it('resolves a nonexistent label to an unset record rather than throwing', async () => {

@@ -368,6 +368,39 @@ func TestSyncOnce_MaxStaleRemovesPeerAfterSustainedResolverFailure(t *testing.T)
 	}
 }
 
+// TestSyncOnce_RemovesPeerMarkedRevoked is the regression test for Gate
+// 2.1's EAC-gated revocation path: a `revoked` text record, distinct from
+// clearing `pubkey` (see docs/adr/0004). The record still reports a valid,
+// unexpired pubkey — only Revoked flips — so this exercises a different
+// code path than TestSyncOnce_RemovesPeerWhosePubkeyWasCleared.
+func TestSyncOnce_RemovesPeerMarkedRevoked(t *testing.T) {
+	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
+	resolver := fakeResolver{
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+	}
+	table := newFakeTable()
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return time.Unix(1_800_000_000, 0) },
+	}
+
+	loop.SyncOnce()
+	if _, ok := table.added["abc123"]; !ok {
+		t.Fatal("setup failed: expected the peer to be added while authorized")
+	}
+
+	// Revoke via the EAC-gated `revoked` record, not by clearing pubkey —
+	// pubkey and expiry are unchanged.
+	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future), Revoked: true}
+	loop.SyncOnce()
+
+	if !table.removed["abc123"] {
+		t.Fatal("expected the peer to be removed once its record reports revoked, even with a still-valid pubkey and expiry")
+	}
+}
+
 func TestSyncOnce_EmitsEventPerPeer(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{

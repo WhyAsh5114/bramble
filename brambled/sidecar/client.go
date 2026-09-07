@@ -13,6 +13,11 @@ type DeviceRecord struct {
 	Status   int     `json:"status"`
 	Expiry   string  `json:"expiry"`
 	TokenID  string  `json:"tokenId"`
+	// Revoked mirrors the `revoked` text record — an EAC-gated revocation
+	// lever distinct from clearing `pubkey` (see admission's package doc
+	// comment and docs/adr/0004). Deliberately a separate record/role from
+	// `pubkey` so revoke and rotate can be granted to different accounts.
+	Revoked bool `json:"revoked"`
 }
 
 // ResolveDevice calls the sidecar's read-only device-resolution endpoint.

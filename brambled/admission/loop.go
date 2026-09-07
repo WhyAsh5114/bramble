@@ -11,18 +11,24 @@
 // Revocation may turn out to need status once that's confirmed; using only
 // expiry for now is a known, flagged gap, not a guess dressed up as one.
 //
-// Three revocation/change shapes exist and all three must actually mutate a
+// Four revocation/change shapes exist and all four must actually mutate a
 // live peer, not just refuse future handshakes (docs/05_BUILD_PLAN.md Gate
 // 1.3): expiry lapsing (the record still reports a pubkey, just past
 // expiry), a cleared pubkey text record (the record reports none at all),
-// and key rotation (the record reports a *different* pubkey than before,
-// while remaining authorized — 02_TRACK_FIT.md's "a device can rotate its
-// own key" pitch line). All three need Loop to remember the last pubkey a
-// label was authorized under — see knownPubkeys in SyncOnce — otherwise a
-// peer that revokes by clearing its own record could never be found again
-// to remove, and a rotated-away-from key would simply accumulate as a
-// second, still-admitted peer entry forever (WireGuard's IpcSet keys peers
-// by public key, so adding a new one never implicitly removes an old one).
+// key rotation (the record reports a *different* pubkey than before, while
+// remaining authorized — 02_TRACK_FIT.md's "a device can rotate its own
+// key" pitch line), and a set `revoked` text record (Gate 2.1 — EAC-gated
+// revocation via a role scoped to the `revoked` setter, distinct from the
+// role scoped to the `pubkey` setter that rotation uses; see
+// docs/adr/0004-admin-cli-writes-directly-to-registry.md). The first three
+// need Loop to remember the last pubkey a label was authorized under — see
+// knownPubkeys in SyncOnce — otherwise a peer that revokes by clearing its
+// own record could never be found again to remove, and a rotated-away-from
+// key would simply accumulate as a second, still-admitted peer entry
+// forever (WireGuard's IpcSet keys peers by public key, so adding a new one
+// never implicitly removes an old one). `revoked` doesn't have that problem
+// — the pubkey is still reported, so the normal remove-by-pubkey path just
+// works.
 //
 // Fail-open posture on resolver errors: a resolution error (sidecar down,
 // RPC unreachable) does not by itself revoke a peer — see SyncOnce's error
@@ -134,7 +140,7 @@ func (l *Loop) SyncOnce() {
 		}
 		l.markResolveSucceeded(p.Label)
 
-		authorized := record.Pubkey != nil && *record.Pubkey != "" && l.expiryInFuture(record.Expiry)
+		authorized := record.Pubkey != nil && *record.Pubkey != "" && l.expiryInFuture(record.Expiry) && !record.Revoked
 
 		var pubkey string
 		if record.Pubkey != nil {

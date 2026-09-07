@@ -30,6 +30,20 @@ export const REGISTRATION_ROLE_BITMAP =
 export const ROLE_SET_TEXT = 1n << 4n
 export const ROLE_SET_ADDRESS = 1n << 0n
 
+// Registry-level role gating who may call register() to enroll a new device
+// subname — a ROOT_RESOURCE role on the subregistry contract itself, NOT
+// part of REGISTRATION_ROLE_BITMAP above (which is what's granted to the
+// *new token's owner*, a separate concern). Verified from primary source,
+// not the docs page (same discipline as the initializer-signature drift in
+// docs/12_SOURCE_NOTES.md): ensdomains/contracts-v2's
+// contracts/src/registry/libraries/RegistryRolesLib.sol defines
+// `ROLE_REGISTRAR = 1 << 0`, and PermissionedRegistry._register() calls
+// `_checkRoles(ROOT_RESOURCE, RegistryRolesLib.ROLE_REGISTRAR, msg.sender)`
+// for a fresh (never-registered) label. Granted via grantRootRoles(), not
+// grantRoles() — see docs/adr/0004-admin-cli-writes-directly-to-registry.md.
+export const ROLE_REGISTRAR = 1n << 0n
+export const ROLE_REGISTRAR_ADMIN = ROLE_REGISTRAR << 128n
+
 // Every regular + admin role bit set (bit 0 of all 64 nybbles), computed
 // rather than copy-pasted, to avoid a uint256-overflow typo.
 export const ALL_ROLES = BigInt('0x' + '1'.repeat(64))
@@ -63,11 +77,15 @@ export function tailnetRegistry(): `0x${string}` {
 export const registryAbi = parseAbi([
   'function ownerOf(uint256 id) view returns (address)',
   'function getState(uint256 anyId) view returns (uint8 status, uint64 expiry, address latestOwner, uint256 tokenId, uint256 resource)',
+  'function roles(uint256 anyId, address account) view returns (uint256)',
 ])
 
-// NOTE: EAC role state (docs/adr/0002 mentions "reading EAC/role state" as a
-// long-term sidecar responsibility) has no verified read ABI yet — Gate 0.3
-// only proved write-restriction behavior (grantSetterRoles + simulateContract
-// failing for out-of-scope keys), not a read-only "what roles does X hold"
-// call. Deferred to Phase 2, when EAC's read surface gets investigated
-// properly instead of guessed at.
+// EAC role state: a verified read ABI now exists (Phase 2 finding,
+// correcting the prior "no verified read ABI yet" note left after Gate 0.3).
+// `roles(anyId, account)` returns the effective role bitmap for an account
+// on a name, confirmed against ensdomains/contracts-v2's
+// EnhancedAccessControl.sol/PermissionedRegistry.sol source and the ENSv2
+// docs' "Enhanced Access Control" page. Not required for Gate 2.1's
+// permit/deny test (Gate 0.3's simulateContract pattern already proves
+// that), but available for anything that wants to display or assert current
+// role state directly rather than inferring it from a simulated call.

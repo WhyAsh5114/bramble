@@ -23,6 +23,11 @@ export interface DeviceRecord {
   status: number
   expiry: string
   tokenId: string
+  // revoked mirrors the `revoked` text record — an EAC-gated revocation
+  // lever distinct from clearing `pubkey`, so revoke and rotate can be
+  // granted to different accounts (see docs/adr/0004). Not the same field
+  // as `status` above, which is the registry's own token-status enum.
+  revoked: boolean
 }
 
 export async function resolveDevice(label: string): Promise<DeviceRecord> {
@@ -32,6 +37,7 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
   // the Universal Resolver — proven end to end by Gate 0.3 ("subname text
   // record round-trips through full hierarchy").
   const pubkey = await publicClient.getEnsText({ name: fullname, key: 'pubkey' })
+  const revokedText = await publicClient.getEnsText({ name: fullname, key: 'revoked' })
 
   // getState() is registry-specific, not hierarchy-resolved — it must be
   // called against the subname's own subregistry contract, which this node's
@@ -53,5 +59,6 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
     status,
     expiry: expiry.toString(),
     tokenId: tokenId.toString(),
+    revoked: revokedText === 'true',
   }
 }

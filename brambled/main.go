@@ -12,6 +12,13 @@
 // coordinator. STUN/hole-punching for the harder two-NAT case is still not
 // implemented — see docs/11_DAY0_GATES.md Gate 0.2's note on laptop-to-VPS
 // being the easier, currently-supported topology.
+// Phase 2 Section A: EAC-gated enrollment/revocation/rotation (Gate 2.1) —
+// built in ../admincli, a separate package that writes to the registry
+// directly rather than through any node's sidecar (see
+// docs/adr/0004-admin-cli-writes-directly-to-registry.md). The only change
+// on this side is admission.Loop's authorization rule, which now also
+// checks a `revoked` text record (additive — the pre-existing clear-pubkey
+// revocation path Gate 1.3 verified is untouched).
 package main
 
 import (
