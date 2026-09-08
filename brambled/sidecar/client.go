@@ -18,6 +18,19 @@ type DeviceRecord struct {
 	// comment and docs/adr/0004). Deliberately a separate record/role from
 	// `pubkey` so revoke and rotate can be granted to different accounts.
 	Revoked bool `json:"revoked"`
+	// ACL mirrors the `acl` text record — a list of ECDH digests (see
+	// docs/adr/0005-acl-record-schema.md's aclDigestECDH), never plaintext
+	// service names, hosts, IPs, or ports. Gated by its own
+	// grantSetterRoles-scoped role. Read-only plumbing for Phase 2 Section
+	// C's gateway enforcement; admission/loop.go does not consume this field
+	// — mesh admission and ACL enforcement are separate checks.
+	ACL []string `json:"acl"`
+	// ACLGranters mirrors the `acl-granters` text record — this device's own
+	// list of already-enrolled identity labels it accepts ACL vouches from
+	// when it acts as a gateway (docs/adr/0005). Section C's gateway
+	// verification loop iterates this list, not ACL above, to decide whose
+	// digests to even attempt matching.
+	ACLGranters []string `json:"aclGranters"`
 }
 
 // ResolveDevice calls the sidecar's read-only device-resolution endpoint.

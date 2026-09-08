@@ -35,6 +35,12 @@ importers:
 
   admincli:
     dependencies:
+      '@noble/curves':
+        specifier: 1.9.1
+        version: 1.9.1
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
       viem:
         specifier: ^2.56.3
         version: 2.56.3(typescript@6.0.3)

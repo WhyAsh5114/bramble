@@ -20,6 +20,13 @@ describe('resolveDevice', () => {
     // No `revoked` record has ever been written for this fixture device —
     // must read as false, not throw or come back true on an absent record.
     expect(record.revoked).toBe(false)
+    // No `acl` record has ever been written for this fixture device either —
+    // must parse to [], not throw or come back with a stray empty-string
+    // entry from splitting an absent/empty value.
+    expect(record.acl).toEqual([])
+    // Same for `acl-granters` — this fixture device has never been
+    // configured as a gateway for anything.
+    expect(record.aclGranters).toEqual([])
   })
 
   it('resolves a nonexistent label to an unset record rather than throwing', async () => {

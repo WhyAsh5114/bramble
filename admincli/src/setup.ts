@@ -44,4 +44,18 @@ export function accountFromEnv(envVar = 'SEPOLIA_PRIVATE_KEY') {
   return privateKeyToAccount(privateKey)
 }
 
+// wireguardPrivateKeyFromEnv resolves a bare-hex (no 0x prefix — the
+// convention brambled/wgnode and scripts/provision-dev-tailnet already use
+// for WireGuard/X25519 keys, distinct from accountFromEnv's 0x-prefixed
+// Ethereum keys) private key from the named env var. Used by set-acl.ts:
+// the granter vouching for an ACL grant needs their own already-enrolled
+// identity's WireGuard private key to compute an ECDH shared secret with
+// the gateway — see docs/adr/0005-acl-record-schema.md. Not a new secret
+// type; it's the same key a device already uses to run brambled itself.
+export function wireguardPrivateKeyFromEnv(envVar: string): string {
+  const raw = process.env[envVar]
+  if (!raw) throw new Error(`${envVar} not found in .env`)
+  return raw.trim().replace(/^0x/, '')
+}
+
 export type { Address }

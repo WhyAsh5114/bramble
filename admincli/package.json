@@ -6,10 +6,14 @@
     "enroll": "bun run src/enroll.ts",
     "rotate": "bun run src/rotate.ts",
     "revoke": "bun run src/revoke.ts",
+    "set-acl": "bun run src/set-acl.ts",
+    "set-acl-granters": "bun run src/set-acl-granters.ts",
     "grant-role": "bun run src/grant-role.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@noble/curves": "1.9.1",
+    "@noble/hashes": "1.8.0",
     "viem": "^2.56.3"
   },
   "devDependencies": {
