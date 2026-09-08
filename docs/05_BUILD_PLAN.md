@@ -56,7 +56,7 @@ Userspace WireGuard, STUN, hole punching, relay fallback, and the admission veri
 **Test:** delete every local cache, restart both nodes, confirm the mesh reassembles purely from chain state.
 
 `HARD GATE 2.3 — ACLs are enforced at the peer.` A device may reach exactly what its ACL permits.
-**Test:** `test_AgentCannotReachOutsideACL`. Agent with a `db:5432` grant attempts port 22 on the same host and a different host entirely; both refused by the receiving peer.
+**Test:** `test_AgentCannotReachOutsideACL`. Agent with a `db` grant sends `CONNECT cache` on the same host and `CONNECT db` on a different host entirely; both refused by the receiving peer. (Record schema: symbolic service names published as ECDH digests between the vouching identity's and target host's already-published pubkeys, not `host:port` — see `adr/0005-acl-record-schema.md`, Phase 2 Section B. Each gateway verifies only against granters listed in its own `acl-granters` record — no tailnet-wide admin key involved.)
 
 **Discretion:** record schema, whether to use wildcard resolution or a deployed subname registry, ENSIP-25/26 record keys (recommended), expiry granularity.
 

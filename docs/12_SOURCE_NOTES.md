@@ -108,7 +108,7 @@ Ranked by what a failure invalidates, not by when it's due.
 ### Run today — binary, external, can kill a track
 
 1. **✅ DONE, PASSED (Sept 5).** EAC restriction, verified end-to-end against the live hackathon deployment, not simulated. Full writeup and script in `11_DAY0_GATES.md` Gate 0.3. K2 does not apply.
-2. **Still pending — waiting on physical device access.** `wallet-cli ring decrypt` on a host with the Ledger device absent. Gate 0.1's sub-check, already correctly called "the entire premise of the Ledger enrollment story" — binary and unknowable except by running it. Deferred until the device is physically on hand. **Also unverified, and load-bearing for using the wait productively:** whether `ring` (LKRP-backed) functions under Speculos at all. Speculos is confirmed to work with `wallet-cli` generally, but `ring` depends on wallet-sync-derived key material, which an app emulator may not be able to stand in for. Check this specifically rather than assuming Speculos-based dev work quietly extends to `ring`.
+2. **Design confirmed by primary source (Ledger's own Sept 7 workshop); still needs the actual physical-device run.** `wallet-cli ring decrypt` on a host with the Ledger device absent is Gate 0.1's sub-check, already correctly called "the entire premise of the Ledger enrollment story." Ledger's own speakers confirmed this is the *intended, designed-for* use case (VPS/CI-runner enrollment, named explicitly), not a hopeful assumption — see the "✅ RESOLVED" entry below. What's still pending is running it for real once the device is physically on hand: `ring init`/`ring encrypt` with the device present, `ring decrypt` on a second machine without it. **Also still unverified:** whether `ring` (LKRP-backed) functions under Speculos at all. Speculos is confirmed to work with `wallet-cli` generally, but `ring` depends on wallet-sync-derived key material, which an app emulator may not be able to stand in for, and the workshop didn't cover emulator behavior. Check this specifically rather than assuming Speculos-based dev work quietly extends to `ring`.
 3. **Also unverified, cheap to check without hardware:** does `wallet-cli send` accept arbitrary contract calldata, or only native-asset transfers? `02_TRACK_FIT.md` and `05_BUILD_PLAN.md` Gate 3.1 depend on `send` being able to sign a `grantRoles`/`revokeRoles` call on the ENS registry, not just move a native asset. Check `wallet-cli send --help` for a `--data`/calldata flag before assuming this path works as designed.
 
 ### Design gaps — resolvable on paper, real but not fatal
@@ -146,10 +146,23 @@ While writing the relay client (`brambled/rendezvous`), a two-sided candidate ex
 ## Open items for whoever reads this next
 
 - Resolve the Blocky402-vs-starter-kit-facilitator question before Gate 0.4.
-- Check whether `wallet-cli ring` works under Speculos specifically, and whether `wallet-cli send` accepts arbitrary calldata — both cheap, both currently unverified.
+- ~~Check whether `wallet-cli send` accepts arbitrary calldata~~ — resolved Sept 7, see below.
+- Whether `wallet-cli ring` works under Speculos specifically is still unverified — the workshop didn't cover emulator behavior, only real-hardware provisioning.
 - When building Phase 4, make sure the demo's chosen topologies include at least one that can't hole-punch, so the data-relay path (not just rendezvous) gets shown live.
 - The two-NAT case (STUN/hole-punching) is still unproven — Gate 0.2's real run only exercised the easier laptop-to-VPS topology. Needed before claiming general NAT traversal, not before Gate 0.2 itself (which explicitly blesses this topology as valid).
-- ~~Append a `## Ledger` section here once "Ledger tracks explained" airs~~ — it aired Sept 7, 14:00 UTC (recording linked from the event schedule page, speakers Etienne Waldron & Oscar Chaix). Watch it, extract anything that touches `ring`/`send`, and append the section.
+- ~~Append a `## Ledger` section here once "Ledger tracks explained" airs~~ — done, see below.
+
+## ✅ RESOLVED — `adr/0001`'s both open questions: headless Key Ring confirmed, `send` calldata confirmed
+
+Watched Sept 7 (local whisper.cpp transcript + slide frames from the video — full writeup in `docs/sources/ledger_workshop_clean.md`). This is the strongest possible primary-source answer to Gate 0.1's "entire premise of the Ledger enrollment story" sub-check: not a side comment, but the *stated design target*, in the speakers' own words, restating the hackathon's own suggested direction back at attendees: *"obviously ledger devices need to be plugged into your machine in order to work. So the idea is to implement key ring basically in a machine where you can't. So this can be a VPS, you know, CI runner, anything hosted that doesn't have direct access to your device."* Corroborated by the product slide (*"Headless by design: CI and agents decrypt with nobody at the keyboard"*), a live demo (device disconnected after provisioning, agent kept decrypting), and a direct, detailed Q&A answer walking through the actual mechanism (device provisions a machine's rights once; decryption afterward flows through the decentralized Trust Chain, no device or on-device confirmation involved).
+
+**New nuance, not previously documented:** the provisioned machine's decrypt path has one more local factor — *"there's also like a password that's tied to your machine's OS."* Not zero-friction, but still fully headless (no Ledger device or human-in-the-loop confirmation needed post-provisioning).
+
+**What the workshop itself does not resolve:** `adr/0001`'s calldata question (`wallet-cli send` signing arbitrary contract calls, e.g. `grantRoles`/`revokeRoles`) — not mentioned anywhere in the talk. **Resolved separately, immediately after, by just running `wallet-cli send --help`**: `send` takes a `--data` flag ("EVM calldata as 0x-prefixed hex"), confirming it is not transfer-only. Installed version was 2.1.0, not the v1.0.1 `04_TECH_STACK.md` had pinned — flags did drift, as that table's own warning anticipated. Both halves of `adr/0001`'s open verification are now closed; see that ADR.
+
+**Caution — this is design confirmation, not Gate 0.1's actual test.** Gate 0.1 itself still requires running `ring init` on a laptop with the physical device, `ring encrypt`, then `ring decrypt` on a second machine with the device absent, for real. This finding removes the *risk that the feature doesn't work this way at all* — it does not substitute for actually running it once the device is on hand.
+
+**Applied:** `11_DAY0_GATES.md` Gate 0.1's status updated; `docs/sources/ledger_workshop_clean.md` added (transcript + slide-derived notes, corrections table for ASR mis-hearings). New judging-criteria bullets from the workshop's own "What we like" slide, not previously captured anywhere, are in that file too — worth folding into `10_JUDGING.md` if a Ledger-specific objections section gets added there.
 
 ---
 

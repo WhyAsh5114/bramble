@@ -20,7 +20,7 @@ flowchart LR
     end
 ```
 
-**Nothing that reveals a mesh member's network topology goes on-chain.** Device and agent subnames — the things admission control gates — never carry an endpoint, IP, or port. This is a hard rule, not a preference — see `10_JUDGING.md`, objection 2.
+**Nothing that reveals a mesh member's network topology goes on-chain.** Device and agent subnames — the things admission control gates — never carry an endpoint, IP, or port. This is a hard rule, not a preference — see `10_JUDGING.md`, objection 2. It extends to ACLs too: a device's `acl` record holds ECDH digests of symbolic service names (each one a Diffie-Hellman shared secret between the vouching identity's and the target device's already-published pubkeys, never a manually-shared secret), never a name, host, or port in the clear — see `adr/0005-acl-record-schema.md`.
 
 **Relays are the deliberate exception, not a loophole.** A relay is not a mesh member; it's a permissionless, publicly-reachable commodity service with no admission gate to leak, so advertising where it lives is a feature — it's how clients and other agents find it (see "Relay economics" below) — not a security regression. The rule that matters is *"never publish where a private mesh member lives,"* not *"never publish an endpoint anywhere."* Conflating the two either leaks topology or throws away a real discoverability feature. See `12_SOURCE_NOTES.md` for why this came up.
 
@@ -28,7 +28,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    registry["<b>ENSv2 registry: acme.eth</b><br/>laptop.acme.eth → pubkey, ACLs, expiry<br/>vps.acme.eth → pubkey, ACLs, expiry<br/>agent-1.acme.eth → pubkey, ACL(db:5432 only), expiry<br/>EAC: who may enroll, revoke, rotate"]
+    registry["<b>ENSv2 registry: acme.eth</b><br/>laptop.acme.eth → pubkey, acl, acl-granters, expiry<br/>vps.acme.eth → pubkey, acl, acl-granters, expiry<br/>agent-1.acme.eth → pubkey, acl (one ECDH service digest), expiry<br/>EAC: who may enroll, revoke, rotate, set acl, set acl-granters"]
     admincli["<b>Admin CLI</b><br/>wallet-cli send<br/>wallet-cli ring"]
     nodeagent["<b>Node agent</b> (per device)<br/>· resolver + cache<br/>· admission verifier<br/>· WireGuard (userspace)<br/>· STUN + hole punch<br/>· relay client (x402)"]
     rendezvous["<b>Rendezvous relay</b> (per tailnet, ENS-published)<br/>candidate exchange only<br/>x402-metered, used on every connection<br/>see adr/0003"]
@@ -78,7 +78,7 @@ Both are relays in the same sense: they forward opaque blobs, cannot inject a de
 
 An agent on a VPS or CI runner:
 
-1. Admin enrolls `agent-1.acme.eth` with an ACL of exactly one host and port, and a short expiry. Confirmed on the Ledger.
+1. An already-enrolled identity, trusted by the destination host's own `acl-granters` list, vouches for `agent-1.acme.eth` to reach exactly one symbolic service name — published on-chain only as an ECDH digest, never the name itself (see `adr/0005-acl-record-schema.md`) — with a short expiry. Confirmed on the Ledger.
 2. The node's WireGuard private key is stored encrypted under `wallet-cli ring` on the host.
 3. The agent reaches only what its ACL permits. Every peer enforces this independently.
 4. Revocation from the admin's wallet cuts it off; peers drop the connection on next resolve.
