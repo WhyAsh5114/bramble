@@ -9,6 +9,8 @@
     "set-acl": "bun run src/set-acl.ts",
     "set-acl-granters": "bun run src/set-acl-granters.ts",
     "grant-role": "bun run src/grant-role.ts",
+    "setup-relay-registry": "bun run src/setup-relay-registry.ts",
+    "register-relay": "bun run src/register-relay.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

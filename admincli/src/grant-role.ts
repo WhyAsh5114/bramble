@@ -4,6 +4,13 @@
 //     Grants ROLE_REGISTRAR (root-scoped, on the tailnet's own subregistry —
 //     see docs/adr/0004) to <account-address>, letting it call register()
 //     to create new device subnames on this tailnet.
+//   bun run grant-role.ts relay-registrar <account-address>
+//     Grants ROLE_REGISTRAR on the relay registry (docs/adr/0003's
+//     Consequence section, resolved) — a distinct grant target from
+//     "enroll" above, since relay records live in a structurally separate
+//     registry contract (Gate 1.4). Vets who may register a relay subname;
+//     it's what keeps the discoverable relay set curated rather than open
+//     to anyone (subname registration costs only gas, no fee).
 //   bun run grant-role.ts rotate <device-label> <account-address>
 //   bun run grant-role.ts revoke <device-label> <account-address>
 //   bun run grant-role.ts acl <device-label> <account-address>
@@ -14,12 +21,12 @@
 //     decision — see docs/adr/0005-acl-record-schema.md.
 //
 // The caller (SEPOLIA_PRIVATE_KEY) must already hold the corresponding admin
-// role — ROLE_REGISTRAR_ADMIN for "enroll", or ALL_ROLES/ROLE_SET_TEXT_ADMIN
-// on the device's resolver for "rotate"/"revoke" (true for whoever deployed
-// that resolver, e.g. via enroll.ts).
+// role — ROLE_REGISTRAR_ADMIN for "enroll"/"relay-registrar", or ALL_ROLES/
+// ROLE_SET_TEXT_ADMIN on the device's resolver for "rotate"/"revoke" (true
+// for whoever deployed that resolver, e.g. via enroll.ts).
 import { createWalletClient, http, getAddress } from 'viem'
 import { normalize } from 'viem/ens'
-import { RPC_URL, tailnetName, tailnetRegistry, ROLE_REGISTRAR } from '../../sidecar/src/ens/config'
+import { RPC_URL, tailnetName, tailnetRegistry, relayRegistry, ROLE_REGISTRAR } from '../../sidecar/src/ens/config'
 import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
 import { registryWriteAbi, resolverWriteAbi, pubkeySetter, revokedSetter, aclSetter, aclGrantersSetter } from './roles'
 
@@ -57,6 +64,22 @@ async function main() {
     return
   }
 
+  if (role === 'relay-registrar') {
+    const [grantee] = rest
+    if (!grantee) throw new Error('usage: bun run grant-role.ts relay-registrar <account-address>')
+    const registry = relayRegistry()
+    if (!registry) throw new Error('BRAMBLE_RELAY_REGISTRY not set — run setup-relay-registry.ts first')
+    console.log(`Granting ROLE_REGISTRAR on relay registry ${registry} to ${grantee}...`)
+    await writeAndWait('grantRootRoles(ROLE_REGISTRAR)', {
+      address: registry,
+      abi: registryWriteAbi,
+      functionName: 'grantRootRoles',
+      args: [ROLE_REGISTRAR, getAddress(grantee)],
+    })
+    console.log('done — that account can now call register-relay.ts on this tailnet.')
+    return
+  }
+
   if (role in RESOLVER_SCOPED_ROLES) {
     const { key, setter } = RESOLVER_SCOPED_ROLES[role as keyof typeof RESOLVER_SCOPED_ROLES]
     const [deviceLabel, grantee] = rest
@@ -78,7 +101,7 @@ async function main() {
     return
   }
 
-  throw new Error(`usage: bun run grant-role.ts <enroll|rotate|revoke|acl|acl-granters> ...`)
+  throw new Error(`usage: bun run grant-role.ts <enroll|relay-registrar|rotate|revoke|acl|acl-granters> ...`)
 }
 
 main().catch((err) => {
