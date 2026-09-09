@@ -32,3 +32,21 @@ export const BLOCKY402_FACILITATOR_URL = 'https://api.testnet.blocky402.com'
 // Matches docs/adr/0007's token wire format exactly — the Go relay's
 // verifier (relay/token.go) must stay byte-for-byte compatible with this.
 export const TOKEN_TTL_SECONDS = 60
+
+// Data-plane relay (docs/adr/0008) — all optional-by-default, set only when
+// the spawning `relay -data-relay` flag is on. dataRelayEnabled() gates
+// whether index.ts mounts the /data-relay-session and /price routes at all.
+export function dataRelayEnabled(): boolean {
+  return process.env.DATA_RELAY_ENABLED === '1'
+}
+
+// Loopback URL of the Go relay's allocation API (relay/datarelay.go) — set
+// by the same spawning process that generates RENDEZVOUS_TOKEN_SECRET.
+export function internalAPIURL(): string {
+  return requiredEnv('DATA_RELAY_INTERNAL_API_URL')
+}
+
+// Atomic USDC per byte forwarded — DynamicPrice input for pricing.ts.
+export function pricePerByteAtomic(): bigint {
+  return BigInt(requiredEnv('DATA_RELAY_PRICE_PER_BYTE'))
+}
