@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -281,20 +282,45 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 // startTestDataRelayStoppable is startTestDataRelay, but returns a stop
 // function so a test can kill it mid-run (docs/05_BUILD_PLAN.md Gate 4.3's
 // "kill the selected relay mid-transfer") instead of only at test cleanup.
-func startTestDataRelayStoppable(t *testing.T) (*netip.AddrPort, func()) {
+// fakeDataRelay simulates relay/datarelay.go's real behavior closely
+// enough to catch the bug a fixed-port stub hides: every allocate() call
+// opens a genuinely fresh UDP forwarder, exactly like the real Go relay
+// allocates a fresh port per session rather than reusing one across calls.
+// A first draft of this test's fake sidecar returned the same fixed port
+// for every call to a given sidecar URL, which let both sides of a pair
+// independently "buy" and still land on the same socket by coincidence —
+// a real relay never does that, and a live run against the real relay
+// binary is what caught it (docs/adr/0008, "Kill-mid-transfer failover").
+type fakeDataRelay struct {
+	mu      sync.Mutex
+	conns   []*net.UDPConn
+	stopped bool
+}
+
+func newFakeDataRelay() *fakeDataRelay { return &fakeDataRelay{} }
+
+// allocate opens a fresh UDP forwarder and returns its port, or ok=false if
+// this relay has been stopped — a real relay process's HTTP sidecar dies
+// along with everything else when killed, so a killed relay can't hand out
+// new sessions either; a stub that only stopped forwarding UDP but kept
+// granting new sessions let this test bounce back to a "dead" relay it
+// should have excluded for good, which real process death never allows.
+func (f *fakeDataRelay) allocate(t *testing.T) (int, bool) {
 	t.Helper()
+	f.mu.Lock()
+	if f.stopped {
+		f.mu.Unlock()
+		return 0, false
+	}
+	f.mu.Unlock()
+
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
-		t.Fatalf("listening: %v", err)
+		t.Fatalf("fakeDataRelay: listening: %v", err)
 	}
-	stopped := false
-	stop := func() {
-		if !stopped {
-			stopped = true
-			conn.Close()
-		}
-	}
-	t.Cleanup(stop)
+	f.mu.Lock()
+	f.conns = append(f.conns, conn)
+	f.mu.Unlock()
 
 	go func() {
 		var slots [2]*net.UDPAddr
@@ -329,8 +355,19 @@ func startTestDataRelayStoppable(t *testing.T) (*netip.AddrPort, func()) {
 		}
 	}()
 
-	addr := netip.MustParseAddrPort(conn.LocalAddr().String())
-	return &addr, stop
+	return conn.LocalAddr().(*net.UDPAddr).Port, true
+}
+
+// stopAll closes every session this relay ever allocated and marks it
+// stopped so it can never allocate another — simulates killing the whole
+// relay process mid-transfer, not just one session's socket.
+func (f *fakeDataRelay) stopAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = true
+	for _, c := range f.conns {
+		c.Close()
+	}
 }
 
 // startFakeDataRelaySidecarPriced is startFakeDataRelaySidecar with a
@@ -350,10 +387,10 @@ func startFakeDataRelaySidecarPriced(t *testing.T, priceAmount string) string {
 }
 
 // startFakeENSSidecarMulti is startFakeENSSidecar for a pool of more than
-// one candidate relay: it reads the request's sidecarUrl and returns the
-// UDP port that specific relay-sidecar stands in for, instead of always
-// answering with one fixed port regardless of which relay was picked.
-func startFakeENSSidecarMulti(t *testing.T, portBySidecarURL map[string]int) *sidecar.Manager {
+// one candidate relay: it reads the request's sidecarUrl and allocates a
+// fresh session from that specific fakeDataRelay, instead of always
+// answering with one fixed port regardless of how many times it's called.
+func startFakeENSSidecarMulti(t *testing.T, relayByURL map[string]*fakeDataRelay) *sidecar.Manager {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/data-relay-session", func(w http.ResponseWriter, r *http.Request) {
@@ -364,13 +401,18 @@ func startFakeENSSidecarMulti(t *testing.T, portBySidecarURL map[string]int) *si
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		port, ok := portBySidecarURL[body.SidecarURL]
+		relay, ok := relayByURL[body.SidecarURL]
 		if !ok {
 			http.Error(w, fmt.Sprintf("no fake relay configured for sidecarUrl %q", body.SidecarURL), http.StatusBadRequest)
 			return
 		}
+		port, ok := relay.allocate(t)
+		if !ok {
+			http.Error(w, "relay is stopped", http.StatusServiceUnavailable)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"sessionId": fmt.Sprintf("test-session-%d", port),
+			"sessionId": fmt.Sprintf("test-session-%d-%d", port, time.Now().UnixNano()),
 			"port":      port,
 			"expiresAt": time.Now().Add(time.Minute).Unix(),
 		})
@@ -396,20 +438,20 @@ func startFakeENSSidecarMulti(t *testing.T, portBySidecarURL map[string]int) *si
 func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) {
 	relayAddr := startTestRendezvousRelay(t)
 
-	primaryAddr, stopPrimary := startTestDataRelayStoppable(t)
-	backupAddr, _ := startTestDataRelayStoppable(t)
+	primaryRelay := newFakeDataRelay()
+	backupRelay := newFakeDataRelay()
 
 	sidecarURLPrimary := startFakeDataRelaySidecarPriced(t, "1")   // cheapest — Pick chooses this first
 	sidecarURLBackup := startFakeDataRelaySidecarPriced(t, "1000") // pricier — only used on failover
 
 	pool := dataRelayFlag{"primary": sidecarURLPrimary, "backup": sidecarURLBackup}
-	portByURL := map[string]int{
-		sidecarURLPrimary: int(primaryAddr.Port()),
-		sidecarURLBackup:  int(backupAddr.Port()),
+	relayByURL := map[string]*fakeDataRelay{
+		sidecarURLPrimary: primaryRelay,
+		sidecarURLBackup:  backupRelay,
 	}
 
-	aliceM := startFakeENSSidecarMulti(t, portByURL)
-	bobM := startFakeENSSidecarMulti(t, portByURL)
+	aliceM := startFakeENSSidecarMulti(t, relayByURL)
+	bobM := startFakeENSSidecarMulti(t, relayByURL)
 
 	alicePriv, alicePub, err := wgnode.GenerateKeyPair()
 	if err != nil {
@@ -436,10 +478,19 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	}
 	defer bob.Close()
 
-	aliceState, bobState := newRelayState(), newRelayState()
+	aliceState := newRelayState()
 
+	// Only alice is -relay-peer for bob (docs/adr/0008: "only the flagged
+	// side buys a session; the other side needs no config at all"). A
+	// real relay hands out a fresh port per session bought, so both sides
+	// independently buying — this test's old shape — only ever worked
+	// because the old fake stub returned the same fixed port for every
+	// call to a given sidecar URL, which the real relay binary never
+	// does (caught by a live run against it, not by this suite). Bob just
+	// adopts whatever alice publishes, the same as any ordinary
+	// non-relay-peer.
 	var aliceEndpoint, bobEndpoint *netip.AddrPort
-	var aliceLabel, bobLabel string
+	var aliceLabel string
 	var aliceErr, bobErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -449,20 +500,38 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	}()
 	go func() {
 		defer wg.Done()
-		bobEndpoint, bobLabel, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1_000_000, []string{relayAddr}, bobPub, alicePub, "", 15*time.Second)
+		candidate, err := rendezvous.ExchangeAny([]string{relayAddr}, bobPub, alicePub, "", "", 15*time.Second)
+		if err != nil {
+			bobErr = err
+			return
+		}
+		addr, err := netip.ParseAddrPort(candidate)
+		if err != nil {
+			bobErr = fmt.Errorf("parsing alice's candidate %q: %w", candidate, err)
+			return
+		}
+		// The relay only learns an address from outbound traffic it
+		// observes (docs/adr/0008) — bob has no way to know alice's
+		// candidate is relay-routed rather than a real direct address, so
+		// this has to be unconditional, same as relayRoutedEndpoint's own
+		// side of the pair.
+		if err := bob.SetPersistentKeepalive(alicePub, dataRelayKeepaliveSeconds); err != nil {
+			bobErr = fmt.Errorf("arming bob's persistent keepalive: %w", err)
+			return
+		}
+		bobEndpoint = &addr
 	}()
 	wg.Wait()
 	if aliceErr != nil {
 		t.Fatalf("alice's relayRoutedEndpoint: %v", aliceErr)
 	}
 	if bobErr != nil {
-		t.Fatalf("bob's relayRoutedEndpoint: %v", bobErr)
+		t.Fatalf("bob's candidate exchange: %v", bobErr)
 	}
-	if aliceLabel != "primary" || bobLabel != "primary" {
-		t.Fatalf("expected both sides to pick the cheaper relay first, got alice=%q bob=%q", aliceLabel, bobLabel)
+	if aliceLabel != "primary" {
+		t.Fatalf("expected alice to pick the cheaper relay first, got %q", aliceLabel)
 	}
 	aliceState.set("bob", bobPub, aliceLabel)
-	bobState.set("alice", alicePub, bobLabel)
 
 	if err := alice.AddPeer(bobPub, bobIP, aliceEndpoint); err != nil {
 		t.Fatalf("alice adding bob: %v", err)
@@ -493,32 +562,24 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 		t.Fatal("alice and bob failed to complete an initial handshake through the primary relay")
 	}
 
-	// Both sides get a watcher, exactly like runServe starts one per
-	// -relay-peer regardless of which side of the pair it's on — this
-	// matters, not just for symmetry: relayRoutedEndpoint's Exchange call
-	// needs a peer on the other end concurrently exchanging too (same
-	// "two sides rarely call at the exact same instant" reasoning
-	// Exchange/ExchangeAny's own docs already state), so only one side
-	// failing over would time out waiting for the other to answer.
+	// Alice (the buying side) gets watchDataRelayFailover; bob (the
+	// adopting side) gets watchDataRelayAdopt — the asymmetric pairing
+	// runServe now wires for real (main.go's non-relay-peer watcher loop),
+	// not two independent buyers racing for the same lucky port.
 	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, []string{relayAddr}, alicePub, 15*time.Second)
-	go watchDataRelayFailover(ctx, bob, bobM, bobState, "alice", aliceIP, pool, 1_000_000, []string{relayAddr}, bobPub, 15*time.Second)
+	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, []string{relayAddr})
 
-	stopPrimary()
+	primaryRelay.stopAll()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		_, aliceSide, aliceOK := aliceState.get("bob")
-		_, bobSide, bobOK := bobState.get("alice")
-		if aliceOK && aliceSide == "backup" && bobOK && bobSide == "backup" {
+		if _, aliceSide, ok := aliceState.get("bob"); ok && aliceSide == "backup" {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	if _, label, _ := aliceState.get("bob"); label != "backup" {
 		t.Fatalf("alice never failed over to the backup relay (still recorded as %q)", label)
-	}
-	if _, label, _ := bobState.get("alice"); label != "backup" {
-		t.Fatalf("bob never failed over to the backup relay (still recorded as %q)", label)
 	}
 
 	if !pingUntilConnected(t, alice, bobAddr, 10*time.Second) {

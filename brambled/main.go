@@ -72,6 +72,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "demo-data-relay":
+		if err := runDemoDataRelay(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	case "genkey":
 		priv, pub, err := wgnode.GenerateKeyPair()
 		if err != nil {
@@ -90,6 +95,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: brambled resolve <device-label>")
 	fmt.Fprintln(os.Stderr, "       brambled serve -label <own-label> [-peer label=allowed-ip/prefix ...] [-service name=port ...] [-forward local-port=gateway-label:service ...] [-rendezvous host:port] [-netstack]")
 	fmt.Fprintln(os.Stderr, "       brambled genkey")
+	fmt.Fprintln(os.Stderr, "       brambled demo-data-relay [-rendezvous host:port] [-primary url] [-backup url] [-small-bytes n] [-large-bytes n] [-session-bytes n]")
 }
 
 func sidecarConfig() sidecar.Config {
@@ -423,6 +429,24 @@ func (s *relayState) get(peerLabel string) (pubkey, relayLabel string, ok bool) 
 	return pubkey, relayLabel, hasPubkey && hasRelay
 }
 
+// setPubkey records peerLabel's current pubkey without touching the relay
+// map — used for peers that aren't -relay-peer (they never call set(),
+// since they never buy a session), so watchDataRelayAdopt below still has
+// something to poll for once EndpointResolver has resolved them at least
+// once.
+func (s *relayState) setPubkey(peerLabel, pubkey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pubkey[peerLabel] = pubkey
+}
+
+func (s *relayState) getPubkey(peerLabel string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pubkey, ok := s.pubkey[peerLabel]
+	return pubkey, ok
+}
+
 // watchDataRelayFailover is Gate 4.3's kill-mid-transfer failover: once
 // peerLabel's initial data-relay connect has happened (state.get succeeds),
 // it blocks on datarelay.WaitForStall and, on a real stall, buys a fresh
@@ -434,6 +458,14 @@ func (s *relayState) get(peerLabel string) (pubkey, relayLabel string, ok bool) 
 // reconnect attempt itself fails — matches this file's existing "log and
 // move on" posture for discovery/pricing failures elsewhere.
 func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, state *relayState, peerLabel string, allowedIP netip.Prefix, pool dataRelayFlag, sessionBytes int64, relayAddrs []string, ownPubkey string, ttl time.Duration) {
+	// Every relay ever excluded, not just the one currently in use —
+	// without this, a second stall (e.g. the just-adopted backup relay
+	// also looking dead because the *other* side hasn't picked it up yet)
+	// recomputes "pool minus usedLabel" from scratch and retries whichever
+	// relay stalled first, forever, since usedLabel is the only thing that
+	// changed. Found by a live run and a test whose fake relay didn't stay
+	// dead across retries (docs/adr/0008).
+	excluded := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -449,10 +481,11 @@ func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.M
 			return // ctx cancelled
 		}
 		fmt.Fprintf(os.Stderr, "data-relay: %s via %s stalled — failing over\n", peerLabel, usedLabel)
+		excluded[usedLabel] = true
 
 		remaining := dataRelayFlag{}
 		for label, url := range pool {
-			if label != usedLabel {
+			if !excluded[label] {
 				remaining[label] = url
 			}
 		}
@@ -485,6 +518,76 @@ func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.M
 		}
 		state.set(peerLabel, pubkey, newLabel)
 		fmt.Fprintf(os.Stderr, "data-relay: %s failed over to %s\n", peerLabel, newLabel)
+	}
+}
+
+// watchDataRelayAdopt is the non-buying side's half of Section D failover
+// (docs/adr/0008): this node never buys a data-relay session for
+// peerLabel — it just adopts whatever candidate the peer publishes, same
+// as the initial connect (EndpointResolver's non-relay-peer branch).
+// Nothing else re-learns a peer's new address after that peer fails over,
+// since admission.Loop's EndpointResolver only fires once per pubkey for
+// the life of the Loop — this watcher is what makes that not a dead end.
+// It watches the same real RxBytes signal watchDataRelayFailover does and,
+// on a stall, re-runs the plain candidate exchange and re-points, mirroring
+// runServe's own non-relay-peer EndpointResolver branch exactly.
+// dataRelayAdoptExchangeTimeout is deliberately short, unlike the buying
+// side's own exchange calls: Exchange is one-shot rendezvous (it returns
+// the *first* offer that arrives while its own offer gets acked), not a
+// subscription — a long-lived call here could sit open across several of
+// the peer's own re-publishes and end up adopting a stale one, whichever
+// happened to be in flight when its own ack finally landed. Short calls
+// mean this side re-registers with the relay every few seconds instead,
+// so the peer's next re-publish reliably lands inside a live window
+// instead of an already-stale one (found via a live run and a test that
+// only worked when the fake relay's ports were coincidentally identical
+// across calls — see docs/adr/0008).
+const dataRelayAdoptExchangeTimeout = 3 * time.Second
+
+// watchDataRelayAdopt does not gate on WaitForStall the way
+// watchDataRelayFailover does: it stays continuously present at the relay
+// instead, cycling a short Exchange every few seconds for as long as ctx
+// lives. Tested this way, not gated on its own stall detection — Exchange
+// is one-shot rendezvous, not a subscription, so this side has to keep
+// re-registering to reliably catch the peer's next re-publish regardless
+// of when its own RxBytes happens to stall. A peer that is genuinely still
+// connected keeps re-exchanging the same candidate here too — harmless,
+// since AddPeer only runs again when the candidate actually changes.
+func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, peerLabel, ownPubkey, peerPubkey, ownCandidate string, allowedIP netip.Prefix, relayAddrs []string) {
+	var current string
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		var token string
+		if resp, tokErr := m.RendezvousToken(); tokErr == nil {
+			token = resp.Token
+		}
+		candidate, err := rendezvous.ExchangeAny(relayAddrs, ownPubkey, peerPubkey, ownCandidate, token, dataRelayAdoptExchangeTimeout)
+		if err != nil || candidate == "" || candidate == current {
+			continue
+		}
+		endpoint, err := netip.ParseAddrPort(candidate)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: peer published unparseable candidate %q, will retry\n", peerLabel, candidate)
+			continue
+		}
+		// This node has no way to know peerPubkey's new candidate is
+		// relay-routed rather than a real direct address, so this has to
+		// be unconditional — the relay only learns an address from
+		// outbound traffic it observes (docs/adr/0008).
+		if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: arming persistent keepalive failed, will retry: %v\n", peerLabel, err)
+			continue
+		}
+		if err := node.AddPeer(peerPubkey, allowedIP, &endpoint); err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: adopting new candidate failed, will retry: %v\n", peerLabel, err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "data-relay: %s adopted new candidate %s\n", peerLabel, candidate)
+		current = candidate
 	}
 }
 
@@ -667,6 +770,10 @@ func runServe(args []string) error {
 				}
 				return endpoint, err
 			}
+			// Recorded even for non-relay peers: watchDataRelayAdopt below
+			// needs a peerPubkey to watch, and EndpointResolver is the only
+			// place that ever learns one.
+			relState.setPubkey(p.Label, peerPubkey)
 
 			// ExchangeAny is the rendezvous-set failover docs/adr/0003
 			// requires: one rogue or unreachable relay among the (possibly
@@ -681,6 +788,19 @@ func runServe(args []string) error {
 			endpoint, err := netip.ParseAddrPort(candidate)
 			if err != nil {
 				return nil, fmt.Errorf("peer %s published an unparseable candidate %q: %w", peerPubkey, candidate, err)
+			}
+			// This node has no way to know peerPubkey's candidate is
+			// relay-routed rather than a real direct address — a relay
+			// only learns an address from outbound traffic it observes
+			// (docs/adr/0008), so if a data-relay pool is even in play on
+			// this node at all, arm the keepalive defensively. Harmless
+			// for a genuinely direct peer (a standard, common WireGuard
+			// setting), required for one that turns out to be relay-routed
+			// on the other end.
+			if len(dataRelays) > 0 {
+				if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
+					return nil, fmt.Errorf("arming persistent keepalive for %s: %w", peerPubkey, err)
+				}
 			}
 			return &endpoint, nil
 		}
@@ -703,6 +823,38 @@ func runServe(args []string) error {
 		}
 		p := p
 		go watchDataRelayFailover(ctx, node, m, relState, p.Label, p.AllowedIP, dataRelays, *relaySessionBytes, rendezvousAddrs, ownPubkey, *ttl)
+	}
+
+	// The other half of Gate 4.3: every tracked peer that ISN'T a
+	// -relay-peer on this node still needs a way to notice if *it's* the
+	// one relay-routed on the other end and just failed over — see
+	// watchDataRelayAdopt's doc comment. Scoped to deployments that opted
+	// into data-relay routing at all (a data-relay pool + rendezvous set),
+	// so a plain direct-peer setup with no relay involved anywhere keeps
+	// its old behavior exactly (no extra re-exchange traffic on an
+	// ordinary idle connection).
+	if len(dataRelays) > 0 && len(rendezvousAddrs) > 0 {
+		for _, p := range peers {
+			if relayPeers[p.Label] {
+				continue
+			}
+			p := p
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Second):
+					}
+					pubkey, ok := relState.getPubkey(p.Label)
+					if !ok {
+						continue
+					}
+					watchDataRelayAdopt(ctx, node, m, p.Label, ownPubkey, pubkey, *myCandidate, p.AllowedIP, rendezvousAddrs)
+					return
+				}
+			}()
+		}
 	}
 
 	var gwListener net.Listener
