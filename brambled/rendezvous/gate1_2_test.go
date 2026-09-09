@@ -141,7 +141,7 @@ func TestGate1_2_MaliciousRelayCannotAdmitPeer(t *testing.T) {
 
 	// Alice runs the real client exchange, asking for bob's candidate. The
 	// hostile relay hands her the attacker's address instead.
-	learnedCandidate, err := Exchange(relayAddr, alicePub, bobPub, "127.0.0.1:61930", 5*time.Second)
+	learnedCandidate, err := Exchange(relayAddr, alicePub, bobPub, "127.0.0.1:61930", "", 5*time.Second)
 	if err != nil {
 		t.Fatalf("alice's candidate exchange failed: %v", err)
 	}

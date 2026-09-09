@@ -94,6 +94,11 @@ func sidecarConfig() sidecar.Config {
 		TailnetName:     os.Getenv("BRAMBLE_TAILNET_NAME"),
 		TailnetRegistry: os.Getenv("BRAMBLE_TAILNET_REGISTRY"),
 		RPCURL:          os.Getenv("SEPOLIA_RPC_URL"),
+		// docs/adr/0007's client-side payment config — all optional, only
+		// needed when -rendezvous points at a relay running with -meter.
+		RendezvousPaymentURL:   os.Getenv("BRAMBLE_RENDEZVOUS_PAYMENT_URL"),
+		HederaClientAccountID:  os.Getenv("HEDERA_CLIENT_ACCOUNT_ID"),
+		HederaClientPrivateKey: os.Getenv("HEDERA_CLIENT_PRIVATE_KEY"),
 	}
 }
 
@@ -304,7 +309,21 @@ func runServe(args []string) error {
 	if *rendezvousAddr != "" {
 		relayAddr, own, ownCandidate := *rendezvousAddr, ownPubkey, *myCandidate
 		loop.EndpointResolver = func(_ admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
-			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, ownCandidate, *ttl)
+			// One rendezvous-token per Exchange call, fetched fresh right
+			// before dialing — docs/adr/0007. Against an unmetered relay
+			// (the sidecar has no payment config), or if the sidecar simply
+			// has no Hedera credentials, RendezvousToken errors and we fall
+			// back to "" — Exchange against an unmetered relay needs no
+			// token at all, so this keeps -rendezvous working exactly as
+			// before unless the operator has actually opted into metering.
+			var token string
+			if resp, tokErr := m.RendezvousToken(); tokErr == nil {
+				token = resp.Token
+				if resp.SettlementTxID != "" {
+					fmt.Fprintf(os.Stderr, "rendezvous: paid for candidate exchange with %s (tx %s)\n", peerPubkey, resp.SettlementTxID)
+				}
+			}
+			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, ownCandidate, token, *ttl)
 			if err != nil {
 				return nil, err
 			}

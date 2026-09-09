@@ -33,6 +33,47 @@ type DeviceRecord struct {
 	ACLGranters []string `json:"aclGranters"`
 }
 
+// RendezvousTokenResponse mirrors sidecar/src/routes/payments.ts's
+// POST /rendezvous-token response — the sidecar has already paid a real
+// x402/Hedera fee to the relay's payment sidecar by the time this returns
+// (docs/adr/0007); Token is opaque to brambled, which just forwards it into
+// rendezvous.Exchange's hello.
+type RendezvousTokenResponse struct {
+	Token          string `json:"token"`
+	ExpiresAt      int64  `json:"expiresAt"`
+	SettlementTxID string `json:"settlementTxId,omitempty"`
+}
+
+// RendezvousToken asks the local sidecar to pay for and return one
+// rendezvous token, for a single upcoming rendezvous.Exchange call. Calling
+// this against a sidecar that has no Hedera payer credentials configured
+// (docs/adr/0007's client-side setup) returns an error — callers talking to
+// an unmetered relay should not call this at all (rendezvous.Exchange
+// accepts "" for token).
+func (m *Manager) RendezvousToken() (*RendezvousTokenResponse, error) {
+	url := fmt.Sprintf("http://localhost:%d/rendezvous-token", m.Port)
+	resp, err := http.Post(url, "application/json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("calling sidecar: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading sidecar response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sidecar returned %d: %s", resp.StatusCode, body)
+	}
+
+	var out RendezvousTokenResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding sidecar response: %w", err)
+	}
+	return &out, nil
+}
+
 // ResolveDevice calls the sidecar's read-only device-resolution endpoint.
 // label is the device's own subname label (e.g. "device1"), not a full
 // dotted name — the sidecar already knows which tailnet it belongs to.

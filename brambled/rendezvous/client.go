@@ -19,12 +19,19 @@ type message struct {
 	From      string `json:"from,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 	Message   string `json:"message,omitempty"`
+	Token     string `json:"token,omitempty"`
 }
 
 // Exchange connects to the relay at addr, registers ownPubkey, publishes
 // myCandidate for peerPubkey, and returns peerPubkey's matching candidate
 // once the peer performs the same exchange from its side — or an error if
 // that doesn't happen within timeout.
+//
+// token is presented in hello — one rendezvous-token per Exchange call, not
+// per wire-level offer retry below, precisely because of that retry
+// behavior (see docs/adr/0007). Pass "" against an unmetered relay; a
+// metered relay's own tokenVerifier treats an empty token exactly like any
+// other invalid one.
 //
 // The offer is resent every second until the relay acks it: the two sides
 // won't generally call this at the exact same instant, and the relay replies
@@ -33,7 +40,7 @@ type message struct {
 // candidate — it also waits for its own offer to be acked, so it can't
 // vanish mid-retry and strand a peer whose own first attempt raced ahead of
 // this side's registration (see relay/main.go's protocol comment).
-func Exchange(addr, ownPubkey, peerPubkey, myCandidate string, timeout time.Duration) (string, error) {
+func Exchange(addr, ownPubkey, peerPubkey, myCandidate, token string, timeout time.Duration) (string, error) {
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return "", fmt.Errorf("dialing relay %s: %w", addr, err)
@@ -48,7 +55,7 @@ func Exchange(addr, ownPubkey, peerPubkey, myCandidate string, timeout time.Dura
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 
-	if err := enc.Encode(message{Type: "hello", Pubkey: ownPubkey}); err != nil {
+	if err := enc.Encode(message{Type: "hello", Pubkey: ownPubkey, Token: token}); err != nil {
 		return "", fmt.Errorf("registering with relay: %w", err)
 	}
 

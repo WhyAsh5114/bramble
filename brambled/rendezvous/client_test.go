@@ -90,11 +90,11 @@ func TestExchangeBothSidesCallSimultaneously(t *testing.T) {
 	bobCh := make(chan outcome, 1)
 
 	go func() {
-		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", 5*time.Second)
+		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", "", 5*time.Second)
 		aliceCh <- outcome{c, err}
 	}()
 	go func() {
-		c, err := Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", 5*time.Second)
+		c, err := Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", "", 5*time.Second)
 		bobCh <- outcome{c, err}
 	}()
 
@@ -123,7 +123,7 @@ func TestExchangeRetriesUntilPeerArrives(t *testing.T) {
 		err       error
 	}, 1)
 	go func() {
-		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", 5*time.Second)
+		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", "", 5*time.Second)
 		resultCh <- struct {
 			candidate string
 			err       error
@@ -134,7 +134,7 @@ func TestExchangeRetriesUntilPeerArrives(t *testing.T) {
 	// registered" at least once. Exchange must retry rather than giving up.
 	time.Sleep(1500 * time.Millisecond)
 	go func() {
-		_, _ = Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", 5*time.Second)
+		_, _ = Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", "", 5*time.Second)
 	}()
 
 	select {
@@ -153,7 +153,7 @@ func TestExchangeRetriesUntilPeerArrives(t *testing.T) {
 func TestExchangeTimesOutIfPeerNeverArrives(t *testing.T) {
 	addr := startFakeRelay(t)
 
-	_, err := Exchange(addr, "alice-pub", "nobody-pub", "10.0.0.1:51820", 2*time.Second)
+	_, err := Exchange(addr, "alice-pub", "nobody-pub", "10.0.0.1:51820", "", 2*time.Second)
 	if err == nil {
 		t.Fatal("expected a timeout error when the peer never registers")
 	}

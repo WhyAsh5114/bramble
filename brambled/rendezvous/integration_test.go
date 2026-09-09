@@ -74,11 +74,11 @@ func TestRelayMediatedHandshake(t *testing.T) {
 	aliceResult := make(chan exchangeResult, 1)
 	bobResult := make(chan exchangeResult, 1)
 	go func() {
-		c, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, 5*time.Second)
+		c, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, "", 5*time.Second)
 		aliceResult <- exchangeResult{c, err}
 	}()
 	go func() {
-		c, err := Exchange(relayAddr, bobPub, alicePub, bobCandidate, 5*time.Second)
+		c, err := Exchange(relayAddr, bobPub, alicePub, bobCandidate, "", 5*time.Second)
 		bobResult <- exchangeResult{c, err}
 	}()
 

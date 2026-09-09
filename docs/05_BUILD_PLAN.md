@@ -88,13 +88,14 @@ Skip entirely if Gate 0.1 failed.
 Split into sections, same convention as Phase 2 (ADR-backed sections A–D):
 
 - **Section A (done)** — standalone Gate 0.4 proof, `scripts/gate0.4-blocky402-check/`. No relay integration.
-- **Section B (next)** — the rendezvous relay's payment surface. `relay/main.go` is raw newline-delimited-JSON-over-TCP; x402 is HTTP-native, so this needs an HTTP side-channel that sells a session/rendezvous allotment and returns a token the TCP `hello` message presents (ADR needed — real design decision, per `12_SOURCE_NOTES.md` item 6 and `adr/0003`: settlement must gate an allotment, not individual packets). Satisfies Gate 4.1 (the rendezvous fee alone covers "one real paid request... on camera") and starts Gate 4.2.
+- **Section B (done)** — the rendezvous relay's payment surface, `docs/adr/0007-rendezvous-relay-metering.md`. A new sidecar (`relay-sidecar/`, spawned by `relay -meter`) sells an x402-gated, self-contained HMAC token (0.01 testnet USDC via Blocky402) once per `Exchange()` call; `relay/token.go` verifies it entirely locally, no callback on the per-connection path. Satisfies Gate 4.1 and starts Gate 4.2.
 - **Section C** — data-plane relay metering, bytes-scaled fee. Completes Gate 4.2.
 - **Section D** — second relay, price/latency selection, kill-mid-transfer failover. Gate 4.3.
 
 `HARD GATE 4.1 — One real paid request settles on Hedera testnet via Blocky402, on camera.` Hedera qualification requirement. Not mocked, not local.
 **Test:** E2E script prints a transaction ID viewable on HashScan.
 **Note:** the rendezvous-relay fee (see Gate 4.2) already satisfies this on its own, every connection attempt — do not let this gate depend on the data-relay fallback firing naturally.
+**✅ VERIFIED Sept 9, 2026** — Section B's live run (`relay-sidecar/README.md`): a real metered relay (`relay -meter`, spawning `relay-sidecar` itself), two real 0.01 USDC payments settled through Blocky402 (`0.0.7162784@1788941365.961612782`, `0.0.7162784@1788941368.403212861`, confirmed independently via the mirror node — real `CRYPTOTRANSFER`s of HTS token `0.0.429274`, not simulated), and a genuine bidirectional `brambled/rendezvous.Exchange` completing through the metered relay using the resulting real tokens — both sides learned the other's candidate exactly as an unmetered exchange would. HashScan: https://hashscan.io/testnet/transaction/0.0.7162784@1788941365.961612782. `go test ./relay/... ./brambled/...` green throughout, zero regressions to Gate 0.2/1.2/1.3/2.2/2.3 (metering is opt-in via `-meter`, default off).
 
 `HARD GATE 4.2 — Metered, not flat.` Two transfers of different sizes cost different amounts.
 **Test:** assert cost scales with bytes. Hedera awards extra points for metering over flat charges.
