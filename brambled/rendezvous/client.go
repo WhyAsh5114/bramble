@@ -119,3 +119,31 @@ func Exchange(addr, ownPubkey, peerPubkey, myCandidate, token string, timeout ti
 		}
 	}
 }
+
+// ExchangeAny tries each address in addrs, in order, via Exchange — the
+// same (ownPubkey, peerPubkey, myCandidate, token, timeout) on every
+// attempt — and returns on the first one that succeeds. This is the
+// rendezvous-set failover docs/adr/0003 requires: a tailnet publishes more
+// than one rendezvous relay specifically so one rogue or unreachable member
+// of the set can't unilaterally block a connection another member would
+// have carried (see the ADR's "Trust boundary" section on selective-
+// censorship risk). Returns the last error if every address fails, or a
+// dedicated error if addrs is empty.
+func ExchangeAny(addrs []string, ownPubkey, peerPubkey, myCandidate, token string, timeout time.Duration) (string, error) {
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("no rendezvous relay addresses to try")
+	}
+	// Split timeout across every candidate rather than giving each the full
+	// budget — otherwise one unreachable relay at the front of the set could
+	// make failover take len(addrs)*timeout instead of roughly timeout.
+	perAddr := timeout / time.Duration(len(addrs))
+	var lastErr error
+	for _, addr := range addrs {
+		candidate, err := Exchange(addr, ownPubkey, peerPubkey, myCandidate, token, perAddr)
+		if err == nil {
+			return candidate, nil
+		}
+		lastErr = fmt.Errorf("relay %s: %w", addr, err)
+	}
+	return "", lastErr
+}

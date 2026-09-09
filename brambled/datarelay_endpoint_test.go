@@ -235,11 +235,11 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, relayAddr, alicePub, bobPub, "", 5*time.Second)
+		aliceEndpoint, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, []string{relayAddr}, alicePub, bobPub, "", 5*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		bobEndpoint, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, relayAddr, bobPub, alicePub, "", 5*time.Second)
+		bobEndpoint, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, []string{relayAddr}, bobPub, alicePub, "", 5*time.Second)
 	}()
 	wg.Wait()
 	if aliceErr != nil {

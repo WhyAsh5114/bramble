@@ -355,7 +355,7 @@ type keepaliveSetter interface {
 // admission.Loop's own AddPeer runs, is safe and deterministic: WireGuard's
 // UAPI merges fields into a peer entry by public key rather than requiring
 // them all in one call.
-func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relayAddr, own, peerPubkey, token string, ttl time.Duration) (*netip.AddrPort, error) {
+func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relayAddrs []string, own, peerPubkey, token string, ttl time.Duration) (*netip.AddrPort, error) {
 	session, err := buyDataRelaySession(m, pool, sessionBytes)
 	if err != nil {
 		return nil, fmt.Errorf("buying data-relay session: %w", err)
@@ -369,7 +369,7 @@ func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRela
 	}
 	fmt.Fprintf(os.Stderr, "data-relay: bought session %s from %s (tx %s), routing %s via %s\n",
 		session.id, session.relayLabel, session.settlementTxID, peerPubkey, session.candidate)
-	if _, err := rendezvous.Exchange(relayAddr, own, peerPubkey, session.candidate, token, ttl); err != nil {
+	if _, err := rendezvous.ExchangeAny(relayAddrs, own, peerPubkey, session.candidate, token, ttl); err != nil {
 		return nil, err
 	}
 	return &relayEndpoint, nil
@@ -422,9 +422,9 @@ func runServe(args []string) error {
 			return fmt.Errorf("-relay-peer %q is not a tracked -peer", label)
 		}
 	}
-	if len(relayPeers) > 0 && len(dataRelays) == 0 {
-		return fmt.Errorf("-relay-peer requires at least one -data-relay label=sidecar-url")
-	}
+	// The len(dataRelays)==0 case is checked further below, after relay
+	// discovery has had a chance to populate the pool — -data-relay isn't
+	// the only source of it anymore (docs/adr/0003's Consequence section).
 
 	prefix, err := netip.ParsePrefix(*localPrefix)
 	if err != nil {
@@ -455,6 +455,38 @@ func runServe(args []string) error {
 		return err
 	}
 	defer m.Stop()
+
+	// Real ENS-based relay discovery (docs/adr/0003's Consequence section,
+	// resolved) — -rendezvous/-data-relay stay as explicit overrides
+	// (static config wins outright, same precedent as admission.Peer.Endpoint
+	// overriding EndpointResolver): only queried when the corresponding flag
+	// was left unset. A relay registry that's unconfigured or unreachable
+	// just yields empty lists here (m.Relays()'s own documented behavior),
+	// which is indistinguishable from "no relays available" — non-fatal,
+	// same fail-open-on-discovery posture the rest of this file already has.
+	rendezvousAddrs := []string{}
+	if *rendezvousAddr != "" {
+		rendezvousAddrs = []string{*rendezvousAddr}
+	}
+	if len(dataRelays) == 0 || len(rendezvousAddrs) == 0 {
+		if relays, relErr := m.Relays(); relErr != nil {
+			fmt.Fprintf(os.Stderr, "relay discovery: %v (falling back to -rendezvous/-data-relay only)\n", relErr)
+		} else {
+			if len(rendezvousAddrs) == 0 {
+				for _, r := range relays.Rendezvous {
+					rendezvousAddrs = append(rendezvousAddrs, r.Address)
+				}
+			}
+			if len(dataRelays) == 0 {
+				for _, r := range relays.DataRelays {
+					dataRelays[r.Label] = r.SidecarURL
+				}
+			}
+		}
+	}
+	if len(relayPeers) > 0 && len(dataRelays) == 0 {
+		return fmt.Errorf("-relay-peer requires at least one data relay, from -data-relay or discovery")
+	}
 
 	node, err := wgnode.New(wgnode.Config{
 		PrivateKeyHex: *privateKeyHex,
@@ -490,8 +522,8 @@ func runServe(args []string) error {
 		},
 	}
 
-	if *rendezvousAddr != "" {
-		relayAddr, own, defaultCandidate := *rendezvousAddr, ownPubkey, *myCandidate
+	if len(rendezvousAddrs) > 0 {
+		relayAddrs, own, defaultCandidate := rendezvousAddrs, ownPubkey, *myCandidate
 		loop.EndpointResolver = func(p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
 			// One rendezvous-token per Exchange call, fetched fresh right
 			// before dialing — docs/adr/0007. Against an unmetered relay
@@ -509,10 +541,13 @@ func runServe(args []string) error {
 			}
 
 			if relayPeers[p.Label] {
-				return relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayAddr, own, peerPubkey, token, *ttl)
+				return relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayAddrs, own, peerPubkey, token, *ttl)
 			}
 
-			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, defaultCandidate, token, *ttl)
+			// ExchangeAny is the rendezvous-set failover docs/adr/0003
+			// requires: one rogue or unreachable relay among the (possibly
+			// discovered) set can't unilaterally block this connection.
+			candidate, err := rendezvous.ExchangeAny(relayAddrs, own, peerPubkey, defaultCandidate, token, *ttl)
 			if err != nil {
 				return nil, err
 			}

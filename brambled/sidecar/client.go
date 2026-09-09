@@ -151,3 +151,52 @@ func (m *Manager) ResolveDevice(label string) (*DeviceRecord, error) {
 	}
 	return &record, nil
 }
+
+// RendezvousRelay/DataRelay/RelaysResponse mirror sidecar/src/ens/relays.ts's
+// resolveRelays() output — real ENS-based relay discovery (docs/adr/0003's
+// Consequence section, resolved), replacing the -rendezvous/-data-relay
+// hardcoding that shipped before this.
+type RendezvousRelay struct {
+	Label   string `json:"label"`
+	Address string `json:"address"`
+}
+
+type DataRelay struct {
+	Label        string `json:"label"`
+	SidecarURL   string `json:"sidecarUrl"`
+	PricePerByte string `json:"pricePerByte"`
+}
+
+type RelaysResponse struct {
+	Rendezvous []RendezvousRelay `json:"rendezvous"`
+	DataRelays []DataRelay       `json:"dataRelays"`
+}
+
+// Relays asks the local sidecar to discover this tailnet's relays from the
+// relay registry. Returns empty lists, not an error, if no relay registry
+// is configured — callers should fall back to their own static overrides
+// (-rendezvous/-data-relay) in that case, same as sidecar/src/ens/relays.ts
+// itself does.
+func (m *Manager) Relays() (*RelaysResponse, error) {
+	url := fmt.Sprintf("http://localhost:%d/relays", m.Port)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("calling sidecar: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading sidecar response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sidecar returned %d: %s", resp.StatusCode, body)
+	}
+
+	var out RelaysResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding sidecar response: %w", err)
+	}
+	return &out, nil
+}
