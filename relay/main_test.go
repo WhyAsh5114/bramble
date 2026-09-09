@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,6 +94,77 @@ func TestOfferToUnregisteredPeerErrors(t *testing.T) {
 	got := recvWithTimeout(t, alice, 2*time.Second)
 	if got.Type != "error" {
 		t.Fatalf("expected an error reply for an unregistered target, got: %+v", got)
+	}
+}
+
+func TestMeteredRelay_HelloWithoutTokenRejected(t *testing.T) {
+	secret := mustSecret(t)
+	srv := NewMeteredServer(secret)
+	alice := dialTestServer(t, srv)
+
+	send(t, alice, message{Type: "hello", Pubkey: "alice-pubkey"}) // no Token
+
+	got := recvWithTimeout(t, alice, 2*time.Second)
+	if got.Type != "error" {
+		t.Fatalf("expected a metered relay to reject a tokenless hello, got: %+v", got)
+	}
+}
+
+func TestMeteredRelay_HelloWithValidTokenAccepted(t *testing.T) {
+	// Real relay-sidecar mints tokens over HTTP after a real payment settles
+	// (docs/adr/0007); this test exercises the same wire format via
+	// mintForTest (relay/token_test.go) so the protocol path is proven
+	// without needing the TS sidecar or live chain — same "real component,
+	// stubbed payment" shape as Gate 1.2/2.3's tests.
+	secret := mustSecret(t)
+	srv := NewMeteredServer(secret)
+	alice := dialTestServer(t, srv)
+	bob := dialTestServer(t, srv)
+
+	token := mintForTest(secret, time.Now().Add(60*time.Second).Unix(), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	send(t, alice, message{Type: "hello", Pubkey: "alice-pubkey", Token: token})
+	send(t, bob, message{Type: "hello", Pubkey: "bob-pubkey", Token: token2(t, secret)})
+	time.Sleep(50 * time.Millisecond)
+
+	send(t, alice, message{Type: "offer", To: "bob-pubkey", Candidate: "203.0.113.1:51820"})
+
+	got := recvWithTimeout(t, bob, 2*time.Second)
+	if got.Type != "offer" || got.From != "alice-pubkey" {
+		t.Fatalf("expected a paid connection attempt to work exactly like an unmetered one, got: %+v", got)
+	}
+}
+
+// token2 mints a second, independently-nonced token for bob in
+// TestMeteredRelay_HelloWithValidTokenAccepted — each side of an Exchange
+// pays for and presents its own token (docs/adr/0007: both sides send their
+// own hello/offer, so both sides pay).
+func token2(t *testing.T, secret []byte) string {
+	t.Helper()
+	return mintForTest(secret, time.Now().Add(60*time.Second).Unix(), "ffffffffffffffffffffffffffffffff")
+}
+
+func TestMeteredRelay_ReplayedTokenRejectedOnSecondHello(t *testing.T) {
+	secret := mustSecret(t)
+	srv := NewMeteredServer(secret)
+	token := mintForTest(secret, time.Now().Add(60*time.Second).Unix(), "11112222333344445555666677778888")
+
+	// First use: hello succeeds, proven by getting the *admission-layer*
+	// "not registered" error on a subsequent offer rather than a
+	// payment-layer rejection (which closes the connection before any offer
+	// would be processed at all).
+	first := dialTestServer(t, srv)
+	send(t, first, message{Type: "hello", Pubkey: "alice-pubkey", Token: token})
+	send(t, first, message{Type: "offer", To: "nobody-registered", Candidate: "203.0.113.1:51820"})
+	if got := recvWithTimeout(t, first, 2*time.Second); !strings.Contains(got.Message, "not registered") {
+		t.Fatalf("expected the first hello to be accepted (peer-not-registered error, not a payment one): %+v", got)
+	}
+
+	// Second use of the same token, from a fresh connection, must be rejected.
+	second := dialTestServer(t, srv)
+	send(t, second, message{Type: "hello", Pubkey: "someone-else", Token: token})
+	got := recvWithTimeout(t, second, 2*time.Second)
+	if got.Type != "error" {
+		t.Fatalf("expected a reused token on a second hello to be rejected, got: %+v", got)
 	}
 }
 

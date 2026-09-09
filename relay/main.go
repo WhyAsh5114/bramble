@@ -17,11 +17,12 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // message is the wire protocol: newline-delimited JSON over TCP.
 //
-//	{"type":"hello","pubkey":"<hex>"}                                  client -> relay
+//	{"type":"hello","pubkey":"<hex>","token":"<rendezvous token, omitted if unmetered>"}  client -> relay
 //	{"type":"offer","to":"<peer pubkey>","candidate":"<ip:port>"}      client -> relay
 //	{"type":"offer","from":"<sender pubkey>","candidate":"<ip:port>"}  relay -> client
 //	{"type":"ack"}                                                     relay -> client (offer was forwarded)
@@ -33,6 +34,11 @@ import (
 // landed, a client that stops as soon as it receives the *other* side's offer
 // can vanish mid-retry, leaving its own never-delivered — see
 // brambled/rendezvous's client, which waits for both.
+//
+// Token is metering, not admission (docs/adr/0007) — a relay running with
+// -meter requires one valid rendezvous token per hello (one per Exchange()
+// call, not per offer retry, precisely because of the retry behavior
+// described above); an unmetered relay ignores the field entirely.
 type message struct {
 	Type      string `json:"type"`
 	Pubkey    string `json:"pubkey,omitempty"`
@@ -40,6 +46,7 @@ type message struct {
 	From      string `json:"from,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 	Message   string `json:"message,omitempty"`
+	Token     string `json:"token,omitempty"`
 }
 
 // peer is one registered connection. Writes are serialized because an offer
@@ -57,14 +64,24 @@ func (p *peer) send(m message) error {
 }
 
 // Server pairs registered peers by public key and forwards opaque offers
-// between them. It holds no notion of who is authorized to talk to whom.
+// between them. It holds no notion of who is authorized to talk to whom —
+// verifier, when set, only checks whether a connection attempt was paid
+// for, a metering concern (docs/adr/0007), never an admission one.
 type Server struct {
-	mu    sync.Mutex
-	peers map[string]*peer
+	mu       sync.Mutex
+	peers    map[string]*peer
+	verifier *tokenVerifier // nil means unmetered — every hello is accepted, as before
 }
 
 func NewServer() *Server {
 	return &Server{peers: make(map[string]*peer)}
+}
+
+// NewMeteredServer is NewServer with rendezvous-token enforcement on every
+// hello. secret must match whatever relay-sidecar was started with — see
+// paySidecar in sidecar.go, which owns generating and distributing it.
+func NewMeteredServer(secret []byte) *Server {
+	return &Server{peers: make(map[string]*peer), verifier: newTokenVerifier(secret)}
 }
 
 func (s *Server) Serve(ln net.Listener) error {
@@ -103,6 +120,12 @@ func (s *Server) handle(conn net.Conn) {
 
 		switch m.Type {
 		case "hello":
+			if s.verifier != nil {
+				if err := s.verifier.verify(m.Token, time.Now()); err != nil {
+					_ = self.send(message{Type: "error", Message: fmt.Sprintf("rendezvous payment required: %v", err)})
+					return
+				}
+			}
 			pubkey = m.Pubkey
 			s.mu.Lock()
 			s.peers[pubkey] = self
@@ -127,6 +150,10 @@ func (s *Server) handle(conn net.Conn) {
 
 func main() {
 	addr := flag.String("addr", ":9420", "TCP address to listen on")
+	meter := flag.Bool("meter", false, "require a paid rendezvous token per hello (docs/adr/0007); off by default, matching every gate verified before this flag existed")
+	payee := flag.String("payee", "", "Hedera account id to receive rendezvous fees (required with -meter)")
+	sidecarDir := flag.String("sidecar-dir", "../relay-sidecar", "relay-sidecar project directory (required with -meter)")
+	sidecarPort := flag.Int("sidecar-port", 7891, "local port relay-sidecar listens on")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *addr)
@@ -136,7 +163,24 @@ func main() {
 	}
 	log.Printf("rendezvous relay listening on %s", ln.Addr())
 
-	if err := NewServer().Serve(ln); err != nil {
+	srv := NewServer()
+	if *meter {
+		if *payee == "" {
+			fmt.Fprintln(os.Stderr, "error: -payee is required with -meter")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "starting relay-sidecar...")
+		ps, err := startPaySidecar(paySidecarConfig{Dir: *sidecarDir, Port: *sidecarPort, Payee: *payee})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		defer ps.Stop()
+		srv = NewMeteredServer(ps.secret)
+		log.Printf("metering enabled: rendezvous-token required, relay-sidecar on :%d", *sidecarPort)
+	}
+
+	if err := srv.Serve(ln); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
