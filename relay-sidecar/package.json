@@ -1,0 +1,22 @@
+{
+  "name": "@bramble/relay-sidecar",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@x402/core": "^2.25.0",
+    "@x402/hedera": "^2.25.0",
+    "@x402/hono": "^2.25.0",
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.1",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.0"
+  }
+}
