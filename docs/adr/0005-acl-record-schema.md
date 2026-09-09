@@ -55,6 +55,8 @@ Gateway G later verifies without anything being transmitted: it reads its own `a
 
 Not built here: the gateway's single fixed-port listener, `CONNECT <service>` protocol parsing, the local (non-ENS) service-name-to-port config a gateway host is configured with, the verification loop above (iterate `acl-granters`, compute a candidate digest per trusted granter, check membership in the requester's `acl`), and a pubkey→label reverse lookup (derivable from the admission `Loop`'s already-tracked `Peers`/`knownPubkeys`) to know whose `acl` record to fetch for an inbound connection's already-authenticated WireGuard peer. Section C's Go implementation must reproduce the exact canonical algorithm above byte-for-byte — `golang.org/x/crypto/curve25519` (already imported in `brambled/wgnode`) for the ECDH, Go's stdlib `crypto/hmac`/`crypto/sha256` plus a standard HKDF implementation for the rest — no new external dependency either.
 
+**Built — see `adr/0006-gateway-connect-protocol.md`.** One correction to the paragraph above: the pubkey→label reverse lookup turned out to be unnecessary. The static `AllowedIP → Label` mapping from `admission.Loop`'s own `-peer` config already identifies an inbound connection's caller directly, with no pubkey involved — ADR 0006 explains why that's trustworthy.
+
 ## Consequence
 
 - `sidecar/src/ens/client.ts`'s `DeviceRecord.acl`/`.aclGranters: string[]` and `brambled/sidecar/client.go`'s `DeviceRecord.ACL`/`.ACLGranters []string` expose both lists as opaque strings — the sidecar's job stays pure resolution, not interpretation; it never computes or verifies a digest.

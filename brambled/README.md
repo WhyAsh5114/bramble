@@ -8,14 +8,33 @@ WireGuard device's peer table from it.
 
 - `brambled resolve <device-label>` — Phase 1 Section A. Prints a device
   subname's resolved ENS state (pubkey, expiry, status, tokenId).
-- `brambled serve -peer <label>=<allowed-ip>/<prefix> [-peer ...]` — the
-  admission verifier (Gate 1.1) plus, as of Section C, real connectivity.
-  Starts a WireGuard device and keeps its peer table synced to the tracked
-  labels' ENS state, polling every `-ttl` (default 30s). Flags:
+- `brambled serve -label <own-label> -peer <label>=<allowed-ip>/<prefix> [-peer ...]` —
+  the admission verifier (Gate 1.1) plus, as of Section C, real connectivity
+  and gateway/ACL enforcement. Starts a WireGuard device and keeps its peer
+  table synced to the tracked labels' ENS state, polling every `-ttl`
+  (default 30s). Flags:
+  - `-label <own-label>` — **required.** This node's own ENS label, used to
+    resolve its own `acl-granters` record for gateway enforcement
+    (`docs/adr/0005-acl-record-schema.md`).
   - `-local-addr` — this node's address and mesh subnet, CIDR (default
     `10.77.0.1/24`).
   - `-listen-port` — UDP port the WireGuard transport binds to (default
     `51820`).
+  - `-service <name>=<local-port>` (repeatable) — a local, non-ENS service
+    this node offers as a gateway; omit to offer none. A peer whose ACL
+    grants it that symbolic name gets proxied to `127.0.0.1:<local-port>`
+    (`docs/adr/0006-gateway-connect-protocol.md`).
+  - `-gateway-port` — fixed TCP port the CONNECT gateway listener binds to
+    on this node's own tunnel address (default `7891`). Must match on both
+    sides of a `-forward` — see below.
+  - `-forward <local-port>=<gateway-label>:<service>` (repeatable) — a local
+    port-forward, `ssh -L`-style: an ordinary, unmodified local client
+    (`psql`, `curl`, an agent's own HTTP client — anything with no idea this
+    proxy exists) connects to `127.0.0.1:<local-port>` and transparently
+    reaches `<gateway-label>`'s `<service>`, CONNECT-wrapped and ACL-checked
+    on its behalf. `<gateway-label>` must also be a tracked `-peer` —
+    `serve` fails fast at startup otherwise. See "Client forwarding runbook"
+    below for a real two-machine example.
   - **Real OS TUN is the default** — no flag needed. `-interface <name>`
     overrides the auto-picked interface name (`utun` on macOS, letting the OS
     assign a free number; `bramble0` on linux). This needs `sudo`
@@ -122,6 +141,76 @@ on the VPS too, since it already has a reachable address.
 6. Record the result in `docs/11_DAY0_GATES.md` — pass/fail, which
    topology, and the date — only once actually run this way. A CI-only or
    same-machine run does not count (see "Known gaps").
+
+## Client forwarding runbook — an unmodified client through a real gateway
+
+`docs/adr/0006-gateway-connect-protocol.md`'s `Forwarder` exists so that a
+real client with no idea `CONNECT`/ACLs/ENS exist — `curl`, `psql`, an
+agent's own HTTP client — can still reach a mesh service. Reuses the exact
+Gate 0.2 laptop-to-VPS topology and relay above; add `-service`/`-forward`
+to each side's existing `serve` command.
+
+1. On the VPS (the gateway), alongside step 2 of the Gate 0.2 runbook, add
+   `-service web=<local-port-of-a-real-backend>` to the existing `serve`
+   command.
+2. On the laptop, add `-forward 8080=vps:web` to its existing `serve`
+   command.
+3. Grant the ACL for real, on-chain, via `admincli`'s already-verified
+   tooling (`docs/adr/0005-acl-record-schema.md`): `set-acl-granters.ts` on
+   the VPS's own resolver (trust a granter), then `set-acl.ts` writing the
+   `web` digest to the laptop's device record.
+4. **Pass criteria, from the laptop's shell — an ordinary client, zero
+   CONNECT wiring:**
+   ```
+   curl http://127.0.0.1:8080/
+   ```
+   should return the real backend's real response, proxied laptop →
+   relay-discovered tunnel → VPS gateway → ACL check → local backend, and
+   back. Remove or never grant the digest and re-run `curl` — it should
+   fail (connection reset/refused), proving the denial path holds for a
+   real, unmodified client too, not just test code that hand-writes
+   `CONNECT`.
+5. Record the result below once actually run — pass/fail and the date,
+   same evidentiary standard as Gate 0.2/1.3 above.
+
+**Run Sept 8, 2026 — pass.** VPS: `Bramble` (AWS EC2, `ap-south-1`,
+`13.207.155.93`, arm64, real OS TUN, `sudo`). Laptop: this machine, `-netstack`
+(no sudo needed — the local `-forward` listener is always a real OS socket
+regardless of the node's own TUN mode; only the tunnel-side dial differs,
+and WireGuard's cross-machine transport is real UDP either way, so netstack
+on one end doesn't weaken the "two real machines, real internet" claim).
+Two freshly enrolled real devices on the dev tailnet (`vps-demo`,
+`laptop-demo`, `bramble-dev-c91e55e9.eth`), a real `acl-granters`/`acl`
+digest pair written on-chain via `admincli`'s `set-acl-granters.ts`/`set-acl.ts`
+(granter: the already-enrolled `device1`), a real relay-mediated candidate
+exchange over the actual internet (no static endpoint config on either
+side).
+
+```
+curl http://127.0.0.1:8080/hello-from-a-real-curl
+→ demo-service on ip-172-31-28-162, request path=/hello-from-a-real-curl, served at 2026-09-08T17:22:58Z
+  [HTTP 200, 2.21s]
+```
+
+An ordinary `curl` — no `CONNECT`, no ACL, no ENS awareness of any kind —
+reached a real Go HTTP server running on the VPS, laptop → relay → real
+WireGuard tunnel → gateway's CONNECT listener → real on-chain ACL check →
+`127.0.0.1:9100` on the VPS → back. Gateway log: `laptop-demo allowed for
+"web" — proxying to 127.0.0.1:9100`. Forwarder log: `"web" allowed —
+proxying`.
+
+**Denial counterpart, same run:** cleared `laptop-demo`'s on-chain `acl`
+record (a direct `setText(acl, '')`, bypassing `set-acl.ts`'s merge
+behavior), re-ran the identical `curl` with no other change — `curl: (56)
+Recv failure: Connection reset by peer`. Gateway log: `laptop-demo denied
+for service "web" (no matching granted digest)`. Forwarder log: `"web"
+denied by gateway`. No restart of either `brambled` process was needed
+between the allow and deny runs — `CheckACL` resolves fresh chain state on
+every `CONNECT`, so revocation-style edits take effect on the very next
+request.
+
+Full design and buffering-correctness fix behind `Forwarder`:
+`docs/adr/0006-gateway-connect-protocol.md`.
 
 ## Gate 1.3 runbook — measuring real revocation latency
 
