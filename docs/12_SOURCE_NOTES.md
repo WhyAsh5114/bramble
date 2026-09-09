@@ -145,7 +145,7 @@ While writing the relay client (`brambled/rendezvous`), a two-sided candidate ex
 
 ## Open items for whoever reads this next
 
-- Resolve the Blocky402-vs-starter-kit-facilitator question before Gate 0.4.
+- ~~Resolve the Blocky402-vs-starter-kit-facilitator question before Gate 0.4~~ — resolved Sept 9: moot. Gate 0.4's proof (`scripts/gate0.4-blocky402-check/`) calls Blocky402's hosted testnet facilitator directly and never goes through the Scaffold-HBAR starter kit at all, so the starter's bundled facilitator's identity never mattered. See `11_DAY0_GATES.md` Gate 0.4.
 - ~~Check whether `wallet-cli send` accepts arbitrary calldata~~ — resolved Sept 7, see below.
 - ~~Whether `wallet-cli ring` works under Speculos specifically~~ — resolved Sept 8: it doesn't, no public Ledger CLI exposes Key Ring over Speculos. See item 2 above and `adr/0001`.
 - When building Phase 4, make sure the demo's chosen topologies include at least one that can't hole-punch, so the data-relay path (not just rendezvous) gets shown live.

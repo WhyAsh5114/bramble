@@ -1,0 +1,23 @@
+{
+  "name": "gate0.4-blocky402-check",
+  "version": "1.0.0",
+  "description": "Standalone Gate 0.4 proof: one real x402 payment via Blocky402, settled on Hedera testnet.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "generate-accounts": "node generate-accounts.mjs",
+    "resolve-accounts": "node resolve-accounts.mjs",
+    "server": "node server.mjs",
+    "client": "node client.mjs"
+  },
+  "dependencies": {
+    "@hiero-ledger/sdk": "^2.87.0",
+    "@hono/node-server": "^2.1.1",
+    "@x402/core": "^2.25.0",
+    "@x402/fetch": "^2.25.0",
+    "@x402/hedera": "^2.25.0",
+    "@x402/hono": "^2.25.0",
+    "dotenv": "^17.4.2",
+    "hono": "^4.6.14"
+  }
+}

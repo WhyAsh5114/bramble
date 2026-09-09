@@ -66,6 +66,8 @@ Userspace WireGuard, STUN, hole punching, relay fallback, and the admission veri
 
 Skip entirely if Gate 0.1 failed.
 
+**⏸️ Deferred Sept 9, 2026 — blocked on hardware, not skipped.** The dedicated dev Ledger (Nano S Plus) hasn't arrived yet, so Gate 0.1 (physical device) genuinely cannot run. Rather than idle, Phase 4 (Hedera relay + x402 metering, below) was pulled forward and started Sept 9 instead — its only prerequisite, Gate 0.4, was independently unblocked and is now verified. `.tmp/STRATEGY.md`'s plan-of-record fallback (ENS + Hedera) already assumed exactly this could happen. **This is a calendar/sequencing change only — Phase 3's gate numbers (3.1–3.3) and content are unchanged**; resume this phase the moment the device arrives, budgeting whatever's left of the original 2-day window.
+
 **Prerequisite, due Sept 7:** Gate 0.1 (physical device) *and* the `wallet-cli send` calldata question (`adr/0001`'s open verification) must both be resolved before this phase starts — Phase 3 gets 2 days and cannot absorb a mid-phase discovery. The Ledger "Tracks Explained" workshop aired Sept 7; check its recording first.
 
 `HARD GATE 3.1 — Device confirmation gates permission changes.` Enrolling or revoking requires a physical button press. No software path bypasses it.
@@ -79,9 +81,16 @@ Skip entirely if Gate 0.1 failed.
 
 **Discretion:** enrollment UX, whether the admin CLI wraps `wallet-cli` or instructs the user to run it.
 
-## Phase 4 — Relay and x402 metering (Days 7–8 — Sept 10–11)
+## Phase 4 — Relay and x402 metering (Days 7–8 — Sept 10–11; **pulled forward, started Sept 9** — see Phase 3's deferral note above)
 
-**Prerequisite:** Gate 0.4 (one real Blocky402 payment) must be run by Sept 8 — it is still unrun, and this entire phase sits on top of it.
+**Prerequisite:** Gate 0.4 (one real Blocky402 payment) — **✅ verified Sept 9, 2026**, see `11_DAY0_GATES.md`. This phase is now unblocked.
+
+Split into sections, same convention as Phase 2 (ADR-backed sections A–D):
+
+- **Section A (done)** — standalone Gate 0.4 proof, `scripts/gate0.4-blocky402-check/`. No relay integration.
+- **Section B (next)** — the rendezvous relay's payment surface. `relay/main.go` is raw newline-delimited-JSON-over-TCP; x402 is HTTP-native, so this needs an HTTP side-channel that sells a session/rendezvous allotment and returns a token the TCP `hello` message presents (ADR needed — real design decision, per `12_SOURCE_NOTES.md` item 6 and `adr/0003`: settlement must gate an allotment, not individual packets). Satisfies Gate 4.1 (the rendezvous fee alone covers "one real paid request... on camera") and starts Gate 4.2.
+- **Section C** — data-plane relay metering, bytes-scaled fee. Completes Gate 4.2.
+- **Section D** — second relay, price/latency selection, kill-mid-transfer failover. Gate 4.3.
 
 `HARD GATE 4.1 — One real paid request settles on Hedera testnet via Blocky402, on camera.` Hedera qualification requirement. Not mocked, not local.
 **Test:** E2E script prints a transaction ID viewable on HashScan.
