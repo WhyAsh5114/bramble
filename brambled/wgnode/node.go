@@ -254,6 +254,14 @@ type PeerInfo struct {
 	PublicKeyHex        string
 	AllowedIPs          []string
 	LastHandshakeUnixNs int64
+	// RxBytes is this peer's total received-byte counter, straight from
+	// wireguard-go's UAPI `rx_bytes=` field (device/uapi.go, confirmed
+	// directly against the vendored source, not assumed). Monotonic for
+	// the life of the peer entry — used by docs/adr/0008's data-relay
+	// failover watcher to detect a stalled relay (see
+	// brambled/datarelay.WaitForStall): no per-packet WireGuard protocol
+	// awareness needed, just "is this number still moving."
+	RxBytes int64
 }
 
 // Handshaked reports whether this peer has ever completed a handshake.
@@ -294,6 +302,8 @@ func (n *Node) Peers() ([]PeerInfo, error) {
 		case "last_handshake_time_nsec":
 			nsecs, _ := strconv.ParseInt(value, 10, 64)
 			cur.LastHandshakeUnixNs += nsecs
+		case "rx_bytes":
+			cur.RxBytes, _ = strconv.ParseInt(value, 10, 64)
 		}
 	}
 	return peers, nil

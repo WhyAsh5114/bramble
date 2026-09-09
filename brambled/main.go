@@ -39,6 +39,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -355,24 +356,136 @@ type keepaliveSetter interface {
 // admission.Loop's own AddPeer runs, is safe and deterministic: WireGuard's
 // UAPI merges fields into a peer entry by public key rather than requiring
 // them all in one call.
-func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relayAddrs []string, own, peerPubkey, token string, ttl time.Duration) (*netip.AddrPort, error) {
+// Returns the relay label actually used, alongside the endpoint — Section
+// D's failover watcher (below) needs to know which relay a peer is
+// currently routed through, so it can exclude that one when picking a
+// replacement.
+func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relayAddrs []string, own, peerPubkey, token string, ttl time.Duration) (*netip.AddrPort, string, error) {
 	session, err := buyDataRelaySession(m, pool, sessionBytes)
 	if err != nil {
-		return nil, fmt.Errorf("buying data-relay session: %w", err)
+		return nil, "", fmt.Errorf("buying data-relay session: %w", err)
 	}
 	relayEndpoint, err := netip.ParseAddrPort(session.candidate)
 	if err != nil {
-		return nil, fmt.Errorf("data-relay candidate %q unparseable: %w", session.candidate, err)
+		return nil, "", fmt.Errorf("data-relay candidate %q unparseable: %w", session.candidate, err)
 	}
 	if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
-		return nil, fmt.Errorf("arming persistent keepalive for %s: %w", peerPubkey, err)
+		return nil, "", fmt.Errorf("arming persistent keepalive for %s: %w", peerPubkey, err)
 	}
 	fmt.Fprintf(os.Stderr, "data-relay: bought session %s from %s (tx %s), routing %s via %s\n",
 		session.id, session.relayLabel, session.settlementTxID, peerPubkey, session.candidate)
 	if _, err := rendezvous.ExchangeAny(relayAddrs, own, peerPubkey, session.candidate, token, ttl); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &relayEndpoint, nil
+	return &relayEndpoint, session.relayLabel, nil
+}
+
+// Section D failover (docs/adr/0008, docs/05_BUILD_PLAN.md Gate 4.3): how
+// often to poll RxBytes, and how long it must sit still before a relay is
+// declared stalled. Deliberately fast for a live demo, not tuned for
+// production — a real deployment would want a longer stallTimeout to avoid
+// false positives during ordinary idle gaps outside an active transfer.
+const (
+	dataRelayPollInterval = 2 * time.Second
+	dataRelayStallTimeout = 6 * time.Second
+)
+
+// relayState is the shared record of which data relay each -relay-peer is
+// currently routed through, and under which pubkey — set by
+// relayRoutedEndpoint (via the EndpointResolver closure) on every successful
+// connect, and read by watchDataRelayFailover to know what to watch and
+// what to exclude on failover. Keyed by tracked-peer *label*, not pubkey,
+// so a key rotation naturally carries over: EndpointResolver runs again
+// under the new pubkey (admission.Loop's resolvedEndpoints cache is keyed
+// by pubkey), which just overwrites this label's entry.
+type relayState struct {
+	mu     sync.Mutex
+	pubkey map[string]string
+	relay  map[string]string
+}
+
+func newRelayState() *relayState {
+	return &relayState{pubkey: make(map[string]string), relay: make(map[string]string)}
+}
+
+func (s *relayState) set(peerLabel, pubkey, relayLabel string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pubkey[peerLabel] = pubkey
+	s.relay[peerLabel] = relayLabel
+}
+
+func (s *relayState) get(peerLabel string) (pubkey, relayLabel string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pubkey, hasPubkey := s.pubkey[peerLabel]
+	relayLabel, hasRelay := s.relay[peerLabel]
+	return pubkey, relayLabel, hasPubkey && hasRelay
+}
+
+// watchDataRelayFailover is Gate 4.3's kill-mid-transfer failover: once
+// peerLabel's initial data-relay connect has happened (state.get succeeds),
+// it blocks on datarelay.WaitForStall and, on a real stall, buys a fresh
+// session from the pool minus whichever relay just stalled, re-points this
+// node's own peer-endpoint directly (admission.Loop won't — its
+// EndpointResolver only fires once per pubkey for the life of the Loop),
+// and updates state so the next round excludes the new relay too if it
+// also fails. Gives up (logs and returns) if the pool is exhausted or a
+// reconnect attempt itself fails — matches this file's existing "log and
+// move on" posture for discovery/pricing failures elsewhere.
+func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, state *relayState, peerLabel string, allowedIP netip.Prefix, pool dataRelayFlag, sessionBytes int64, relayAddrs []string, ownPubkey string, ttl time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+		pubkey, usedLabel, ok := state.get(peerLabel)
+		if !ok {
+			continue // initial connect hasn't happened yet
+		}
+
+		if err := datarelay.WaitForStall(ctx, node, pubkey, dataRelayPollInterval, dataRelayStallTimeout); err != nil {
+			return // ctx cancelled
+		}
+		fmt.Fprintf(os.Stderr, "data-relay: %s via %s stalled — failing over\n", peerLabel, usedLabel)
+
+		remaining := dataRelayFlag{}
+		for label, url := range pool {
+			if label != usedLabel {
+				remaining[label] = url
+			}
+		}
+		if len(remaining) == 0 {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: no relay left to fail over to (excluded %s), giving up\n", peerLabel, usedLabel)
+			return
+		}
+
+		var token string
+		if resp, tokErr := m.RendezvousToken(); tokErr == nil {
+			token = resp.Token
+		}
+		// A failed attempt here is very often just timing skew, not a dead
+		// end: the peer's own watcher may not have declared the same
+		// stall yet, so this side's rendezvous.ExchangeAny (which needs
+		// the peer concurrently exchanging too) can time out even though
+		// the pool still has a perfectly good relay left. Log and retry
+		// rather than giving up — WaitForStall's own stallTimeout below
+		// is what rate-limits the retry, since usedLabel is unchanged and
+		// RxBytes still isn't moving. Only pool exhaustion above is a real
+		// reason to stop.
+		endpoint, newLabel, err := relayRoutedEndpoint(node, m, remaining, sessionBytes, relayAddrs, ownPubkey, pubkey, token, ttl)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: failover attempt failed, will retry: %v\n", peerLabel, err)
+			continue
+		}
+		if err := node.AddPeer(pubkey, allowedIP, endpoint); err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: %s: re-pointing peer at %s failed, will retry: %v\n", peerLabel, newLabel, err)
+			continue
+		}
+		state.set(peerLabel, pubkey, newLabel)
+		fmt.Fprintf(os.Stderr, "data-relay: %s failed over to %s\n", peerLabel, newLabel)
+	}
 }
 
 func runServe(args []string) error {
@@ -501,6 +614,13 @@ func runServe(args []string) error {
 	}
 	defer node.Close()
 
+	// Tracks which data relay each -relay-peer is currently routed
+	// through — read by the EndpointResolver closure below on every
+	// connect, and by watchDataRelayFailover's background goroutines
+	// (started further down, once ctx exists) for Gate 4.3's kill-mid-
+	// transfer failover (docs/adr/0008).
+	relState := newRelayState()
+
 	loop := &admission.Loop{
 		Resolver: m,
 		Table:    node,
@@ -541,7 +661,11 @@ func runServe(args []string) error {
 			}
 
 			if relayPeers[p.Label] {
-				return relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayAddrs, own, peerPubkey, token, *ttl)
+				endpoint, label, err := relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayAddrs, own, peerPubkey, token, *ttl)
+				if err == nil {
+					relState.set(p.Label, peerPubkey, label)
+				}
+				return endpoint, err
 			}
 
 			// ExchangeAny is the rendezvous-set failover docs/adr/0003
@@ -568,6 +692,17 @@ func runServe(args []string) error {
 	peerLabels := make(map[netip.Addr]string, len(peers))
 	for _, p := range peers {
 		peerLabels[p.AllowedIP.Addr()] = p.Label
+	}
+
+	// Gate 4.3 failover (docs/adr/0008): one watcher per -relay-peer,
+	// started once ctx exists so Ctrl+C stops them cleanly. Each blocks
+	// until relState reports an initial connect, then waits for a stall.
+	for _, p := range peers {
+		if !relayPeers[p.Label] {
+			continue
+		}
+		p := p
+		go watchDataRelayFailover(ctx, node, m, relState, p.Label, p.AllowedIP, dataRelays, *relaySessionBytes, rendezvousAddrs, ownPubkey, *ttl)
 	}
 
 	var gwListener net.Listener

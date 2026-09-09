@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -235,11 +236,11 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, []string{relayAddr}, alicePub, bobPub, "", 5*time.Second)
+		aliceEndpoint, _, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, []string{relayAddr}, alicePub, bobPub, "", 5*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		bobEndpoint, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, []string{relayAddr}, bobPub, alicePub, "", 5*time.Second)
+		bobEndpoint, _, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, []string{relayAddr}, bobPub, alicePub, "", 5*time.Second)
 	}()
 	wg.Wait()
 	if aliceErr != nil {
@@ -275,4 +276,265 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	if !ok {
 		t.Fatal("alice and bob failed to complete a handshake through the data relay")
 	}
+}
+
+// startTestDataRelayStoppable is startTestDataRelay, but returns a stop
+// function so a test can kill it mid-run (docs/05_BUILD_PLAN.md Gate 4.3's
+// "kill the selected relay mid-transfer") instead of only at test cleanup.
+func startTestDataRelayStoppable(t *testing.T) (*netip.AddrPort, func()) {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	stopped := false
+	stop := func() {
+		if !stopped {
+			stopped = true
+			conn.Close()
+		}
+	}
+	t.Cleanup(stop)
+
+	go func() {
+		var slots [2]*net.UDPAddr
+		buf := make([]byte, 2048)
+		for {
+			n, src, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			var other *net.UDPAddr
+			matched := false
+			for i, s := range slots {
+				if s != nil && s.IP.Equal(src.IP) && s.Port == src.Port {
+					other = slots[1-i]
+					slots[i] = src
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				for i, s := range slots {
+					if s == nil {
+						slots[i] = src
+						other = slots[1-i]
+						break
+					}
+				}
+			}
+			if other != nil {
+				_, _ = conn.WriteToUDP(buf[:n], other)
+			}
+		}
+	}()
+
+	addr := netip.MustParseAddrPort(conn.LocalAddr().String())
+	return &addr, stop
+}
+
+// startFakeDataRelaySidecarPriced is startFakeDataRelaySidecar with a
+// caller-chosen price, so a test can make datarelay.Pick's choice
+// deterministic across multiple fake relays instead of racing on identical
+// prices (whose tie would be broken by Go's unspecified map iteration
+// order, not the score itself).
+func startFakeDataRelaySidecarPriced(t *testing.T, priceAmount string) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/price", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"asset": "test", "amount": priceAmount})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// startFakeENSSidecarMulti is startFakeENSSidecar for a pool of more than
+// one candidate relay: it reads the request's sidecarUrl and returns the
+// UDP port that specific relay-sidecar stands in for, instead of always
+// answering with one fixed port regardless of which relay was picked.
+func startFakeENSSidecarMulti(t *testing.T, portBySidecarURL map[string]int) *sidecar.Manager {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/data-relay-session", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SidecarURL string `json:"sidecarUrl"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		port, ok := portBySidecarURL[body.SidecarURL]
+		if !ok {
+			http.Error(w, fmt.Sprintf("no fake relay configured for sidecarUrl %q", body.SidecarURL), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sessionId": fmt.Sprintf("test-session-%d", port),
+			"port":      port,
+			"expiresAt": time.Now().Add(time.Minute).Unix(),
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	var port int
+	if _, err := fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port); err != nil {
+		t.Fatalf("parsing fake sidecar port from %q: %v", srv.URL, err)
+	}
+	return &sidecar.Manager{Port: port}
+}
+
+// TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls is Gate
+// 4.3's kill-mid-transfer failover: two real data relays, alice picked the
+// cheaper one (deterministic via priced quotes), a real handshake and
+// traffic flowing through it, then the primary relay is killed mid-flight.
+// watchDataRelayFailover must detect the stall via real RxBytes and
+// re-point alice's own peer-endpoint at the backup relay — proven by a
+// real WireGuard handshake succeeding again afterward, not just a state
+// flag flipping.
+func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) {
+	relayAddr := startTestRendezvousRelay(t)
+
+	primaryAddr, stopPrimary := startTestDataRelayStoppable(t)
+	backupAddr, _ := startTestDataRelayStoppable(t)
+
+	sidecarURLPrimary := startFakeDataRelaySidecarPriced(t, "1")   // cheapest — Pick chooses this first
+	sidecarURLBackup := startFakeDataRelaySidecarPriced(t, "1000") // pricier — only used on failover
+
+	pool := dataRelayFlag{"primary": sidecarURLPrimary, "backup": sidecarURLBackup}
+	portByURL := map[string]int{
+		sidecarURLPrimary: int(primaryAddr.Port()),
+		sidecarURLBackup:  int(backupAddr.Port()),
+	}
+
+	aliceM := startFakeENSSidecarMulti(t, portByURL)
+	bobM := startFakeENSSidecarMulti(t, portByURL)
+
+	alicePriv, alicePub, err := wgnode.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generating alice's key pair: %v", err)
+	}
+	bobPriv, bobPub, err := wgnode.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generating bob's key pair: %v", err)
+	}
+
+	aliceAddr := netip.MustParseAddr("10.100.0.1")
+	bobAddr := netip.MustParseAddr("10.100.0.2")
+	aliceIP := netip.PrefixFrom(aliceAddr, 32)
+	bobIP := netip.PrefixFrom(bobAddr, 32)
+
+	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 61960, LocalAddress: aliceAddr, Netstack: true})
+	if err != nil {
+		t.Fatalf("starting alice: %v", err)
+	}
+	defer alice.Close()
+	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 61961, LocalAddress: bobAddr, Netstack: true})
+	if err != nil {
+		t.Fatalf("starting bob: %v", err)
+	}
+	defer bob.Close()
+
+	aliceState, bobState := newRelayState(), newRelayState()
+
+	var aliceEndpoint, bobEndpoint *netip.AddrPort
+	var aliceLabel, bobLabel string
+	var aliceErr, bobErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1_000_000, []string{relayAddr}, alicePub, bobPub, "", 15*time.Second)
+	}()
+	go func() {
+		defer wg.Done()
+		bobEndpoint, bobLabel, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1_000_000, []string{relayAddr}, bobPub, alicePub, "", 15*time.Second)
+	}()
+	wg.Wait()
+	if aliceErr != nil {
+		t.Fatalf("alice's relayRoutedEndpoint: %v", aliceErr)
+	}
+	if bobErr != nil {
+		t.Fatalf("bob's relayRoutedEndpoint: %v", bobErr)
+	}
+	if aliceLabel != "primary" || bobLabel != "primary" {
+		t.Fatalf("expected both sides to pick the cheaper relay first, got alice=%q bob=%q", aliceLabel, bobLabel)
+	}
+	aliceState.set("bob", bobPub, aliceLabel)
+	bobState.set("alice", alicePub, bobLabel)
+
+	if err := alice.AddPeer(bobPub, bobIP, aliceEndpoint); err != nil {
+		t.Fatalf("alice adding bob: %v", err)
+	}
+	if err := bob.AddPeer(alicePub, aliceIP, bobEndpoint); err != nil {
+		t.Fatalf("bob adding alice: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Continuous traffic — this is what makes a stall meaningful (per
+	// WaitForStall's own doc comment) and what proves the connection
+	// actually recovers, not just that state flipped.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				_, _ = alice.Ping(bobAddr, 500*time.Millisecond)
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+	}()
+
+	if !pingUntilConnected(t, alice, bobAddr, 8*time.Second) {
+		t.Fatal("alice and bob failed to complete an initial handshake through the primary relay")
+	}
+
+	// Both sides get a watcher, exactly like runServe starts one per
+	// -relay-peer regardless of which side of the pair it's on — this
+	// matters, not just for symmetry: relayRoutedEndpoint's Exchange call
+	// needs a peer on the other end concurrently exchanging too (same
+	// "two sides rarely call at the exact same instant" reasoning
+	// Exchange/ExchangeAny's own docs already state), so only one side
+	// failing over would time out waiting for the other to answer.
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, []string{relayAddr}, alicePub, 15*time.Second)
+	go watchDataRelayFailover(ctx, bob, bobM, bobState, "alice", aliceIP, pool, 1_000_000, []string{relayAddr}, bobPub, 15*time.Second)
+
+	stopPrimary()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		_, aliceSide, aliceOK := aliceState.get("bob")
+		_, bobSide, bobOK := bobState.get("alice")
+		if aliceOK && aliceSide == "backup" && bobOK && bobSide == "backup" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if _, label, _ := aliceState.get("bob"); label != "backup" {
+		t.Fatalf("alice never failed over to the backup relay (still recorded as %q)", label)
+	}
+	if _, label, _ := bobState.get("alice"); label != "backup" {
+		t.Fatalf("bob never failed over to the backup relay (still recorded as %q)", label)
+	}
+
+	if !pingUntilConnected(t, alice, bobAddr, 10*time.Second) {
+		t.Fatal("alice and bob failed to reconnect through the backup relay after failover")
+	}
+}
+
+// pingUntilConnected polls Ping until it succeeds or the deadline passes.
+func pingUntilConnected(t *testing.T, node *wgnode.Node, addr netip.Addr, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok, err := node.Ping(addr, time.Second); err == nil && ok {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
 }
