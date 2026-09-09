@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { SIDECAR_PORT, tailnetName, tailnetRegistry } from './ens/config'
 import { deviceRoute } from './routes/device'
 import { paymentsRoute } from './routes/payments'
+import { relaysRoute } from './routes/relays'
 
 const app = new Hono()
 
@@ -13,6 +14,7 @@ const app = new Hono()
 app.get('/health', (c) => c.json({ ok: true, tailnetName: tailnetName(), tailnetRegistry: tailnetRegistry() }))
 app.route('/device', deviceRoute)
 app.route('/', paymentsRoute)
+app.route('/', relaysRoute)
 
 export default {
   port: SIDECAR_PORT,

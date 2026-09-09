@@ -72,6 +72,26 @@ export function tailnetRegistry(): `0x${string}` {
   return getAddress(requiredEnv('BRAMBLE_TAILNET_REGISTRY'))
 }
 
+// The relay registry (docs/adr/0003's Consequence section, resolved): a
+// UserRegistry deployed structurally separate from the tailnet's own device
+// registry (Gate 1.4 requires this — relay records must live somewhere
+// device/agent write paths can't reach even by mistake), set up once via
+// admincli/src/setup-relay-registry.ts. Optional: a tailnet with no relay
+// discovery configured (yet, or ever, if it only uses -rendezvous/
+// -data-relay overrides) just doesn't call resolveRelays().
+export function relayRegistry(): `0x${string}` | undefined {
+  const value = process.env.BRAMBLE_RELAY_REGISTRY
+  return value ? getAddress(value) : undefined
+}
+
+// Bounds resolveRelays()'s LabelRegistered log scan to blocks that could
+// possibly contain a registration — avoids re-scanning from genesis on
+// every call. Set once, at relay-registry setup time (the deploy
+// transaction's own block), never changes afterward.
+export function relayRegistryDeployBlock(): bigint {
+  return BigInt(requiredEnv('BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK'))
+}
+
 // Read-only surface only — no write functions here. This sidecar's Section A
 // scope is resolution, not enrollment/revocation (see docs/adr/0002).
 export const registryAbi = parseAbi([
