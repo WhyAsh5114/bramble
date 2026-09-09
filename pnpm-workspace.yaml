@@ -1,5 +1,6 @@
 packages:
   - sidecar
+  - relay-sidecar
   - brambled
   - relay
   - scripts/provision-dev-tailnet
