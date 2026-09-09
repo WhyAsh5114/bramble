@@ -212,6 +212,103 @@ request.
 Full design and buffering-correctness fix behind `Forwarder`:
 `docs/adr/0006-gateway-connect-protocol.md`.
 
+## Gate 2.2 runbook — nothing hard-coded in the demo path
+
+`docs/05_BUILD_PLAN.md` Gate 2.2 requires that the mesh reassemble purely
+from chain state, with no local cache to go stale. Two complementary
+artifacts back this claim:
+
+- `scripts/check-no-local-state.mjs` (wired into `pnpm verify`) — a
+  structural grep proving the demo _runtime_ path (`brambled/**/*.go`
+  excluding tests, `sidecar/src/**/*.ts`) contains no filesystem-write call
+  at all. Deliberately out of scope: `admincli` and
+  `scripts/provision-dev-tailnet`, which are operator tooling, not anything
+  a node runs.
+- `brambled/admission/gate2_2_test.go`
+  (`TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory`) — the
+  behavioral half: a `Loop` constructed with zero prior state admits
+  exactly what the resolver reports _now_, carries no memory of a
+  pre-restart key, and re-derives revocation after a restart too.
+
+**State inventory** (what actually exists around a running node, and why
+none of it is a cache):
+
+| Item                                                                     | What it is                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brambled`, `demo-service`, `relay` binaries                             | Build artifacts — code, not state. Rebuilding from the same source produces the same behavior.                                                                                                                                                                   |
+| `sidecar/node_modules`                                                   | Dependencies, resolved from `sidecar/bun.lock` — reproducible, not node-specific state.                                                                                                                                                                          |
+| `start-vps-gateway.sh`                                                   | Operator launch config: CLI flags and env vars. Never read by `brambled` itself at runtime beyond process startup — see the `BRAMBLE_PRIVATE_KEY` note below.                                                                                                    |
+| `*.log` files (`relay.log`, `demo-service.log`, `brambled-vps.log`)      | Shell-redirected stdout from `nohup`, not written by any `os.Create`/`fs.write*` call in the demo path — `check-no-local-state.mjs` correctly doesn't flag these. Deleted as part of this run's own cleanup below, purely to satisfy the gate's literal wording. |
+| Everything else (peer identity, ACL grants, admission state, revocation) | CLI flags, env vars, or chain state (ENS text records) — re-read on every sync (`-ttl`, default 30s) or every `CONNECT`.                                                                                                                                         |
+
+`BRAMBLE_PRIVATE_KEY` sits in plaintext in `start-vps-gateway.sh` on the
+VPS today — that's Gate 3.2's job (`wallet-cli ring` encryption), not
+Gate 2.2's; noted here so it isn't mistaken for an oversight.
+
+**Run Sept 9, 2026 — pass.** Same VPS as the Sept 8 run
+(`13.207.155.93`, `ap-south-1`, arm64), laptop is this machine
+(`-netstack`). `laptop-demo`'s original enrollment key had been lost
+(overwritten testing infrastructure); rotated to a freshly generated
+key via `admincli/src/rotate.ts` (real tx
+`0x163f3019ad8296d23bd704d915d66bc0160d0ef6bed0ade397566c303bffc505`) and
+its ACL grant for `vps-demo`'s `web` service re-vouched by `device1` via
+`admincli/src/set-acl.ts` (real tx
+`0x669b6b6d6d53718515c10ec152f327823346c49ade6cef38458c7da9623b8d41`) —
+routine rotation/ACL operations, not part of the gate's own procedure.
+
+1. **Phase A — baseline.** Both nodes started fresh (`relay`,
+   `demo-service`, `brambled serve` on the VPS; `brambled serve -netstack
+-forward 8080=vps-demo:web` on the laptop). Real `curl`:
+   ```
+   curl http://127.0.0.1:8080/gate2.2-phase-A-baseline
+   → demo-service on ip-172-31-28-162, request path=/gate2.2-phase-A-baseline, served at 2026-09-09T05:37:13Z
+     [HTTP 200, 2.66s]
+   ```
+2. **State wipe.** Both `brambled` processes killed. While both were down,
+   `laptop-demo`'s on-chain `pubkey` record was cleared (`scripts/
+provision-dev-tailnet/set-pubkey.ts laptop-demo ""`, tx
+   `0x989c8feeeacfa90c34643e8e5dd2f517befa42d3cb40bb2ca361dd56aa73b63c`) —
+   simulating a restarted node whose peer's identity changed while it was
+   offline, with nothing local surviving the restart to contradict it.
+3. **Phase B — fresh restart, same flags, no local state carried over.**
+   The VPS's brand-new `Loop` (zero prior state, matching the unit test)
+   refused the peer outright:
+   ```
+   admission: laptop-demo: not authorized
+   ```
+   `curl` timed out — a full connection timeout, not a quick ACL `DENY`,
+   confirming the failure is at the WireGuard admission layer (the peer
+   was never added to the tunnel), not the ACL layer above it:
+   ```
+   curl -m 8 http://127.0.0.1:8080/gate2.2-phase-B-should-fail
+   → (timed out, exit 28)
+   ```
+4. **Phase A′ — restore, no restart.** `laptop-demo`'s `pubkey` was set
+   back to its rotated value on chain (tx
+   `0x34bb1d0d089ae6547505245dde6167aa0a1393af5ab3bb4ac5832f9ab498259c`)
+   with **neither process restarted**. The already-running VPS `Loop`
+   picked it up on its own next sync (≤30s later, `-ttl`'s default):
+   ```
+   admission: laptop-demo: authorized (pubkey 0031b7eafd9a67b0463a529663083aeb12806f9e0f2ef3f10c69787a90d3d904)
+   gateway: laptop-demo allowed for "web" — proxying to 127.0.0.1:9100
+   ```
+   and a fresh `curl` succeeded with zero local file touched anywhere in
+   the interim:
+   ```
+   curl http://127.0.0.1:8080/gate2.2-phase-Aprime-restored
+   → demo-service on ip-172-31-28-162, request path=/gate2.2-phase-Aprime-restored, served at 2026-09-09T05:41:29Z
+     [HTTP 200, 3.77s]
+   ```
+5. **Literal cleanup.** All three `*.log` files this run produced
+   (`~/vps-run/relay.log`, `~/vps-run/demo-service.log`,
+   `~/vps-run/brambled-vps.log`) were deleted while their processes kept
+   running unaffected (Linux unlink semantics) — the state inventory table
+   above is exhaustive, so there was nothing else to delete.
+
+Both the admission-refusal (Phase B) and the memory-free restart
+(`gate2_2_test.go`'s own three phases) agree: nothing survives a restart
+except what's on chain.
+
 ## Gate 1.3 runbook — measuring real revocation latency
 
 `docs/05_BUILD_PLAN.md` Gate 1.3 requires the actual measured time from

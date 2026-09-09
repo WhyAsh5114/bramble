@@ -62,4 +62,4 @@ Full `brambled` suite (`admission`, `gateway`, `rendezvous`, `sidecar`, `wgnode`
 - `docs/05_BUILD_PLAN.md` Gate 2.3 flips to verified.
 - `brambled serve` gains four new flags: `-label` (required), `-service` (repeatable, optional), `-gateway-port` (default `7891`), `-forward` (repeatable, optional).
 - The Section C proxy path (`proxy`, `bufferedConn`) is now correctness-hardened against pipelined client writes, not just against the request shapes today's tests happen to send.
-- Section D (Gate 2.2 — clean-state validation pass) is the only remaining item in Phase 2.
+- Section D (Gate 2.2 — clean-state validation pass) is verified Sept 9, 2026 (`docs/05_BUILD_PLAN.md`, `brambled/README.md`'s "Gate 2.2 runbook") — Phase 2 is complete.
