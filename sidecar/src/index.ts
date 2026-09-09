@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { SIDECAR_PORT, tailnetName, tailnetRegistry } from './ens/config'
 import { deviceRoute } from './routes/device'
+import { paymentsRoute } from './routes/payments'
 
 const app = new Hono()
 
@@ -11,6 +12,7 @@ const app = new Hono()
 // silent-wrong-tailnet landmine on any host running more than one node.
 app.get('/health', (c) => c.json({ ok: true, tailnetName: tailnetName(), tailnetRegistry: tailnetRegistry() }))
 app.route('/device', deviceRoute)
+app.route('/', paymentsRoute)
 
 export default {
   port: SIDECAR_PORT,
