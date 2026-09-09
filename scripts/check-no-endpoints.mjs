@@ -4,7 +4,13 @@
 // that grep, automated and wired into `pnpm verify` so a future write path
 // can't silently violate it. Relay subnames are the one namespace allowed to
 // carry endpoint data (docs/adr/0003-rendezvous-relay-split.md); nothing
-// under `relay/` is scanned.
+// under `relay/` is scanned, and neither is admincli's relay-registration
+// write path (admincli/src/setup-relay-registry.ts,
+// admincli/src/register-relay.ts) — both write only to the relay registry, a
+// structurally separate contract from the tailnet's device registry (Gate
+// 1.4's actual requirement: "structurally incapable... not just a runtime
+// check" — see setup-relay-registry.ts), confirmed by manual read, same as
+// this gate's own write-up requires.
 //
 // Scope, deliberately narrow: this only inspects the literal arguments of
 // setText() calls (the one ENS write mechanism this repo uses) — not every
@@ -26,7 +32,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 const SCAN_DIRS = ['sidecar/src', 'scripts/provision-dev-tailnet', 'brambled', 'admincli']
 const EXCLUDE_SEGMENTS = new Set(['node_modules', '.git', 'dist'])
-const EXCLUDE_PREFIXES = ['scripts/gate0.3-eac-check', 'relay']
+const EXCLUDE_PREFIXES = [
+  'scripts/gate0.3-eac-check',
+  'relay',
+  'admincli/src/setup-relay-registry.ts',
+  'admincli/src/register-relay.ts',
+]
 const SCAN_EXTENSIONS = new Set(['.ts', '.go'])
 
 const BANNED_KEYS = /^(endpoint|address|addr|ip|host|port|url)$/i
