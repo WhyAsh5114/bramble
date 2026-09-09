@@ -26,6 +26,13 @@ type paySidecarConfig struct {
 	Dir   string // relay-sidecar's project directory (contains package.json)
 	Port  int
 	Payee string // Hedera account id, HEDERA_RELAY_OPERATOR_ACCOUNT_ID
+
+	// Data-relay config (docs/adr/0008) — all zero values unless -data-relay
+	// is set, in which case relay-sidecar mounts the /data-relay-session and
+	// /price routes and knows where to call back for allocation.
+	DataRelay      bool
+	InternalAPIURL string // e.g. http://127.0.0.1:7895 — loopback allocation API
+	PricePerByte   string // atomic USDC per byte, DynamicPrice input
 }
 
 // startPaySidecar generates a fresh HMAC secret, spawns relay-sidecar with
@@ -43,13 +50,22 @@ func startPaySidecar(cfg paySidecarConfig) (*paySidecar, error) {
 	}
 	secretHex := hex.EncodeToString(secret)
 
-	cmd := exec.Command("bun", "run", "src/index.ts")
-	cmd.Dir = cfg.Dir
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		fmt.Sprintf("PORT=%d", cfg.Port),
 		fmt.Sprintf("RENDEZVOUS_TOKEN_SECRET=%s", secretHex),
 		fmt.Sprintf("HEDERA_RELAY_OPERATOR_ACCOUNT_ID=%s", cfg.Payee),
 	)
+	if cfg.DataRelay {
+		env = append(env,
+			"DATA_RELAY_ENABLED=1",
+			fmt.Sprintf("DATA_RELAY_INTERNAL_API_URL=%s", cfg.InternalAPIURL),
+			fmt.Sprintf("DATA_RELAY_PRICE_PER_BYTE=%s", cfg.PricePerByte),
+		)
+	}
+
+	cmd := exec.Command("bun", "run", "src/index.ts")
+	cmd.Dir = cfg.Dir
+	cmd.Env = env
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 

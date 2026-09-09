@@ -154,7 +154,16 @@ func main() {
 	payee := flag.String("payee", "", "Hedera account id to receive rendezvous fees (required with -meter)")
 	sidecarDir := flag.String("sidecar-dir", "../relay-sidecar", "relay-sidecar project directory (required with -meter)")
 	sidecarPort := flag.Int("sidecar-port", 7891, "local port relay-sidecar listens on")
+	dataRelayFlag := flag.Bool("data-relay", false, "offer a bytes-metered data-plane relay (docs/adr/0008); requires -meter (payment lives in relay-sidecar too)")
+	dataHost := flag.String("data-host", "0.0.0.0", "host interface data-relay session sockets bind to — needs to be reachable by both peers, unlike -addr's rendezvous listener")
+	internalPort := flag.Int("internal-port", 7895, "loopback-only port relay-sidecar calls to allocate a data-relay session after payment settles")
+	pricePerByte := flag.String("price-per-byte", "1", "atomic USDC price per byte forwarded, passed through to relay-sidecar's DynamicPrice (docs/adr/0008); ignored unless -data-relay is set")
 	flag.Parse()
+
+	if *dataRelayFlag && !*meter {
+		fmt.Fprintln(os.Stderr, "error: -data-relay requires -meter (relay-sidecar handles both rendezvous and data-relay payment)")
+		os.Exit(1)
+	}
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -169,8 +178,22 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: -payee is required with -meter")
 			os.Exit(1)
 		}
+		var dr *dataRelay
+		psConfig := paySidecarConfig{Dir: *sidecarDir, Port: *sidecarPort, Payee: *payee}
+		if *dataRelayFlag {
+			dr = newDataRelay()
+			go func() {
+				if err := serveInternalAPI(dr, *internalPort, *dataHost); err != nil {
+					fmt.Fprintln(os.Stderr, "data-relay: internal API stopped:", err)
+				}
+			}()
+			psConfig.DataRelay = true
+			psConfig.InternalAPIURL = fmt.Sprintf("http://127.0.0.1:%d", *internalPort)
+			psConfig.PricePerByte = *pricePerByte
+		}
+
 		fmt.Fprintln(os.Stderr, "starting relay-sidecar...")
-		ps, err := startPaySidecar(paySidecarConfig{Dir: *sidecarDir, Port: *sidecarPort, Payee: *payee})
+		ps, err := startPaySidecar(psConfig)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -178,6 +201,9 @@ func main() {
 		defer ps.Stop()
 		srv = NewMeteredServer(ps.secret)
 		log.Printf("metering enabled: rendezvous-token required, relay-sidecar on :%d", *sidecarPort)
+		if *dataRelayFlag {
+			log.Printf("data-relay enabled: sessions bind on %s, internal API on 127.0.0.1:%d", *dataHost, *internalPort)
+		}
 	}
 
 	if err := srv.Serve(ln); err != nil {
