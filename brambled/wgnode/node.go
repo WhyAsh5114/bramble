@@ -225,6 +225,23 @@ func (n *Node) RemovePeer(publicKeyHex string) error {
 	return n.dev.IpcSet(conf)
 }
 
+// SetPersistentKeepalive makes this node send an unsolicited packet to
+// publicKeyHex every seconds, even with nothing to transmit. Safe to call
+// before or after AddPeer for the same key — UAPI "set" merges fields into
+// a peer entry by public_key rather than replacing it.
+//
+// This exists for docs/adr/0008's data-plane relay: the relay learns each
+// side's address purely from outbound UDP traffic it happens to observe,
+// but WireGuard's own protocol never has the passive/responder side send
+// anything until it's received the initiator's handshake first — normally
+// fine, but fatal here, since the relay would never learn where to forward
+// to. Persistent keepalive is what makes both sides proactively announce
+// themselves to the relay regardless of who initiates the real handshake.
+func (n *Node) SetPersistentKeepalive(publicKeyHex string, seconds int) error {
+	conf := fmt.Sprintf("public_key=%s\npersistent_keepalive_interval=%d\n", publicKeyHex, seconds)
+	return n.dev.IpcSet(conf)
+}
+
 // InterfaceName returns the real OS interface name this node configured
 // (e.g. "utun7"), or "" in netstack mode. Exposed so callers can log it —
 // e.g. so a runbook can say exactly which interface to inspect with

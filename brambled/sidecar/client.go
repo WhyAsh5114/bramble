@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,6 +70,56 @@ func (m *Manager) RendezvousToken() (*RendezvousTokenResponse, error) {
 
 	var out RendezvousTokenResponse
 	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding sidecar response: %w", err)
+	}
+	return &out, nil
+}
+
+// DataRelaySessionResponse mirrors sidecar/src/routes/payments.ts's
+// POST /data-relay-session response — the sidecar has already paid a real,
+// bytes-priced x402/Hedera fee to the chosen data relay's payment sidecar
+// (docs/adr/0008). Port is where both peers must point their WireGuard
+// peer-endpoint; SessionID is opaque to brambled beyond logging it.
+type DataRelaySessionResponse struct {
+	SessionID      string `json:"sessionId"`
+	Port           int    `json:"port"`
+	ExpiresAt      int64  `json:"expiresAt"`
+	SettlementTxID string `json:"settlementTxId,omitempty"`
+}
+
+// DataRelaySession asks the local sidecar to buy a bytes-metered data-relay
+// session from sidecarURL (a relay-sidecar's public base URL, chosen by
+// brambled's own relay-selection logic — see brambled/datarelay.Pick) for
+// bytes worth of forwarding. Only the side of a connection flagged with
+// -relay calls this; the other side just receives the resulting relayHost:
+// port as an ordinary rendezvous candidate (docs/adr/0008).
+func (m *Manager) DataRelaySession(sidecarURL string, sessionBytes int64) (*DataRelaySessionResponse, error) {
+	reqBody, err := json.Marshal(struct {
+		SidecarURL string `json:"sidecarUrl"`
+		Bytes      int64  `json:"bytes"`
+	}{SidecarURL: sidecarURL, Bytes: sessionBytes})
+	if err != nil {
+		return nil, fmt.Errorf("encoding request: %w", err)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/data-relay-session", m.Port)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("calling sidecar: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading sidecar response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sidecar returned %d: %s", resp.StatusCode, respBody)
+	}
+
+	var out DataRelaySessionResponse
+	if err := json.Unmarshal(respBody, &out); err != nil {
 		return nil, fmt.Errorf("decoding sidecar response: %w", err)
 	}
 	return &out, nil

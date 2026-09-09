@@ -28,10 +28,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -40,6 +43,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
+	"github.com/WhyAsh5114/bramble/brambled/datarelay"
 	"github.com/WhyAsh5114/bramble/brambled/gateway"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
@@ -204,6 +208,173 @@ func (f *forwardFlag) Set(value string) error {
 	return nil
 }
 
+// dataRelayFlag accumulates repeated -data-relay label=sidecar-url flags —
+// the pool of candidate data relays brambled picks between for any peer
+// flagged with -relay-peer (docs/adr/0008, "Relay selection").
+type dataRelayFlag map[string]string
+
+func (d dataRelayFlag) String() string { return fmt.Sprintf("%v", map[string]string(d)) }
+
+func (d dataRelayFlag) Set(value string) error {
+	label, sidecarURL, ok := strings.Cut(value, "=")
+	if !ok || label == "" || sidecarURL == "" {
+		return fmt.Errorf("expected label=sidecar-url, got %q", value)
+	}
+	d[label] = sidecarURL
+	return nil
+}
+
+// relayPeerFlag accumulates repeated -relay-peer label flags: tracked peer
+// labels that should use the data-relay pool above instead of publishing
+// this node's own real candidate — the explicit, operator-chosen substitute
+// for hole-punch-failure detection this project doesn't implement (see
+// docs/adr/0008's "How does brambled decide to use the data relay?").
+type relayPeerFlag map[string]bool
+
+func (r relayPeerFlag) String() string { return fmt.Sprintf("%v", map[string]bool(r)) }
+
+func (r relayPeerFlag) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("expected a tracked -peer label, got empty string")
+	}
+	r[value] = true
+	return nil
+}
+
+// priceQuote mirrors relay-sidecar's GET /price response (docs/adr/0008).
+type priceQuote struct {
+	Asset  string `json:"asset"`
+	Amount string `json:"amount"`
+}
+
+// quoteDataRelay fetches label's advertised per-byte price and measures the
+// round trip as a latency proxy — both inputs to datarelay.Pick's
+// composite score (docs/adr/0008, "Relay selection").
+func quoteDataRelay(label, sidecarURL string) (datarelay.Quote, error) {
+	start := time.Now()
+	resp, err := http.Get(strings.TrimRight(sidecarURL, "/") + "/price")
+	latency := time.Since(start)
+	if err != nil {
+		return datarelay.Quote{}, fmt.Errorf("querying %s price: %w", label, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return datarelay.Quote{}, fmt.Errorf("%s returned HTTP %d for /price", label, resp.StatusCode)
+	}
+	var q priceQuote
+	if err := json.NewDecoder(resp.Body).Decode(&q); err != nil {
+		return datarelay.Quote{}, fmt.Errorf("decoding %s price quote: %w", label, err)
+	}
+	price, err := strconv.ParseInt(q.Amount, 10, 64)
+	if err != nil {
+		return datarelay.Quote{}, fmt.Errorf("%s price %q is not an integer: %w", label, q.Amount, err)
+	}
+	return datarelay.Quote{Label: label, SidecarURL: sidecarURL, PricePerByte: price, LatencyMS: latency.Milliseconds()}, nil
+}
+
+// dataRelaySession is what buyDataRelaySession hands back to the
+// EndpointResolver closure — everything it needs to log and to build the
+// candidate string it publishes in place of this node's real address.
+type dataRelaySession struct {
+	id             string
+	relayLabel     string
+	candidate      string
+	settlementTxID string
+}
+
+// buyDataRelaySession queries every candidate in pool for a price quote,
+// picks the best via datarelay.Pick, buys a session from it through the
+// local sidecar, and derives the relay's public data-relay candidate
+// address from the winning sidecar URL's hostname — same-machine
+// co-location between a relay-sidecar and its Go relay is an assumed,
+// documented deployment convention (docs/adr/0008), not something
+// discovered dynamically.
+func buyDataRelaySession(m *sidecar.Manager, pool dataRelayFlag, bytes int64) (*dataRelaySession, error) {
+	quotes := make([]datarelay.Quote, 0, len(pool))
+	for label, sidecarURL := range pool {
+		q, err := quoteDataRelay(label, sidecarURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
+			continue
+		}
+		quotes = append(quotes, q)
+	}
+	if len(quotes) == 0 {
+		return nil, fmt.Errorf("no -data-relay candidate returned a usable price quote")
+	}
+
+	winner := datarelay.Pick(quotes)
+	resp, err := m.DataRelaySession(winner.SidecarURL, bytes)
+	if err != nil {
+		return nil, fmt.Errorf("buying session from %s: %w", winner.Label, err)
+	}
+
+	relayURL, err := url.Parse(winner.SidecarURL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s sidecar URL %q: %w", winner.Label, winner.SidecarURL, err)
+	}
+
+	return &dataRelaySession{
+		id:             resp.SessionID,
+		relayLabel:     winner.Label,
+		candidate:      net.JoinHostPort(relayURL.Hostname(), strconv.Itoa(resp.Port)),
+		settlementTxID: resp.SettlementTxID,
+	}, nil
+}
+
+// dataRelayKeepaliveSeconds governs how often a relay-routed peer sends an
+// unsolicited packet to the relay (see relayRoutedEndpoint's SetPersistentKeepalive
+// call) — needs to be well under the data-relay session TTL and short
+// enough for a live demo to feel responsive, not tuned for production NAT
+// mapping lifetimes (docs/adr/0008).
+const dataRelayKeepaliveSeconds = 5
+
+// keepaliveSetter is satisfied by *wgnode.Node — narrowed so
+// relayRoutedEndpoint's signature only asks for what it actually uses.
+type keepaliveSetter interface {
+	SetPersistentKeepalive(publicKeyHex string, seconds int) error
+}
+
+// relayRoutedEndpoint is the EndpointResolver path for a -relay-peer
+// (docs/adr/0008). It buys a session, then returns the relay's own address
+// as this node's peer-endpoint — never the peer's candidate from Exchange's
+// return value. That distinction matters: both sides of a relay-routed
+// connection must end up pointed at the identical relay socket for the
+// relay's address-learning to fill both of its slots, and the peer's own
+// published candidate (which could be "" for a peer with no direct address
+// at all — the exact topology -relay-peer exists for) is irrelevant to
+// where this node sends next. Exchange is still called so the peer learns
+// this node's candidate (the relay address) the normal way.
+//
+// It also arms a persistent keepalive on this peer before returning: the
+// relay only learns an address from outbound traffic it observes, but
+// WireGuard's own protocol never has the passive/responder side send
+// anything on its own — without this, whichever side doesn't happen to
+// initiate the real handshake would never register with the relay at all,
+// and nothing would ever forward in that direction. Calling it here, before
+// admission.Loop's own AddPeer runs, is safe and deterministic: WireGuard's
+// UAPI merges fields into a peer entry by public key rather than requiring
+// them all in one call.
+func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relayAddr, own, peerPubkey, token string, ttl time.Duration) (*netip.AddrPort, error) {
+	session, err := buyDataRelaySession(m, pool, sessionBytes)
+	if err != nil {
+		return nil, fmt.Errorf("buying data-relay session: %w", err)
+	}
+	relayEndpoint, err := netip.ParseAddrPort(session.candidate)
+	if err != nil {
+		return nil, fmt.Errorf("data-relay candidate %q unparseable: %w", session.candidate, err)
+	}
+	if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
+		return nil, fmt.Errorf("arming persistent keepalive for %s: %w", peerPubkey, err)
+	}
+	fmt.Fprintf(os.Stderr, "data-relay: bought session %s from %s (tx %s), routing %s via %s\n",
+		session.id, session.relayLabel, session.settlementTxID, peerPubkey, session.candidate)
+	if _, err := rendezvous.Exchange(relayAddr, own, peerPubkey, session.candidate, token, ttl); err != nil {
+		return nil, err
+	}
+	return &relayEndpoint, nil
+}
+
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
@@ -218,11 +389,16 @@ func runServe(args []string) error {
 	maxStale := fs.Duration("max-stale", 0, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; 0 disables this and fails open forever (see admission package doc)")
 	privateKeyHex := fs.String("private-key", os.Getenv("BRAMBLE_PRIVATE_KEY"), "hex-encoded WireGuard private key (generated ephemerally if unset — not persisted)")
 	ownLabel := fs.String("label", "", "this node's own ENS label — required to resolve its own acl-granters record for gateway enforcement (docs/adr/0005-acl-record-schema.md)")
-	gatewayPort := fs.Uint("gateway-port", 7891, "fixed TCP port this node's CONNECT gateway listener binds to on its own tunnel address")
+	gatewayPort := fs.Uint("gateway-port", 7892, "fixed TCP port this node's CONNECT gateway listener binds to on its own tunnel address (7892, not 7891 — that's relay-sidecar's default port, and both can end up on the same machine during local dev/testing, docs/adr/0008)")
 	interfaceName := fs.String("interface", "", "real OS interface name (auto-picked if unset: \"utun\" on macOS, \"bramble0\" on linux)")
 	netstackMode := fs.Bool("netstack", false, "use a virtual (gVisor) TUN instead of a real OS interface — testing/local dev only, never the demo")
 	rendezvousAddr := fs.String("rendezvous", "", "rendezvous relay address (host:port) for candidate exchange; omit for static/dial-in-first peers only")
 	myCandidate := fs.String("my-candidate", "", "this node's own reachable address (ip:port) to publish via the rendezvous relay, e.g. a VPS's public IP:listen-port")
+	dataRelays := dataRelayFlag{}
+	fs.Var(dataRelays, "data-relay", "candidate data-plane relay: label=relay-sidecar-base-url (repeatable) — the pool -relay-peer picks from (docs/adr/0008)")
+	relayPeers := relayPeerFlag{}
+	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — an explicit substitute for hole-punch-failure detection, which this project doesn't implement (docs/adr/0008)")
+	relaySessionBytes := fs.Int64("relay-session-bytes", 10_000, "byte allotment to buy per data-relay session (docs/adr/0008) — size this to the transfer you're about to demo; running out mid-transfer needs a fresh session, not an automatic top-up. At the -price-per-byte default (1 atomic USDC/byte), the default here is 0.01 USDC per session — raise deliberately, since cost scales linearly with this")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -240,6 +416,14 @@ func runServe(args []string) error {
 		if _, ok := peerAddrByLabel[fwd.GatewayLabel]; !ok {
 			return fmt.Errorf("-forward %d=%s:%s: %q is not a tracked -peer — a forward target must be a peer this node admits", fwd.LocalPort, fwd.GatewayLabel, fwd.Service, fwd.GatewayLabel)
 		}
+	}
+	for label := range relayPeers {
+		if _, ok := peerAddrByLabel[label]; !ok {
+			return fmt.Errorf("-relay-peer %q is not a tracked -peer", label)
+		}
+	}
+	if len(relayPeers) > 0 && len(dataRelays) == 0 {
+		return fmt.Errorf("-relay-peer requires at least one -data-relay label=sidecar-url")
 	}
 
 	prefix, err := netip.ParsePrefix(*localPrefix)
@@ -307,8 +491,8 @@ func runServe(args []string) error {
 	}
 
 	if *rendezvousAddr != "" {
-		relayAddr, own, ownCandidate := *rendezvousAddr, ownPubkey, *myCandidate
-		loop.EndpointResolver = func(_ admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
+		relayAddr, own, defaultCandidate := *rendezvousAddr, ownPubkey, *myCandidate
+		loop.EndpointResolver = func(p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
 			// One rendezvous-token per Exchange call, fetched fresh right
 			// before dialing — docs/adr/0007. Against an unmetered relay
 			// (the sidecar has no payment config), or if the sidecar simply
@@ -323,7 +507,12 @@ func runServe(args []string) error {
 					fmt.Fprintf(os.Stderr, "rendezvous: paid for candidate exchange with %s (tx %s)\n", peerPubkey, resp.SettlementTxID)
 				}
 			}
-			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, ownCandidate, token, *ttl)
+
+			if relayPeers[p.Label] {
+				return relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayAddr, own, peerPubkey, token, *ttl)
+			}
+
+			candidate, err := rendezvous.Exchange(relayAddr, own, peerPubkey, defaultCandidate, token, *ttl)
 			if err != nil {
 				return nil, err
 			}
