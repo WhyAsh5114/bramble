@@ -24,14 +24,14 @@ Three of their four wanted directions land:
 
 | Their words | Your build |
 |---|---|
-| "Bring the Key Ring to hosts with no USB port: enroll a VPS, a CI runner, or a hosted agent" | Exactly the enrollment flow. The VPS holds its WireGuard private key encrypted under the Key Ring |
+| "Bring the Key Ring to hosts with no USB port: enroll a VPS, a CI runner, or a hosted agent" | **Corrected Sept 10, after a real physical run:** does not hold for the node's own WireGuard key — cross-host `ring` decrypt is verified (on real hardware, against a real second machine) to not work with `wallet-cli` as shipped. Retargeted instead at the admin's own granter key (`adr/0005`'s ACL-capability secret), which is same-host by design and never needed to cross hosts in the first place |
 | "Agents that use secrets they cannot leak: a broker hands out scoped capabilities, never the API key" | The agent gets a network position, not a credential. Its node key is worthless unless the registry authorizes it |
-| "Human-in-the-loop agents where Ledger approves high-risk actions before funds move or permissions escalate" | Enrolling or revoking a device is a permission escalation, confirmed on the device |
+| "Human-in-the-loop agents where Ledger approves high-risk actions before funds move or permissions escalate" | Two flows, not one: enrolling/revoking a device (permission grant/removal), and an admitted agent's live ACL-scope escalation — an out-of-scope `CONNECT` is denied, the admin approves a wider grant on the physical device, the identical retry succeeds live. The second is the more literal match for "permissions escalate" |
 | "Agents that pay for what they use... including x402-style patterns" | Relay bandwidth payment |
 
 **Critical constraint, verified:** the first two bullets "must be built on the Ledger Agent Stack, and in particular on the Ledger Key Ring CLI (`wallet-cli ring`)."
 
-**What `ring` actually is** (verified Sept 4): `ring init / encrypt / decrypt / keys / destroy`, LKRP-backed **encryption** of files and text. It is not a general signing tool. See `docs/adr/0001-ledger-ring-vs-send-split.md` for the full split and its LKRP rotation limitation.
+**What `ring` actually is** (verified Sept 4, physically confirmed Sept 10): `ring init / encrypt / decrypt / keys / destroy`, LKRP-backed **encryption** of files and text, hardware-rooted and genuinely headless *on the machine that provisioned it* — not a general signing tool, and not (as first assumed) a mechanism for shipping ciphertext to an arbitrary new host. See `docs/adr/0001-ledger-ring-vs-send-split.md` for the full split, the Sept 10 physical-run findings, and its LKRP rotation limitation.
 
 ## Hedera — AI & Agentic Payments
 

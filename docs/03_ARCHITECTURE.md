@@ -78,8 +78,8 @@ Both are relays in the same sense: they forward opaque blobs, cannot inject a de
 
 An agent on a VPS or CI runner:
 
-1. An already-enrolled identity, trusted by the destination host's own `acl-granters` list, vouches for `agent-1.acme.eth` to reach exactly one symbolic service name — published on-chain only as an ECDH digest, never the name itself (see `adr/0005-acl-record-schema.md`) — with a short expiry. Confirmed on the Ledger.
-2. The node's WireGuard private key is stored encrypted under `wallet-cli ring` on the host.
+1. An already-enrolled identity, trusted by the destination host's own `acl-granters` list, vouches for `agent-1.acme.eth` to reach exactly one symbolic service name — published on-chain only as an ECDH digest, never the name itself (see `adr/0005-acl-record-schema.md`) — with a short expiry. Confirmed on the Ledger: the granter's ACL-capability key is itself encrypted at rest under `wallet-cli ring` on the admin's machine (see `adr/0001`'s "Pivot" section — same-host by design, not shipped to any headless host), and the grant transaction is signed via `wallet-cli send` with physical on-device confirmation.
+2. If the agent later needs more than its current grant, the same loop runs live: the out-of-scope request is denied and logged by the gateway, the admin approves a wider grant on the physical device, and the agent's identical retry succeeds on the next attempt — no restart, since ACL state is resolved fresh on every request.
 3. The agent reaches only what its ACL permits. Every peer enforces this independently.
 4. Revocation from the admin's wallet cuts it off; peers drop the connection on next resolve.
 
