@@ -7,7 +7,7 @@ The hackathon demo is one concrete access lifecycle: a thin health-check worker 
 ## Why the integrations matter
 
 - **ENSv2** is the authorization source. Permissioned registries, per-name resolvers, and Enhanced Access Control separate enrollment, rotation, revocation, ACL, and relay-registration rights.
-- **Ledger** protects the administrator's capability-granting key with Key Ring and is the intended physical approval boundary for widening an agent's ACL. The current implementation status and hardware findings are documented in [ADR 0001](docs/adr/0001-ledger-ring-vs-send-split.md) and [Ledger DX feedback](docs/12_LEDGER_DX_FEEDBACK.md).
+- **Ledger** gates two different things physically, on real hardware: enrolling a new device is signed directly by the device itself (a from-scratch `@ledgerhq/hw-app-eth` signer, since `wallet-cli send` doesn't support Sepolia), and the administrator's ACL-granting key lives encrypted under a Key Ring, decrypted headlessly per grant, never as plaintext. Full status, hardware findings, and Ledger DX feedback are documented in [ADR 0001](docs/adr/0001-ledger-ring-vs-send-split.md) and [Ledger DX feedback](docs/12_LEDGER_DX_FEEDBACK.md).
 - **Hedera** settles x402 payments through Blocky402 for relay access. Rendezvous uses a fixed session fee; data relays sell explicit byte allotments at a published price.
 
 ## Architecture

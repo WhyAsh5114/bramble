@@ -10,7 +10,7 @@ Use this as form copy after the final live run. Replace every bracketed item and
 
 **Short description:** Bramble is a WireGuard mesh whose device identities and scoped service grants live in an ENSv2 registry. Peers resolve authorization independently, so a rendezvous or data relay cannot add a member. Agents reach private services without receiving the backend credential; a human can approve broader access on Ledger, while x402 pays independent relays per session or byte allotment on Hedera.
 
-**Repository:** [public GitHub URL]
+**Repository:** https://github.com/WhyAsh5114/bramble (confirmed public)
 
 **Demo video:** [2–4 minute video URL]
 
@@ -20,7 +20,7 @@ Use this as form copy after the final live run. Replace every bracketed item and
 
 Bramble uses an ENSv2 Permissioned Registry as the network's authorization source. Each device is a subname with its own Permissioned Resolver. Enhanced Access Control gives separate accounts narrowly scoped enrollment, key-rotation, revocation, ACL, and relay-registration rights. Each peer re-resolves the registry and updates its own WireGuard peer table; changing chain state changes live network access without restarting a coordinator. Relay endpoints are isolated in a separate registry so device records never publish network topology.
 
-**Evidence to link:** `sidecar/src/ens/client.ts`, `admincli/src/`, `brambled/admission/`, Gate 2.1 transaction evidence, and the video timestamps for deny/grant/revoke.
+**Evidence to link:** `sidecar/src/ens/client.ts`, `admincli/src/`, `brambled/admission/`, Gate 2.1 transaction evidence, the dashboard's `/registry` page (both registries, per-device resolvers), and the video timestamps for deny/grant/revoke.
 
 ## Ledger — AI Agents x Ledger
 
@@ -36,7 +36,7 @@ We also provide detailed developer feedback from real Nano S Plus and wallet-cli
 
 Bramble runs an x402-gated relay service on Hedera testnet through the Blocky402 facilitator. A node discovers relay payment URLs through ENS, pays testnet USDC for a rendezvous token or explicit data-relay byte allotment, and receives the forwarding service without an API key or subscription. Different allotment sizes produce different prices. The client applies per-byte, per-session, asset, network, and per-payment limits before signing. The two-relay demo selects by price/latency and recovers through the backup after the primary process is killed.
 
-**Evidence to link:** `relay-sidecar/src/`, `sidecar/src/payments/`, `brambled/live_demo.go`, transaction IDs/HashScan URLs, and the paid-request video timestamp.
+**Evidence to link:** `relay-sidecar/src/`, `sidecar/src/payments/`, `brambled/live_demo.go`, transaction IDs/HashScan URLs, the dashboard's `/payments` page (live mirror-node settlement feed), and the paid-request video timestamp.
 
 ## Technical summary
 
@@ -44,8 +44,8 @@ Bramble runs an x402-gated relay service on Hedera testnet through the Blocky402
 - TypeScript/Bun ENSv2 and x402 sidecars.
 - ENSv2 Sepolia Permissioned Registry, Permissioned Resolvers, and EAC.
 - Hedera testnet USDC settlement through Blocky402.
-- Ledger wallet-cli/Key Ring for the final human approval path.
-- Next.js read-only dashboard for device, ACL, and relay state.
+- Ledger Key Ring for the granter's capability key, and a from-scratch `@ledgerhq/hw-app-eth` signer for device-backed enrollment.
+- Next.js read-only dashboard for device, ACL, relay, live Hedera settlement, and ENS registry state.
 
 ## Known limitations
 
