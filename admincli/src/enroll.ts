@@ -11,9 +11,12 @@
 // this command already deployed the resolver they're writing to.
 //
 // Usage: bun run enroll.ts <device-label> <pubkey> [expiry-years=10]
+//
+// All three writes below sign through the Ledger (Gate 3.1,
+// docs/05_BUILD_PLAN.md) via wallet-cli send — three separate physical
+// confirmations, one per transaction, no software fallback.
 import {
-  createWalletClient,
-  http,
+  type Address,
   encodeAbiParameters,
   encodeFunctionData,
   parseEventLogs,
@@ -24,7 +27,6 @@ import {
 } from 'viem'
 import { normalize, packetToBytes } from 'viem/ens'
 import {
-  RPC_URL,
   tailnetName,
   tailnetRegistry,
   VERIFIABLE_FACTORY,
@@ -32,8 +34,10 @@ import {
   ALL_ROLES,
   REGISTRATION_ROLE_BITMAP,
 } from '../../sidecar/src/ens/config'
-import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
+import { publicClient } from './setup'
 import { registryWriteAbi, resolverWriteAbi } from './roles'
+import { ledgerAddressFromEnv } from './ledger-address'
+import { sendViaDevice } from './ledger-send'
 
 const verifiableFactoryAbi = parseAbi([
   'function deployProxy(address implementation, uint256 salt, bytes data) returns (address proxy)',
@@ -48,11 +52,22 @@ async function main() {
   }
   const expiryYears = expiryYearsArg ? Number(expiryYearsArg) : 10
 
-  const account = accountFromEnv()
-  const wallet = createWalletClient({ account, chain: hackathonSepolia, transport: http(RPC_URL) })
+  const callerAddress = ledgerAddressFromEnv()
 
-  async function writeAndWait(label: string, args: Parameters<typeof wallet.writeContract>[0]) {
-    const hash = await wallet.writeContract(args)
+  async function writeAndWait(
+    label: string,
+    call: {
+      address: Address
+      abi: Parameters<typeof encodeFunctionData>[0]['abi']
+      functionName: string
+      args: readonly unknown[]
+    }
+  ) {
+    const data = encodeFunctionData({ abi: call.abi, functionName: call.functionName, args: call.args } as Parameters<
+      typeof encodeFunctionData
+    >[0])
+    console.log(`   confirm on the Ledger device (${label})...`)
+    const hash = await sendViaDevice(call.address, data)
     console.log(`   tx (${label}): ${hash}`)
     const receipt = await publicClient.waitForTransactionReceipt({ hash })
     if (receipt.status !== 'success') throw new Error(`${label} reverted on-chain`)
@@ -65,14 +80,14 @@ async function main() {
     keccak256(
       encodeAbiParameters(
         [{ type: 'bytes32' }, { type: 'address' }, { type: 'uint256' }],
-        [keccak256(stringToHex('OwnedResolver')), account.address, version]
+        [keccak256(stringToHex('OwnedResolver')), callerAddress, version]
       )
     )
   )
   const initData = encodeFunctionData({
     abi: resolverInitAbi,
     functionName: 'initialize',
-    args: [[{ account: account.address, roleBitmap: ALL_ROLES }], []],
+    args: [[{ account: callerAddress, roleBitmap: ALL_ROLES }], []],
   })
   const deployReceipt = await writeAndWait('deploy resolver proxy', {
     address: VERIFIABLE_FACTORY,
@@ -95,7 +110,7 @@ async function main() {
     address: tailnetRegistry(),
     abi: registryWriteAbi,
     functionName: 'register',
-    args: [deviceLabel, account.address, zeroAddress, resolverAddress, REGISTRATION_ROLE_BITMAP, farExpiry],
+    args: [deviceLabel, callerAddress, zeroAddress, resolverAddress, REGISTRATION_ROLE_BITMAP, farExpiry],
   })
 
   console.log('\n[3/3] Writing initial pubkey...')

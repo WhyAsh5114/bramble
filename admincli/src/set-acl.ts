@@ -24,16 +24,21 @@
 // ring-vs-send-split.md's "Pivot" section): it's decrypted in-memory,
 // per call, from a wallet-cli Key Ring-encrypted file via
 // provision-granter-key.ts. Run that once first.
+//
+// The registry write itself — the "widen an agent's ACL scope" half of
+// Gate 3.1 — also signs through the Ledger via wallet-cli send, requiring
+// its own physical confirmation, separate from the ring decrypt above.
 import { readFileSync } from 'node:fs'
-import { createWalletClient, http, toHex } from 'viem'
+import { encodeFunctionData, toHex } from 'viem'
 import { normalize, packetToBytes } from 'viem/ens'
 import { x25519 } from '@noble/curves/ed25519'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { RPC_URL, tailnetName } from '../../sidecar/src/ens/config'
-import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
+import { tailnetName } from '../../sidecar/src/ens/config'
+import { publicClient } from './setup'
 import { resolverWriteAbi, aclDigestECDH } from './roles'
 import { ringDecrypt } from './ledger-ring'
 import { GRANTER_KEY_RING_PATH } from './granter-key-path'
+import { sendViaDevice } from './ledger-send'
 
 async function main() {
   const [deviceLabel, gatewayLabel, granterLabel, servicesArg] = process.argv.slice(2)
@@ -77,9 +82,6 @@ async function main() {
   console.log(`gateway: ${gatewayFullname}`)
   console.log(`services: ${serviceNames.join(', ') || '(none)'} -> digests: ${newDigests.join(',') || '(empty)'}`)
 
-  const account = accountFromEnv()
-  const wallet = createWalletClient({ account, chain: hackathonSepolia, transport: http(RPC_URL) })
-
   const fullname = normalize(`${deviceLabel}.${tailnetName()}`)
   const resolverAddress = await publicClient.getEnsResolver({ name: fullname })
   if (!resolverAddress) throw new Error(`no resolver found for ${fullname}`)
@@ -96,12 +98,13 @@ async function main() {
   const value = Array.from(new Set([...existingDigests, ...newDigests])).join(',')
   console.log(`current acl digests for ${fullname}: ${before || '(unset)'}`)
 
-  const hash = await wallet.writeContract({
-    address: resolverAddress,
+  console.log('   confirm on the Ledger device...')
+  const data = encodeFunctionData({
     abi: resolverWriteAbi,
     functionName: 'setText',
     args: [dnsName, 'acl', value],
   })
+  const hash = await sendViaDevice(resolverAddress, data)
   console.log(`   tx: ${hash}`)
   const receipt = await publicClient.waitForTransactionReceipt({ hash })
   if (receipt.status !== 'success') throw new Error('setText reverted on-chain')
