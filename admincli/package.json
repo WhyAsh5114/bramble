@@ -6,6 +6,7 @@
     "enroll": "bun run src/enroll.ts",
     "rotate": "bun run src/rotate.ts",
     "revoke": "bun run src/revoke.ts",
+    "provision-granter-key": "bun run src/provision-granter-key.ts",
     "set-acl": "bun run src/set-acl.ts",
     "set-acl-granters": "bun run src/set-acl-granters.ts",
     "grant-role": "bun run src/grant-role.ts",

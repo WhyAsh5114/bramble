@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .tmp
+admincli/granter-key.ring
 
 node_modules
 
