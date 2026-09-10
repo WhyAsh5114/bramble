@@ -5,7 +5,7 @@ Written for Ledger's own submission requirement (`developers.ledger.com/ethonlin
 ## What worked well
 
 - `genuine-check`, `ring init`, `ring encrypt`/`decrypt`, and `account discover` all did exactly what their `--help` text says, on the first or second try. The CLI's JSON output mode (`--output json`) is genuinely pleasant to script against — structured `{ok, data}` / `{ok, error}` envelopes throughout, no ad-hoc text parsing needed.
-- `send --help`'s `--data` flag (arbitrary EVM calldata, not just native transfers) is exactly what a project like this needs to sign contract calls, and it's documented clearly once you look.
+- `send --help`'s `--data` flag (arbitrary EVM calldata, not just native transfers) is exactly what a project like this needs to sign contract calls, and it's documented clearly once you look. **Caveat, Sept 11: this only works on mainnets — see Gap 4.**
 - Error messages are actionable, not just descriptive — e.g. the missing-`WALLET_PASS` error prints the exact `security find-generic-password` / `secret-tool` command to fix it, for the right OS.
 
 ## Gap 1 — `ring init` requires the **Ledger Sync** app to be open, but nothing says so
@@ -41,3 +41,22 @@ The workshop Q&A ("Ledger Tracks Explained," Sept 7) actually describes somethin
 ## Gap 3 — the local password (`WALLET_PASS`) has no setup command
 
 First run of any `ring` command demands `WALLET_PASS` be set (env var or OS keychain), but no `wallet-cli` command sets or initializes it — you're expected to just pick a value and supply it via `security add-generic-password` (macOS) or `secret-tool store` (Linux) yourself, worked out from reading the error message rather than any onboarding flow. A `wallet-cli auth set-password` (or similar) that writes it to the right OS-native store for you would remove this step entirely.
+
+## Gap 4 — `send` on a testnet fails with an opaque `FeeNotLoaded`, not "testnet sends unsupported"
+
+We built our ACL-escalation demo (an admin approving a widened agent permission, physically confirmed on-device) around `wallet-cli send --data <calldata>` signing a Sepolia testnet transaction. It never reached the device. Every attempt — a plain 0 ETH transfer with no calldata at all, `--dry-run` and without — failed identically and immediately, before any on-device prompt:
+
+```
+{"ok":false,"error":{"kind":"command-execution","name":"CommandExecutionError","message":"FeeNotLoaded","command":"send"}}
+```
+
+`account discover ethereum:sepolia` and `balances` both worked correctly against the same account first (real address, real 0.05 testnet ETH balance confirmed) — so this isn't a broken account or network mismatch. We traced `FeeNotLoaded` into `ledger-live`'s own source (`libs/ledger-wallet-framework/src/errors.ts`, referenced from `coin-evm/src/prepareTransaction.ts`) to confirm it's a real, intentional error class (fee/gas data never populated), not a crash — but nothing in `send --help`, the error itself, or `ring`/`send`'s own docs says *why* fees never populate here.
+
+The actual answer exists, but only in one place: Ledger's own `agent-skills` repo, `skills/wallet-cli/wallet-cli-usage/SKILL.md`'s "Out of scope" section states plainly that `send`/`receive`/`operations`/`swap execute` on testnets and L2s are not supported yet. That's the right information, but it's scoped to an AI-agent skill file a human developer reading `wallet-cli --help` or the package README would have no reason to find. We only found it by searching Ledger's GitHub org broadly after independently ruling out every other explanation (bad account, bad network, sandbox networking, our own calldata).
+
+**Impact for this project specifically:** the intended demo shot — a human approving an agent's widened permission with one physical button press, the actual on-chain grant, live on Sepolia — isn't achievable with shipped `wallet-cli`. We kept the Ledger-gated part of that flow (the granter's private key is decrypted from `wallet-cli ring`, a real on-device-rooted step) but had to fall back to software signing for the transaction broadcast itself, since re-implementing EIP-1559 signing against `@ledgerhq/hw-app-eth` directly, untested, two days before submission, was a worse risk than an honest scope note.
+
+**Suggestions:**
+- Have `send` (and `receive`/`operations`/`swap execute`) fail fast on a testnet/L2 account with a named, specific error — `TestnetSendNotSupported` or similar — instead of proceeding into fee estimation and failing there with a generic message that looks like a bug in the caller's transaction, not a scope boundary.
+- Say it in `send --help` and the package README, not only in the AI-agent skill file — a developer reading the CLI's own docs currently has no way to learn this without trial and error.
+- If testnet support is on a roadmap, even a rough timeline would have changed our architecture decision going in, rather than costing a day of debugging plus a build/revert cycle discovered only after `account discover`/`balances` had already worked and looked fully supported.
