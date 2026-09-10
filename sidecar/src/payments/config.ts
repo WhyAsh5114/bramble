@@ -7,12 +7,6 @@ function requiredEnv(name: string): string {
   return value
 }
 
-// The relay-sidecar instance this node pays for candidate exchange — see
-// relay-sidecar/src/index.ts's POST /rendezvous-token.
-export function rendezvousPaymentURL(): string {
-  return requiredEnv('BRAMBLE_RENDEZVOUS_PAYMENT_URL')
-}
-
 export function hederaClientAccountID(): string {
   return requiredEnv('HEDERA_CLIENT_ACCOUNT_ID')
 }

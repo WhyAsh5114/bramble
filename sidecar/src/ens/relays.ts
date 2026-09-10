@@ -23,6 +23,11 @@ const labelRegisteredEvent = parseAbiItem(
 export interface RendezvousRelay {
   label: string
   address: string
+  // A relay's own payment sidecar, if it published one — needed to buy a
+  // rendezvous token valid at *this* relay specifically (each relay mints
+  // under its own process-local secret, docs/adr/0008's failover fix).
+  // Absent for an unmetered relay, which needs no token at all.
+  sidecarUrl?: string
 }
 
 export interface DataRelay {
@@ -68,7 +73,7 @@ export async function resolveRelays(): Promise<Relays> {
       publicClient.getEnsText({ name: fullname, key: 'price-per-byte' }),
     ])
 
-    if (address) rendezvous.push({ label, address })
+    if (address) rendezvous.push({ label, address, sidecarUrl: sidecarUrl ?? undefined })
     if (sidecarUrl) dataRelays.push({ label, sidecarUrl, pricePerByte: pricePerByte ?? '1' })
   }
 
