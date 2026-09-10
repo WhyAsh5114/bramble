@@ -25,7 +25,7 @@ WireGuard device's peer table from it.
     grants it that symbolic name gets proxied to `127.0.0.1:<local-port>`
     (`docs/adr/0006-gateway-connect-protocol.md`).
   - `-gateway-port` — fixed TCP port the CONNECT gateway listener binds to
-    on this node's own tunnel address (default `7891`). Must match on both
+    on this node's own tunnel address (default `7892`). Must match on both
     sides of a `-forward` — see below.
   - `-forward <local-port>=<gateway-label>:<service>` (repeatable) — a local
     port-forward, `ssh -L`-style: an ordinary, unmodified local client
@@ -54,7 +54,22 @@ WireGuard device's peer table from it.
     alongside `-rendezvous`; leave unset if this node has no address worth
     advertising (e.g. a laptop behind NAT that only needs to _reach out_, not
     be dialed into — see the runbook below).
+  - `-data-relay <label>=<relay-sidecar-url>` (repeatable) and
+    `-relay-peer <peer-label>` (repeatable) — select an explicit paid
+    data-relay pool for peers that cannot use the direct candidate. Each
+    purchase requests `-relay-session-bytes` (default `10000`).
+  - `-max-relay-price-per-byte` (default `10` atomic USDC) and
+    `-max-relay-session-cost` (default `100000`, or 0.10 USDC) — reject an
+    otherwise-discovered relay quote before purchase if either budget is
+    exceeded. The local payment sidecar independently enforces
+    `HEDERA_MAX_PAYMENT_ATOMIC` per x402 payment.
 - `brambled genkey` — generates a WireGuard key pair.
+
+The demo also includes two deliberately small helper processes under `cmd/`:
+`demo-service` exposes a private health task, while `demo-agent` calls it
+through a local Bramble forward and validates the result. The agent has no
+backend credential; a denied grant, a successful grant, and revocation are
+therefore visible as changes to the same command's outcome.
 
 `BRAMBLE_TAILNET_NAME` and `BRAMBLE_TAILNET_REGISTRY` are required for
 `resolve` and `serve` (see `../sidecar/README.md` — a node has to know which

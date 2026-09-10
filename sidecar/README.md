@@ -45,6 +45,11 @@ BRAMBLE_TAILNET_NAME=<name> BRAMBLE_TAILNET_REGISTRY=<0x...> bun run src/index.t
 `BRAMBLE_SIDECAR_PORT` (default `7890`) and `SEPOLIA_RPC_URL` (default a
 public Sepolia RPC) are optional.
 
+Paid relay calls additionally require `HEDERA_CLIENT_ACCOUNT_ID` and
+`HEDERA_CLIENT_PRIVATE_KEY`. `HEDERA_MAX_PAYMENT_ATOMIC` is an optional
+per-payment ceiling in atomic testnet USDC and defaults to `100000` (0.10
+USDC). The client rejects other networks/assets and payments above this cap.
+
 Smoke test, sidecar running standalone (no Go daemon involved — this is the
 point of the HTTP boundary, per the ADR's rationale):
 
