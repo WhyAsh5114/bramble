@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -22,13 +22,35 @@ import (
 // (package main there too), so it can't be imported here, matching the
 // existing precedent in rendezvous/gate1_2_test.go's startHostileRelay.
 // Unlike that one, this always forwards truthfully.
-func startTestRendezvousRelay(t *testing.T) string {
+//
+// requiredTokenPrefix, if non-empty, gates every hello exactly like a real
+// metered relay does (relay/main.go's tokenVerifier): a hello whose Token
+// doesn't start with this relay's own prefix, OR whose exact Token value
+// has already been presented once before (single-use, matching a real
+// token's nonce-consumption check), gets an error reply and the connection
+// is closed, never registered. Both checks matter for
+// TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls below to be
+// a real regression test for docs/adr/0008's fix: the prefix check catches
+// a token minted for the wrong relay being presented here, and the
+// single-use check catches a token being reused across Exchange calls
+// (rendezvous.Exchange's own documented "one token per call" contract) —
+// an always-accept, or reuse-tolerant, fake would let either bug slide.
+// The returned stop func closes the listener early — a real relay's
+// rendezvous TCP listener dies the instant the relay process is killed
+// (relay/main.go has no SIGTERM handler, but the OS reclaims the socket
+// regardless), so a test simulating "kill the primary relay" needs to be
+// able to take this down at the same moment it stops the paired data relay,
+// not just at t.Cleanup.
+func startTestRendezvousRelay(t *testing.T, requiredTokenPrefix string) (addr string, stop func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listening: %v", err)
 	}
 	t.Cleanup(func() { ln.Close() })
+
+	var seenMu sync.Mutex
+	seenTokens := make(map[string]bool)
 
 	type msg struct {
 		Type      string `json:"type"`
@@ -37,6 +59,7 @@ func startTestRendezvousRelay(t *testing.T) string {
 		From      string `json:"from,omitempty"`
 		Candidate string `json:"candidate,omitempty"`
 		Message   string `json:"message,omitempty"`
+		Token     string `json:"token,omitempty"`
 	}
 	type fakePeer struct {
 		mu  sync.Mutex
@@ -69,6 +92,18 @@ func startTestRendezvousRelay(t *testing.T) string {
 					}
 					switch m.Type {
 					case "hello":
+						if requiredTokenPrefix != "" {
+							seenMu.Lock()
+							valid := strings.HasPrefix(m.Token, requiredTokenPrefix+"-") && !seenTokens[m.Token]
+							if valid {
+								seenTokens[m.Token] = true
+							}
+							seenMu.Unlock()
+							if !valid {
+								_ = send(self, msg{Type: "error", Message: "invalid or reused token"})
+								return
+							}
+						}
 						pubkey = m.Pubkey
 						mu.Lock()
 						peers[pubkey] = self
@@ -89,7 +124,7 @@ func startTestRendezvousRelay(t *testing.T) string {
 		}
 	}()
 
-	return ln.Addr().String()
+	return ln.Addr().String(), func() { ln.Close() }
 }
 
 // startTestDataRelay is a minimal address-learning UDP forwarder — the same
@@ -194,7 +229,8 @@ func startFakeENSSidecar(t *testing.T, relayPort int) *sidecar.Manager {
 // (docs/adr/0008). Both Alice and Bob here are configured relay-routed,
 // mirroring the two-NAT demo topology Gate 4.3 requires.
 func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.T) {
-	relayAddr := startTestRendezvousRelay(t)
+	relayAddr, _ := startTestRendezvousRelay(t, "") // unmetered
+	relays := []sidecar.RendezvousRelay{{Label: "test-relay", Address: relayAddr}}
 	dataRelay := startTestDataRelay(t)
 	sidecarURL := startFakeDataRelaySidecar(t)
 	pool := dataRelayFlag{"test-relay": sidecarURL}
@@ -237,11 +273,11 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, _, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, []string{relayAddr}, alicePub, bobPub, "", 5*time.Second)
+		aliceEndpoint, _, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, relays, alicePub, bobPub, 5*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		bobEndpoint, _, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, []string{relayAddr}, bobPub, alicePub, "", 5*time.Second)
+		bobEndpoint, _, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, relays, bobPub, alicePub, 5*time.Second)
 	}()
 	wg.Wait()
 	if aliceErr != nil {
@@ -390,7 +426,19 @@ func startFakeDataRelaySidecarPriced(t *testing.T, priceAmount string) string {
 // one candidate relay: it reads the request's sidecarUrl and allocates a
 // fresh session from that specific fakeDataRelay, instead of always
 // answering with one fixed port regardless of how many times it's called.
-func startFakeENSSidecarMulti(t *testing.T, relayByURL map[string]*fakeDataRelay) *sidecar.Manager {
+// It also serves /rendezvous-token, minting a fresh, unique token per call
+// — prefixed with whichever opaque secret tokenByURL says belongs to the
+// requested sidecarUrl, suffixed with a nanosecond timestamp (unique enough
+// across the two independent counters startFakeENSSidecarMulti's alice and
+// bob instances each keep — a real token's nonce is random for the same
+// reason, just cryptographically so rather than merely improbable) —
+// mirroring a real relay-sidecar's token in two ways at once
+// (docs/adr/0008): it's only ever meaningful to the one rendezvous relay
+// that shares its secret (the prefix, checked by
+// startTestRendezvousRelay's requiredTokenPrefix), and it's good for
+// exactly one Exchange call (the suffix, checked there via its seenTokens
+// set) — a real relay's tokenVerifier rejects a reused nonce the same way.
+func startFakeENSSidecarMulti(t *testing.T, relayByURL map[string]*fakeDataRelay, tokenByURL map[string]string) *sidecar.Manager {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/data-relay-session", func(w http.ResponseWriter, r *http.Request) {
@@ -417,6 +465,25 @@ func startFakeENSSidecarMulti(t *testing.T, relayByURL map[string]*fakeDataRelay
 			"expiresAt": time.Now().Add(time.Minute).Unix(),
 		})
 	})
+	mux.HandleFunc("/rendezvous-token", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SidecarURL string `json:"sidecarUrl"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		prefix, ok := tokenByURL[body.SidecarURL]
+		if !ok {
+			http.Error(w, fmt.Sprintf("no fake token configured for sidecarUrl %q", body.SidecarURL), http.StatusBadRequest)
+			return
+		}
+		token := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":     token,
+			"expiresAt": time.Now().Add(time.Minute).Unix(),
+		})
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -430,13 +497,22 @@ func startFakeENSSidecarMulti(t *testing.T, relayByURL map[string]*fakeDataRelay
 // TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls is Gate
 // 4.3's kill-mid-transfer failover: two real data relays, alice picked the
 // cheaper one (deterministic via priced quotes), a real handshake and
-// traffic flowing through it, then the primary relay is killed mid-flight.
-// watchDataRelayFailover must detect the stall via real RxBytes and
-// re-point alice's own peer-endpoint at the backup relay — proven by a
-// real WireGuard handshake succeeding again afterward, not just a state
-// flag flipping.
+// traffic flowing through it, then the primary relay is killed mid-flight
+// — its rendezvous listener along with its data relay, since a real relay
+// process serves both (relay/main.go's -meter -data-relay). Each of the two
+// rendezvous relays here requires its own distinct token, exactly like two
+// real relay processes each generating their own random secret
+// (relay/sidecar.go) — this is what makes this test a real regression test
+// for docs/adr/0008's fix: before it, a token bought from the primary's
+// sidecar was presented to the backup's rendezvous listener too and
+// rejected, since ExchangeAny reused one token across every relay address.
+// watchDataRelayFailover must detect the stall via real RxBytes, buy a
+// *fresh* token from the backup's own sidecar, and re-point alice's own
+// peer-endpoint at the backup relay — proven by a real WireGuard handshake
+// succeeding again afterward, not just a state flag flipping.
 func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) {
-	relayAddr := startTestRendezvousRelay(t)
+	primaryRelayAddr, stopPrimaryRelay := startTestRendezvousRelay(t, "primary-secret")
+	backupRelayAddr, _ := startTestRendezvousRelay(t, "backup-secret")
 
 	primaryRelay := newFakeDataRelay()
 	backupRelay := newFakeDataRelay()
@@ -449,9 +525,21 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 		sidecarURLPrimary: primaryRelay,
 		sidecarURLBackup:  backupRelay,
 	}
+	// The same sidecarUrl each relay already uses for /data-relay-session
+	// also serves /rendezvous-token in the real system — one relay-sidecar
+	// process per relay, offering both roles (relay/main.go's -meter
+	// -data-relay).
+	tokenByURL := map[string]string{
+		sidecarURLPrimary: "primary-secret",
+		sidecarURLBackup:  "backup-secret",
+	}
+	relays := []sidecar.RendezvousRelay{
+		{Label: "primary", Address: primaryRelayAddr, SidecarURL: sidecarURLPrimary},
+		{Label: "backup", Address: backupRelayAddr, SidecarURL: sidecarURLBackup},
+	}
 
-	aliceM := startFakeENSSidecarMulti(t, relayByURL)
-	bobM := startFakeENSSidecarMulti(t, relayByURL)
+	aliceM := startFakeENSSidecarMulti(t, relayByURL, tokenByURL)
+	bobM := startFakeENSSidecarMulti(t, relayByURL, tokenByURL)
 
 	alicePriv, alicePub, err := wgnode.GenerateKeyPair()
 	if err != nil {
@@ -496,11 +584,11 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1_000_000, []string{relayAddr}, alicePub, bobPub, "", 15*time.Second)
+		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1_000_000, relays, alicePub, bobPub, 15*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		candidate, err := rendezvous.ExchangeAny([]string{relayAddr}, bobPub, alicePub, "", "", 15*time.Second)
+		candidate, _, err := exchangeAnyMetered(relays, bobM, bobPub, alicePub, "", 15*time.Second)
 		if err != nil {
 			bobErr = err
 			return
@@ -566,10 +654,14 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	// adopting side) gets watchDataRelayAdopt — the asymmetric pairing
 	// runServe now wires for real (main.go's non-relay-peer watcher loop),
 	// not two independent buyers racing for the same lucky port.
-	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, []string{relayAddr}, alicePub, 15*time.Second)
-	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, []string{relayAddr})
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, relays, alicePub, 15*time.Second)
+	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, relays)
 
+	// Kill "the primary relay process": both its data relay and its
+	// rendezvous listener together, matching a real relay/main.go process
+	// running -meter -data-relay (docs/adr/0008).
 	primaryRelay.stopAll()
+	stopPrimaryRelay()
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
