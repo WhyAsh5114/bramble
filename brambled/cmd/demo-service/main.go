@@ -7,6 +7,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -20,6 +21,16 @@ func main() {
 
 	hostname, _ := os.Hostname()
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/task" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"task":       "report-private-service-health",
+				"host":       hostname,
+				"status":     "healthy",
+				"observedAt": time.Now().UTC().Format(time.RFC3339),
+			})
+			return
+		}
 		fmt.Fprintf(w, "demo-service on %s, request path=%s, served at %s\n", hostname, r.URL.Path, time.Now().UTC().Format(time.RFC3339))
 	})
 

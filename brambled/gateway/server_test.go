@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/admission"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -157,8 +158,9 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	future := time.Now().Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1":  {ACL: []string{digestForA}},
+		"device1":  {Pubkey: &devicePub, Expiry: fmt.Sprint(future), ACL: []string{digestForA}},
 		"gatewayA": {ACLGranters: []string{"granter1"}},
 		"gatewayB": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: &granterPub},
@@ -244,6 +246,59 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 		status, _ := sendConnect(t, conn, "db")
 		if status != "DENY" {
 			t.Fatalf("expected DENY for db on gatewayB, got %q", status)
+		}
+	})
+
+	// Gate 5.1's integrated permission-escalation flow: the same request
+	// denied above succeeds immediately after the resolver reports a new
+	// capability, without restarting either node or gateway.
+	t.Run("same request succeeds after live capability expansion", func(t *testing.T) {
+		cacheDigest, err := ACLDigestECDH(granterPriv, gwAPub, "cache")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolver["device1"].ACL = append(resolver["device1"].ACL, cacheDigest)
+
+		conn, err := device.DialTCP(netip.AddrPortFrom(gwAAddr, 7100))
+		if err != nil {
+			t.Fatalf("dialing gatewayA: %v", err)
+		}
+		defer conn.Close()
+		status, payload := sendConnect(t, conn, "cache")
+		if status != "OK" || payload != "cache-backend-on-A" {
+			t.Fatalf("expected expanded grant to proxy the cache task, got status=%q payload=%q", status, payload)
+		}
+	})
+
+	// Finish the task lifecycle by applying the same admission loop used by
+	// brambled serve. A fresh revoked record removes the already-connected
+	// peer, and the tunnel can no longer carry even the previously allowed
+	// task.
+	t.Run("device revocation drops the task connection", func(t *testing.T) {
+		loop := &admission.Loop{
+			Resolver: resolver,
+			Table:    gwA,
+			Peers:    []admission.Peer{{Label: "device1", AllowedIP: netip.PrefixFrom(deviceAddr, 32)}},
+		}
+		loop.SyncOnce()
+		resolver["device1"].Revoked = true
+		loop.SyncOnce()
+
+		peers, err := gwA.Peers()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, peer := range peers {
+			if peer.PublicKeyHex == devicePub {
+				t.Fatal("revoked device remained in gatewayA's WireGuard peer table")
+			}
+		}
+		ok, err := device.Ping(gwAAddr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatal("revoked device could still complete a task over the tunnel")
 		}
 	})
 }
