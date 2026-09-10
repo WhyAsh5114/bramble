@@ -1,64 +1,57 @@
-"use client";
+'use client'
 
-import { usePolling } from "@/hooks/use-polling";
-import { MonoValue } from "@/components/mono-value";
-import { StatusText } from "@/components/status-text";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { isAuthorized, parseExpiry, truncateHex } from "@/lib/format";
-import { SEPOLIA_ETHERSCAN_URL } from "@/lib/config";
-import type { DeviceRecord } from "@/lib/types";
+import { usePolling } from '@/hooks/use-polling'
+import { MonoValue } from '@/components/mono-value'
+import { StatusText } from '@/components/status-text'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { isAuthorized, parseExpiry, truncateHex } from '@/lib/format'
+import { SEPOLIA_ETHERSCAN_URL } from '@/lib/config'
+import type { DeviceRecord } from '@/lib/types'
 
 interface DeviceRow {
-  label: string;
-  record: DeviceRecord | null;
-  error: string | null;
+  label: string
+  record: DeviceRecord | null
+  error: string | null
 }
 
 async function fetchDevices(): Promise<DeviceRow[]> {
-  const configRes = await fetch("/api/config", { cache: "no-store" });
-  if (!configRes.ok) throw new Error(`config returned ${configRes.status}`);
-  const { deviceLabels } = (await configRes.json()) as { deviceLabels: string[] };
+  const configRes = await fetch('/api/config', { cache: 'no-store' })
+  if (!configRes.ok) throw new Error(`config returned ${configRes.status}`)
+  const { deviceLabels } = (await configRes.json()) as { deviceLabels: string[] }
 
   return Promise.all(
     deviceLabels.map(async (label): Promise<DeviceRow> => {
       try {
         const res = await fetch(`/api/sidecar/device/${label}`, {
-          cache: "no-store",
-        });
+          cache: 'no-store',
+        })
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error ?? `HTTP ${res.status}`);
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
         }
-        return { label, record: await res.json(), error: null };
+        return { label, record: await res.json(), error: null }
       } catch (err) {
         return {
           label,
           record: null,
           error: err instanceof Error ? err.message : String(err),
-        };
+        }
       }
-    }),
-  );
+    })
+  )
 }
 
 export default function DevicesPage() {
-  const devices = usePolling(fetchDevices, 5_000);
+  const devices = usePolling(fetchDevices, 5_000)
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-medium text-foreground">Devices</h1>
         <p className="text-sm text-muted-foreground">
-          Authorization is pubkey present, not revoked, and expiry in the
-          future — the same rule brambled&apos;s admission loop enforces.
+          Authorization is pubkey present, not revoked, and expiry in the future — the same rule brambled&apos;s
+          admission loop enforces.
         </p>
       </div>
 
@@ -71,9 +64,8 @@ export default function DevicesPage() {
 
       {devices.data && devices.data.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No devices configured — set{" "}
-          <code className="font-mono text-foreground">DEVICE_LABELS</code> in
-          the dashboard&apos;s environment (comma-separated labels).
+          No devices configured — set <code className="font-mono text-foreground">DEVICE_LABELS</code> in the
+          dashboard&apos;s environment (comma-separated labels).
         </p>
       )}
 
@@ -93,14 +85,10 @@ export default function DevicesPage() {
           <TableBody>
             {devices.data.map((row) => (
               <TableRow key={row.label}>
-                <TableCell className="font-mono text-sm">
-                  {row.label}
-                </TableCell>
+                <TableCell className="font-mono text-sm">{row.label}</TableCell>
                 {row.error || !row.record ? (
                   <TableCell colSpan={6}>
-                    <StatusText tone="negative">
-                      unresolved — {row.error}
-                    </StatusText>
+                    <StatusText tone="negative">unresolved — {row.error}</StatusText>
                   </TableCell>
                 ) : (
                   <DeviceCells record={row.record} />
@@ -111,16 +99,14 @@ export default function DevicesPage() {
         </Table>
       )}
 
-      {devices.error && (
-        <p className="text-sm text-destructive">{devices.error}</p>
-      )}
+      {devices.error && <p className="text-sm text-destructive">{devices.error}</p>}
     </div>
-  );
+  )
 }
 
 function DeviceCells({ record }: { record: DeviceRecord }) {
-  const authorized = isAuthorized(record);
-  const expiry = parseExpiry(record.expiry);
+  const authorized = isAuthorized(record)
+  const expiry = parseExpiry(record.expiry)
 
   return (
     <>
@@ -134,19 +120,13 @@ function DeviceCells({ record }: { record: DeviceRecord }) {
         )}
       </TableCell>
       <TableCell>
-        <MonoValue value={record.pubkey ?? ""} display={truncateHex(record.pubkey)} />
+        <MonoValue value={record.pubkey ?? ''} display={truncateHex(record.pubkey)} />
       </TableCell>
       <TableCell>
-        <span className={expiry.expired ? "text-destructive" : "text-foreground"}>
-          {expiry.relative}
-        </span>
+        <span className={expiry.expired ? 'text-destructive' : 'text-foreground'}>{expiry.relative}</span>
       </TableCell>
-      <TableCell className="text-right font-mono text-sm">
-        {record.acl.length}
-      </TableCell>
-      <TableCell className="text-right font-mono text-sm">
-        {record.aclGranters.length}
-      </TableCell>
+      <TableCell className="text-right font-mono text-sm">{record.acl.length}</TableCell>
+      <TableCell className="text-right font-mono text-sm">{record.aclGranters.length}</TableCell>
       <TableCell>
         <MonoValue
           value={record.tokenId}
@@ -155,5 +135,5 @@ function DeviceCells({ record }: { record: DeviceRecord }) {
         />
       </TableCell>
     </>
-  );
+  )
 }

@@ -21,18 +21,20 @@ what it talks to.
 2. `cp .env.local.example .env.local` and set `SIDECAR_URL` (default assumes
    the sidecar is on the same machine at its default port, 7890) and
    `DEVICE_LABELS` (comma-separated ENS labels to watch).
-3. `npm install && npm run dev`, then open `http://localhost:3000`.
+3. From the repository root, run `pnpm install --frozen-lockfile` once, then
+   `pnpm dev:dashboard` and open `http://localhost:3000`.
 
 ## Architecture
 
 - `sidecar` binds to loopback only and sets no CORS headers (deliberately —
   see `sidecar/src/index.ts`), so the browser can't call it directly from a
-  different origin. `next.config.ts`'s `rewrites()` proxies `/api/sidecar/*`
-  to it server-side instead, which needs no changes to `sidecar` itself.
+  different origin. Explicit GET-only Route Handlers proxy just `/health`,
+  `/relays`, and `/device/:label`; the sidecar's payment routes are not
+  reachable through the dashboard.
 - Data-relay prices come from each relay's own `relay-sidecar`, discovered at
-  runtime from `sidecar`'s `/relays` — a different destination per relay, so
-  that one goes through `src/app/api/relay-price/route.ts` rather than a
-  static rewrite.
+  runtime from `sidecar`'s `/relays`. The price route accepts only a URL in
+  that discovered set, fetches only `/price`, rejects redirects, and times
+  out after five seconds.
 - Everything on screen is client-side polled (see `src/hooks/use-polling.ts`)
   against those two proxy surfaces. No `wagmi`, no direct-from-browser chain
   reads — the hackathon deployment's Universal Resolver override
@@ -50,5 +52,5 @@ what it talks to.
 - No transaction history (enrollment, revocation, role grants, past relay
   payments) — `admincli`'s scripts print these once and exit; nothing
   persists them for a dashboard to read back. Etherscan/HashScan links here
-  only cover state that's queryable *right now* (current pubkey/expiry/ACL,
+  only cover state that's queryable _right now_ (current pubkey/expiry/ACL,
   current relay prices), not history.
