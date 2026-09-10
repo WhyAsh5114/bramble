@@ -45,13 +45,12 @@ type Config struct {
 	// RPCURL is optional; the sidecar has its own default.
 	RPCURL string
 
-	// RendezvousPaymentURL, HederaClientAccountID, and HederaClientPrivateKey
-	// configure this node's payment-client side of docs/adr/0007 — the
-	// sidecar's /rendezvous-token route pays this relay-sidecar URL using
-	// this Hedera account. All three are optional: leave them unset when
-	// talking only to unmetered relays, in which case RendezvousToken (see
-	// client.go) is simply never called.
-	RendezvousPaymentURL   string
+	// HederaClientAccountID and HederaClientPrivateKey configure this node's
+	// payment-client side of docs/adr/0007 — the sidecar's /rendezvous-token
+	// and /data-relay-session routes pay whichever relay-sidecar URL the
+	// caller passes per call, using this Hedera account. Both optional:
+	// leave them unset when talking only to unmetered relays, in which case
+	// RendezvousToken (see client.go) is simply never called.
 	HederaClientAccountID  string
 	HederaClientPrivateKey string
 }
@@ -72,9 +71,6 @@ func Start(cfg Config) (*Manager, error) {
 	)
 	if cfg.RPCURL != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("SEPOLIA_RPC_URL=%s", cfg.RPCURL))
-	}
-	if cfg.RendezvousPaymentURL != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("BRAMBLE_RENDEZVOUS_PAYMENT_URL=%s", cfg.RendezvousPaymentURL))
 	}
 	if cfg.HederaClientAccountID != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("HEDERA_CLIENT_ACCOUNT_ID=%s", cfg.HederaClientAccountID))

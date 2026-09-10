@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type DeviceRecord struct {
@@ -45,15 +46,38 @@ type RendezvousTokenResponse struct {
 	SettlementTxID string `json:"settlementTxId,omitempty"`
 }
 
-// RendezvousToken asks the local sidecar to pay for and return one
-// rendezvous token, for a single upcoming rendezvous.Exchange call. Calling
-// this against a sidecar that has no Hedera payer credentials configured
-// (docs/adr/0007's client-side setup) returns an error — callers talking to
-// an unmetered relay should not call this at all (rendezvous.Exchange
-// accepts "" for token).
-func (m *Manager) RendezvousToken() (*RendezvousTokenResponse, error) {
+// paymentHTTPClient bounds how long a payment call (RendezvousToken,
+// DataRelaySession) can block — these run inside tight retry loops
+// (watchDataRelayFailover, watchDataRelayAdopt), and http.Post's use of
+// http.DefaultClient has no timeout at all, so a relay-sidecar that accepts
+// a connection but never replies (e.g. mid-crash) would otherwise hang a
+// failover loop indefinitely instead of moving on to the next relay.
+var paymentHTTPClient = &http.Client{Timeout: 8 * time.Second}
+
+// RendezvousToken asks the local sidecar to pay sidecarURL — a specific
+// relay's own payment sidecar — for and return one rendezvous token, for a
+// single upcoming rendezvous.Exchange call against that same relay. Every
+// relay in a set mints tokens under its own process-local secret and
+// verifies hellos against that same secret (relay/sidecar.go,
+// relay/token.go), so a token bought here is only ever valid at sidecarURL
+// specifically — callers must call this again, with the new relay's own
+// sidecarURL, before trying a different relay (docs/adr/0008's failover
+// fix; this used to read a single fixed BRAMBLE_RENDEZVOUS_PAYMENT_URL,
+// which is what made failover to a backup relay unable to get a token that
+// relay would accept). Calling this against a sidecar that has no Hedera
+// payer credentials configured (docs/adr/0007's client-side setup) returns
+// an error — callers talking to an unmetered relay should not call this at
+// all (rendezvous.Exchange accepts "" for token).
+func (m *Manager) RendezvousToken(sidecarURL string) (*RendezvousTokenResponse, error) {
+	reqBody, err := json.Marshal(struct {
+		SidecarURL string `json:"sidecarUrl"`
+	}{SidecarURL: sidecarURL})
+	if err != nil {
+		return nil, fmt.Errorf("encoding request: %w", err)
+	}
+
 	url := fmt.Sprintf("http://localhost:%d/rendezvous-token", m.Port)
-	resp, err := http.Post(url, "application/json", nil)
+	resp, err := paymentHTTPClient.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -103,7 +127,7 @@ func (m *Manager) DataRelaySession(sidecarURL string, sessionBytes int64) (*Data
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/data-relay-session", m.Port)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(reqBody))
+	resp, err := paymentHTTPClient.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -159,6 +183,10 @@ func (m *Manager) ResolveDevice(label string) (*DeviceRecord, error) {
 type RendezvousRelay struct {
 	Label   string `json:"label"`
 	Address string `json:"address"`
+	// SidecarURL is this relay's own payment sidecar, if it published one —
+	// needed to buy a token valid at this specific relay (each relay mints
+	// under its own process-local secret). Empty for an unmetered relay.
+	SidecarURL string `json:"sidecarUrl,omitempty"`
 }
 
 type DataRelay struct {
