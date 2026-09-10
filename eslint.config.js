@@ -12,6 +12,9 @@ export default tseslint.config(
       'sidecar/test/fixtures/**',
       'scripts/gate0.3-eac-check/**',
       'docs/**',
+      // The dashboard is linted by its package task with eslint-config-next.
+      // Root ESLint 10 cannot load that package's ESLint 9 React rules.
+      'dashboard/**',
       '.tmp/**',
     ],
   },

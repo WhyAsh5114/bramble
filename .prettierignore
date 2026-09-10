@@ -1,8 +1,14 @@
-node_modules
-dist
-bin
+# Preserve the generated/evidence exclusions in the repository .gitignore.
+node_modules/
+.turbo/
+dist/
+bin/
 pnpm-lock.yaml
-docs
-.tmp
-scripts/gate0.3-eac-check
-sidecar/test/fixtures
+docs/
+.tmp/
+scripts/gate0.3-eac-check/
+sidecar/test/fixtures/
+
+# The workspace package formats itself via Turbo using dashboard/.gitignore,
+# which excludes its generated .next tree.
+dashboard/

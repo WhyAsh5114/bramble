@@ -4,7 +4,8 @@
   "globalDependencies": ["tsconfig.base.json", "eslint.config.js", ".prettierrc", ".prettierignore"],
   "tasks": {
     "build": {
-      "outputs": ["dist/**", "bin/**"]
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "bin/**", ".next/**", "!.next/cache/**"]
     },
     "typecheck": {
       "outputs": []
@@ -21,6 +22,10 @@
     },
     "test": {
       "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
     }
   }
 }

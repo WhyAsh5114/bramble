@@ -10,6 +10,8 @@
     "format": "prettier --write . && turbo run format",
     "format:check": "prettier --check . && turbo run format:check",
     "test": "turbo run test",
+    "dev:dashboard": "turbo run dev --filter @bramble/dashboard",
+    "test:access-flow": "cd brambled && go test ./gateway -run TestGate2_3_AgentCannotReachOutsideACL -v",
     "check:no-endpoints": "node scripts/check-no-endpoints.mjs",
     "check:no-local-state": "node scripts/check-no-local-state.mjs",
     "verify": "pnpm format:check && pnpm check:no-endpoints && pnpm check:no-local-state && pnpm typecheck && pnpm lint && pnpm build && pnpm test"

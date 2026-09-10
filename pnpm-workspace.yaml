@@ -5,3 +5,4 @@ packages:
   - relay
   - scripts/provision-dev-tailnet
   - admincli
+  - dashboard
