@@ -48,6 +48,7 @@ import (
 	"github.com/WhyAsh5114/bramble/brambled/gateway"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/statusapi"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -726,9 +727,12 @@ func runServe(args []string) error {
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
 	maxStale := fs.Duration("max-stale", 0, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; 0 disables this and fails open forever (see admission package doc)")
+	keepaliveSeconds := fs.Int("keepalive", 0, "send an unsolicited WireGuard packet to every authorized peer this often (seconds) so NAT mappings/roaming state don't go stale on an otherwise-idle connection; 0 disables this (existing behavior — a data-relay pool already arms its own keepalive independently of this flag, see dataRelayKeepaliveSeconds)")
 	privateKeyHex := fs.String("private-key", os.Getenv("BRAMBLE_PRIVATE_KEY"), "hex-encoded WireGuard private key (generated ephemerally if unset — not persisted)")
 	ownLabel := fs.String("label", "", "this node's own ENS label — required to resolve its own acl-granters record for gateway enforcement (docs/adr/0005-acl-record-schema.md)")
 	gatewayPort := fs.Uint("gateway-port", 7892, "fixed TCP port this node's CONNECT gateway listener binds to on its own tunnel address (7892, not 7891 — that's relay-sidecar's default port, and both can end up on the same machine during local dev/testing, docs/adr/0008)")
+	statusPort := fs.Uint("status-port", 7899, "port for this node's own status API (live WireGuard peer state, ping, recent admission/gateway activity) — read-only diagnostics for local tooling like the dashboard, see brambled/statusapi")
+	statusBind := fs.String("status-bind", "127.0.0.1", "bind address for the status API — loopback-only by default; set to 0.0.0.0 only if a dashboard on a different machine genuinely needs to reach this node's status API remotely")
 	interfaceName := fs.String("interface", "", "real OS interface name (auto-picked if unset: \"utun\" on macOS, \"bramble0\" on linux)")
 	netstackMode := fs.Bool("netstack", false, "use a virtual (gVisor) TUN instead of a real OS interface — testing/local dev only, never the demo")
 	rendezvousAddr := fs.String("rendezvous", "", "rendezvous relay address (host:port) for candidate exchange; omit for static/dial-in-first peers only")
@@ -863,6 +867,13 @@ func runServe(args []string) error {
 	// transfer failover (docs/adr/0008).
 	relState := newRelayState()
 
+	// status is this node's own read-only diagnostic surface (live
+	// WireGuard peer state, ping, recent admission/gateway activity) — the
+	// dashboard's source for everything ENS/Hedera state alone can't show.
+	// It has no write path of its own: OnAdmissionEvent/OnGatewayDecision
+	// only ever record what the admission loop and gateway already decided.
+	status := &statusapi.Server{PeerTable: node}
+
 	loop := &admission.Loop{
 		Resolver: m,
 		Table:    node,
@@ -881,6 +892,12 @@ func runServe(args []string) error {
 			if e.EndpointErr != nil {
 				fmt.Fprintf(os.Stderr, "admission: %s: endpoint exchange failed (will retry next sync): %v\n", e.Label, e.EndpointErr)
 			}
+			if e.Authorized && e.PublicKey != "" && *keepaliveSeconds > 0 {
+				if err := node.SetPersistentKeepalive(e.PublicKey, *keepaliveSeconds); err != nil {
+					fmt.Fprintf(os.Stderr, "admission: %s: arming keepalive failed, will retry next sync: %v\n", e.Label, err)
+				}
+			}
+			status.OnAdmissionEvent(e)
 		},
 	}
 
@@ -1001,6 +1018,7 @@ func runServe(args []string) error {
 		OwnLabel:      *ownLabel,
 		Services:      services,
 		PeerLabels:    peerLabels,
+		OnDecision:    status.OnGatewayDecision,
 	}
 	go func() {
 		if err := gw.Serve(ctx); err != nil && ctx.Err() == nil {
@@ -1008,6 +1026,13 @@ func runServe(args []string) error {
 		}
 	}()
 	fmt.Fprintf(os.Stderr, "gateway: listening on %s:%d, offering %d service(s)\n", prefix.Addr(), *gatewayPort, len(services))
+
+	go func() {
+		if err := status.ListenAndServe(ctx, *statusBind, *statusPort); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "status: listener stopped: %v\n", err)
+		}
+	}()
+	fmt.Fprintf(os.Stderr, "status: listening on %s:%d\n", *statusBind, *statusPort)
 
 	for _, fwd := range forwards {
 		fwd := fwd
