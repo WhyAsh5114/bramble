@@ -8,7 +8,7 @@
 
 ## The project in one paragraph
 
-A WireGuard mesh network with **no trusted coordination server**. Device authorization lives in an ENSv2 subname registry: each device (or AI agent) is a subname holding its own public key, with Enhanced Access Control governing who may enroll or revoke. Every peer independently resolves that registry and refuses handshakes from keys that are not in it. Relays for NAT fallback are run by anyone and paid per byte via x402 on Hedera, so there are no seats and no subscription. The result is a mesh where no single party can inject a device, and there is no stateful server anyone has to keep alive.
+A WireGuard mesh network with **no trusted coordination server**. Device authorization lives in an ENSv2 subname registry: each device (or AI agent) is a subname holding its own public key, with Enhanced Access Control governing who may enroll or revoke. Every peer independently resolves that registry and refuses handshakes from keys that are not in it. Relays provide candidate exchange and an explicitly selected data path; operators are paid through x402 on Hedera. A relay operator cannot independently authorize a device, while designated ENS administrators and registrars intentionally can.
 
 **One line:** your network's guest list lives on-chain, and every door checks it independently.
 
