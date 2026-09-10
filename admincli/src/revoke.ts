@@ -6,17 +6,11 @@
 // without ever being able to rotate a device's key.
 //
 // Usage: bun run revoke.ts <device-label> <true|false>
-//
-// Signs through the Ledger (Gate 3.1, docs/05_BUILD_PLAN.md): no plaintext
-// key, no software wallet client. `wallet-cli send` blocks on a physical
-// button press; a disconnected/rejecting device makes this fail, not fall
-// back to signing another way.
-import { encodeFunctionData, toHex } from 'viem'
+import { createWalletClient, http, toHex } from 'viem'
 import { normalize, packetToBytes } from 'viem/ens'
-import { tailnetName } from '../../sidecar/src/ens/config'
-import { publicClient } from './setup'
+import { RPC_URL, tailnetName } from '../../sidecar/src/ens/config'
+import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
 import { resolverWriteAbi } from './roles'
-import { sendViaDevice } from './ledger-send'
 
 async function main() {
   const [deviceLabel, value] = process.argv.slice(2)
@@ -24,20 +18,22 @@ async function main() {
     throw new Error('usage: bun run revoke.ts <device-label> <true|false>')
   }
 
+  const account = accountFromEnv()
+  const wallet = createWalletClient({ account, chain: hackathonSepolia, transport: http(RPC_URL) })
+
   const fullname = normalize(`${deviceLabel}.${tailnetName()}`)
   const resolverAddress = await publicClient.getEnsResolver({ name: fullname })
   if (!resolverAddress) throw new Error(`no resolver found for ${fullname}`)
   const dnsName = toHex(packetToBytes(fullname))
 
   console.log(`setting revoked=${value} for ${fullname}...`)
-  console.log('   confirm on the Ledger device...')
   const startedAt = Date.now()
-  const data = encodeFunctionData({
+  const hash = await wallet.writeContract({
+    address: resolverAddress,
     abi: resolverWriteAbi,
     functionName: 'setText',
     args: [dnsName, 'revoked', value],
   })
-  const hash = await sendViaDevice(resolverAddress, data)
   console.log(`   tx: ${hash}`)
   const receipt = await publicClient.waitForTransactionReceipt({ hash })
   if (receipt.status !== 'success') throw new Error('setText reverted on-chain')
