@@ -28,7 +28,7 @@ Gate 2.1 requires enrollment, revocation, and key rotation to be governed by **d
 
 ### `ROLE_REGISTRAR` is not `REGISTRATION_ROLE_BITMAP`
 
-This was the one open unknown going into Section A: does `register()` check the *caller's* role, separately from the `roleBitmap` parameter (which only governs what the *new token's owner* can subsequently do)? Verified from primary source rather than assumed or taken from the docs page (same discipline as the `UserRegistryImpl.initialize` signature drift in `12_SOURCE_NOTES.md` — the ENSv2 docs page for this deployment doesn't spell out the exact mechanism either, though it does confirm `ROLE_REGISTRAR` by name): `ensdomains/contracts-v2`'s `PermissionedRegistry.sol`, `_register()`, for a fresh (never-registered) label:
+This was the one open unknown going into Section A: does `register()` check the *caller's* role, separately from the `roleBitmap` parameter (which only governs what the *new token's owner* can subsequently do)? Verified from primary source rather than assumed or taken from the docs page (same discipline as the `UserRegistryImpl.initialize` signature drift in `11_SOURCE_NOTES.md` — the ENSv2 docs page for this deployment doesn't spell out the exact mechanism either, though it does confirm `ROLE_REGISTRAR` by name): `ensdomains/contracts-v2`'s `PermissionedRegistry.sol`, `_register()`, for a fresh (never-registered) label:
 
 ```solidity
 if (checkRoles) {

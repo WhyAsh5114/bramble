@@ -46,8 +46,8 @@ A dedicated ENSv2 deployment is live on Sepolia for ETHOnline 2026, separate fro
 
 ## Unknowns to resolve Day 0
 
-1. Does a physical Ledger device exist to test with? (`11_DAY0_GATES.md`, Gate 0.1)
-2. ~~Can two peers on different networks connect with only STUN plus a dumb relay?~~ — resolved for the laptop-to-VPS topology, **without needing STUN at all**: the VPS already has a public IP, so the dumb relay (`relay/`) carries candidate exchange and WireGuard's own roaming picks up the return address once the laptop dials in. See `11_DAY0_GATES.md` Gate 0.2's ✅ entry. The harder two-NAT case (where STUN/hole-punching would actually be load-bearing) is still open.
-3. ~~ENSv2 Sepolia contract addresses~~ — resolved, see above. Whether EAC role delegation works as documented is now also resolved — see Gate 0.3 in `11_DAY0_GATES.md`.
-4. ~~`@x402/hedera` + Blocky402: one paid request end to end~~ — resolved Sept 9, see Gate 0.4 in `11_DAY0_GATES.md` and `scripts/gate0.4-blocky402-check/README.md`.
+1. Does a physical Ledger device exist to test with? (`10_DAY0_GATES.md`, Gate 0.1)
+2. ~~Can two peers on different networks connect with only STUN plus a dumb relay?~~ — resolved for the laptop-to-VPS topology, **without needing STUN at all**: the VPS already has a public IP, so the dumb relay (`relay/`) carries candidate exchange and WireGuard's own roaming picks up the return address once the laptop dials in. See `10_DAY0_GATES.md` Gate 0.2's ✅ entry. The harder two-NAT case (where STUN/hole-punching would actually be load-bearing) is still open.
+3. ~~ENSv2 Sepolia contract addresses~~ — resolved, see above. Whether EAC role delegation works as documented is now also resolved — see Gate 0.3 in `10_DAY0_GATES.md`.
+4. ~~`@x402/hedera` + Blocky402: one paid request end to end~~ — resolved Sept 9, see Gate 0.4 in `10_DAY0_GATES.md` and `scripts/gate0.4-blocky402-check/README.md`.
 5. ~~Whether `wallet-cli ring init` can be run once on a laptop and the resulting ring used on a headless VPS without the device present~~ — design confirmed Sept 7 (Ledger's own workshop names this exact flow as intended; `ring --help` marks only `init` as device-required). **This is the entire premise of the Ledger enrollment story** — the physical run itself (device on hand) is still pending. See `adr/0001-ledger-ring-vs-send-split.md`.

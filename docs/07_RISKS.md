@@ -2,8 +2,8 @@
 
 ## Kill criteria
 
-- **K1.** Gate 0.2 fails: two peers on different networks cannot connect without a trusted coordinator, by end of Sunday Sept 6. → Stop and reassess whether to continue this project. Decide Sunday, not day eight. **Resolved Sept 6 — see `11_DAY0_GATES.md` Gate 0.2. Does not apply; project continues. Note the topology caveat there (laptop-to-VPS, not yet the harder two-NAT case).**
-- **K2.** EAC delegation does not actually restrict on ENSv2 Sepolia. The ACL story and the ENS pitch both collapse; rethink before continuing. **Resolved Sept 5 — see `11_DAY0_GATES.md` Gate 0.3. Does not apply.**
+- **K1.** Gate 0.2 fails: two peers on different networks cannot connect without a trusted coordinator, by end of Sunday Sept 6. → Stop and reassess whether to continue this project. Decide Sunday, not day eight. **Resolved Sept 6 — see `10_DAY0_GATES.md` Gate 0.2. Does not apply; project continues. Note the topology caveat there (laptop-to-VPS, not yet the harder two-NAT case).**
+- **K2.** EAC delegation does not actually restrict on ENSv2 Sepolia. The ACL story and the ENS pitch both collapse; rethink before continuing. **Resolved Sept 5 — see `10_DAY0_GATES.md` Gate 0.3. Does not apply.**
 - **K3.** No physical Ledger device. Ledger slot dies (project survives on two slots).
 - **K4.** Direct-connection success rate is so low that nearly everything relays. The cost argument in `01_WHY.md` inverts and the pitch needs rewriting.
 
@@ -16,10 +16,10 @@
 | `wallet-cli` v1 experimental, flags may change | Medium | Medium | Pin the version. Cut order step 3–4 removes Ledger cleanly |
 | LKRP key rotation destroys prior ciphertext | Medium | Medium | Do not build flows depending on decrypting old data after membership changes. Document it |
 | Blocky402 / Hedera friction | Medium | Medium | Gate 0.4 on Day 0, before anything is built on top |
-| Scope: three sponsors, two chains, hardest networking problem — **6.5 build days remain: submissions close Sept 13 16:00 UTC / 21:30 IST, not Sept 16** (see `09_EVENT_RULES.md`) | **High** | High | Cut order in `05_BUILD_PLAN.md` — **decide it by Sept 10**, don't discover it Sept 12. A tight two-sponsor submission beats a thin three-sponsor one |
-| ETHGlobal check-ins / showcase compliance missed (Sept 8 and Sept 11, 03:59 UTC / 09:29 IST) | Medium | High | Calendar them and track against `09_EVENT_RULES.md`. Missing an ETHGlobal checkpoint risks eligibility independent of code |
+| Scope: three sponsors, two chains, hardest networking problem — **6.5 build days remain: submissions close Sept 13 16:00 UTC / 21:30 IST, not Sept 16** (see `08_EVENT_RULES.md`) | **High** | High | Cut order in `05_BUILD_PLAN.md` — **decide it by Sept 10**, don't discover it Sept 12. A tight two-sponsor submission beats a thin three-sponsor one |
+| ETHGlobal check-ins / showcase compliance missed (Sept 8 and Sept 11, 03:59 UTC / 09:29 IST) | Medium | High | Calendar them and track against `08_EVENT_RULES.md`. Missing an ETHGlobal checkpoint risks eligibility independent of code |
 | Revocation slower than Tailscale, judge notices | High | Medium | Measure it, publish it, say it out loud in the video |
-| Judge says "just run Headscale" | High | High | `07_ADJACENT_WORK.md` line. The answer is that Headscale is the server you are removing, and it lacks Tailnet Lock |
+| Judge says "just run Headscale" | High | High | `06_ADJACENT_WORK.md` line. The answer is that Headscale is the server you are removing, and it lacks Tailnet Lock |
 | Judge says "passkeys do this" | High | High | Concede most of it. Fall back to bootstrap, non-equivocation, unwithholdable revocation |
 | Overclaiming "zero infrastructure" | Medium | High | Say "no trusted coordinator," never "zero infrastructure" — relays exist and are paid |
 | Demo network fails live | Medium | High | Record beats early. Have a recorded fallback for anything network-dependent |

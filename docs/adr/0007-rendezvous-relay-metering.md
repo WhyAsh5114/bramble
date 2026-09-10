@@ -1,6 +1,6 @@
 # ADR 0007 — Meter the rendezvous relay with real x402/Hedera payments
 
-**Status:** Decided, Sept 9 2026. Builds on `adr/0003-rendezvous-relay-split.md` (the rendezvous/data-relay split) and `adr/0002-node-agent-language.md` (Go node agent, TypeScript sidecar for anything without a mature Go SDK). Gate 0.4 (`11_DAY0_GATES.md`) already proved the payment rail standalone; this ADR wires it into the actual rendezvous relay.
+**Status:** Decided, Sept 9 2026. Builds on `adr/0003-rendezvous-relay-split.md` (the rendezvous/data-relay split) and `adr/0002-node-agent-language.md` (Go node agent, TypeScript sidecar for anything without a mature Go SDK). Gate 0.4 (`10_DAY0_GATES.md`) already proved the payment rail standalone; this ADR wires it into the actual rendezvous relay.
 
 ## Context
 

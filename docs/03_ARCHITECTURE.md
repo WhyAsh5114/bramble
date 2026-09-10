@@ -20,9 +20,9 @@ flowchart LR
     end
 ```
 
-**Nothing that reveals a mesh member's network topology goes on-chain.** Device and agent subnames — the things admission control gates — never carry an endpoint, IP, or port. This is a hard rule, not a preference — see `10_JUDGING.md`, objection 2. It extends to ACLs too: a device's `acl` record holds ECDH digests of symbolic service names (each one a Diffie-Hellman shared secret between the vouching identity's and the target device's already-published pubkeys, never a manually-shared secret), never a name, host, or port in the clear — see `adr/0005-acl-record-schema.md`.
+**Nothing that reveals a mesh member's network topology goes on-chain.** Device and agent subnames — the things admission control gates — never carry an endpoint, IP, or port. This is a hard rule, not a preference — see `09_JUDGING.md`, objection 2. It extends to ACLs too: a device's `acl` record holds ECDH digests of symbolic service names (each one a Diffie-Hellman shared secret between the vouching identity's and the target device's already-published pubkeys, never a manually-shared secret), never a name, host, or port in the clear — see `adr/0005-acl-record-schema.md`.
 
-**Relays are the deliberate exception, not a loophole.** A relay is not a mesh member; it's a permissionless, publicly-reachable commodity service with no admission gate to leak, so advertising where it lives is a feature — it's how clients and other agents find it (see "Relay economics" below) — not a security regression. The rule that matters is *"never publish where a private mesh member lives,"* not *"never publish an endpoint anywhere."* Conflating the two either leaks topology or throws away a real discoverability feature. See `12_SOURCE_NOTES.md` for why this came up.
+**Relays are the deliberate exception, not a loophole.** A relay is not a mesh member; it's a permissionless, publicly-reachable commodity service with no admission gate to leak, so advertising where it lives is a feature — it's how clients and other agents find it (see "Relay economics" below) — not a security regression. The rule that matters is *"never publish where a private mesh member lives,"* not *"never publish an endpoint anywhere."* Conflating the two either leaks topology or throws away a real discoverability feature. See `11_SOURCE_NOTES.md` for why this came up.
 
 ## Components
 
@@ -62,7 +62,7 @@ NAT hole-punching requires two peers to exchange candidates at roughly the same 
 
 Both are relays in the same sense: they forward opaque blobs, cannot inject a device (admission is checked against ENS at each peer), and cannot read traffic (WireGuard encrypts end to end; the tiny signaling payload is likewise opaque to the rendezvous relay).
 
-**A rogue rendezvous relay can deny, not impersonate.** It can withhold or lie about an address, but a peer's WireGuard handshake is addressed to a public key it already has from ENS, and only completes if the other end holds the matching private key — a substituted address just produces a failed handshake, never a compromised one. The one real residual risk is *selective* connectivity denial for a targeted pair, which is why the rendezvous set must have more than one relay with failover across it, not just one. Full argument in `adr/0003-rendezvous-relay-split.md` ("Trust boundary") and `10_JUDGING.md` objection 14.
+**A rogue rendezvous relay can deny, not impersonate.** It can withhold or lie about an address, but a peer's WireGuard handshake is addressed to a public key it already has from ENS, and only completes if the other end holds the matching private key — a substituted address just produces a failed handshake, never a compromised one. The one real residual risk is *selective* connectivity denial for a targeted pair, which is why the rendezvous set must have more than one relay with failover across it, not just one. Full argument in `adr/0003-rendezvous-relay-split.md` ("Trust boundary") and `09_JUDGING.md` objection 14.
 
 **So the honest claim is "no *trusted* coordinator," not "no infrastructure."** Relays exist, they are commodity, interchangeable, permissionless, and paid per byte. That distinction must survive into the README and the video verbatim. Overclaiming here is the fastest way to lose credibility with a networking-literate judge.
 
@@ -72,7 +72,7 @@ Both are relays in the same sense: they forward opaque blobs, cannot inject a de
 - Clients pick a data relay on price and latency, pay per byte via x402 through Blocky402 on Hedera.
 - **Rendezvous relay usage is x402-metered too**, even though the payload is tiny. This isn't about the revenue — it's about guaranteeing every single connection attempt produces a real, on-chain, metered payment, independent of whether that connection ever needed a data relay. Without this, a topology where hole punching just works every time (e.g. a laptop connecting to a VPS, which has no NAT to punch through at all) would generate zero paid relay activity, which is a weak position for a track that specifically wants to see metered, repeated settlement. See `adr/0003-rendezvous-relay-split.md`.
 - Relays see only ciphertext. This is why permissionless relays are safe.
-- More relays improves geographic coverage, blocking resistance (a fixed set of DERP IPs is easy to firewall; many independent operators is not), and redundancy. **It is not a network effect** and must not be described as one. See `10_JUDGING.md`.
+- More relays improves geographic coverage, blocking resistance (a fixed set of DERP IPs is easy to firewall; many independent operators is not), and redundancy. **It is not a network effect** and must not be described as one. See `09_JUDGING.md`.
 
 ## The agent path
 

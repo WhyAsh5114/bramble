@@ -13,7 +13,7 @@ describe('resolveDevice', () => {
     expect(record.fullname).toBe(fixture.deviceFullname)
     expect(record.pubkey).toBe(fixture.expectedPubkey)
     // status 0 = expired/unset, non-zero = active in this registry's state
-    // enum (see docs/12_SOURCE_NOTES.md) — the fixture registered a 10-year
+    // enum (see docs/11_SOURCE_NOTES.md) — the fixture registered a 10-year
     // expiry, so this must be active.
     expect(record.status).not.toBe(0)
     expect(BigInt(record.expiry)).toBeGreaterThan(BigInt(Math.floor(Date.now() / 1000)))

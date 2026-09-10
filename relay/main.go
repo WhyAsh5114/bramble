@@ -1,5 +1,5 @@
 // Command relay is the dumb rendezvous relay Gate 0.2 requires
-// (docs/11_DAY0_GATES.md:22): it forwards opaque candidate-exchange blobs
+// (docs/10_DAY0_GATES.md:22): it forwards opaque candidate-exchange blobs
 // between two node agents identified by their WireGuard public key. It never
 // decides who may talk to whom — that decision is made independently by each
 // peer's own admission verifier against ENS state (see

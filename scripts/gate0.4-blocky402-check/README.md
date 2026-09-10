@@ -1,6 +1,6 @@
 # Gate 0.4 — Hedera x402 through Blocky402
 
-Standalone proof for `docs/11_DAY0_GATES.md` Gate 0.4: one trivial paid request, end to end, settled through Blocky402 on Hedera testnet, transaction confirmed on-chain. Deliberately not integrated with `relay/` — see `docs/05_BUILD_PLAN.md` Phase 4 Section A. Kept outside the pnpm/Turborepo workspace, same precedent as `scripts/gate0.3-eac-check/`.
+Standalone proof for `docs/10_DAY0_GATES.md` Gate 0.4: one trivial paid request, end to end, settled through Blocky402 on Hedera testnet, transaction confirmed on-chain. Deliberately not integrated with `relay/` — see `docs/05_BUILD_PLAN.md` Phase 4 Section A. Kept outside the pnpm/Turborepo workspace, same precedent as `scripts/gate0.3-eac-check/`.
 
 ## What it proves
 
@@ -53,7 +53,7 @@ npm run client                # terminal 2
 
 ## Findings that resolved open questions elsewhere
 
-- **Blocky402-vs-Scaffold-HBAR-starter-kit question (`docs/12_SOURCE_NOTES.md`) is moot for this proof**: this script calls Blocky402's own hosted testnet facilitator directly (`api.testnet.blocky402.com`, confirmed live via its `/supported` endpoint, which lists `hedera:testnet`), never going through the Scaffold-HBAR starter at all.
+- **Blocky402-vs-Scaffold-HBAR-starter-kit question (`docs/11_SOURCE_NOTES.md`) is moot for this proof**: this script calls Blocky402's own hosted testnet facilitator directly (`api.testnet.blocky402.com`, confirmed live via its `/supported` endpoint, which lists `hedera:testnet`), never going through the Scaffold-HBAR starter at all.
 - **`@x402/core` / `@x402/hedera` v2 package surface, previously unverified in `04_TECH_STACK.md`**: confirmed real, published, and usable as documented in their own bundled READMEs (checked against the installed packages' actual `.d.ts` files, not just the docs site). `@x402/fetch` and `@x402/hono` (also real, published) turned out to be the right layer to build on — much less code than hand-rolling the low-level `x402ResourceServer`/`x402HTTPClient` wiring.
 - **New dependency**: `@hiero-ledger/sdk` (Hedera's own SDK; `@x402/hedera` re-exports a pinned subset of it — importing it directly alongside `@x402/hedera` in a workspace risks duplicate installs, per that package's own README).
 - **Settlement asset options on `hedera:testnet`**: native HBAR (`0.0.0`, 8 decimals, tinybars) or testnet USDC (`0.0.429274`, 6 decimals, HTS — requires token association for both parties first). This proof uses HBAR.

@@ -35,7 +35,7 @@ export const ROLE_SET_ADDRESS = 1n << 0n
 // part of REGISTRATION_ROLE_BITMAP above (which is what's granted to the
 // *new token's owner*, a separate concern). Verified from primary source,
 // not the docs page (same discipline as the initializer-signature drift in
-// docs/12_SOURCE_NOTES.md): ensdomains/contracts-v2's
+// docs/11_SOURCE_NOTES.md): ensdomains/contracts-v2's
 // contracts/src/registry/libraries/RegistryRolesLib.sol defines
 // `ROLE_REGISTRAR = 1 << 0`, and PermissionedRegistry._register() calls
 // `_checkRoles(ROOT_RESOURCE, RegistryRolesLib.ROLE_REGISTRAR, msg.sender)`

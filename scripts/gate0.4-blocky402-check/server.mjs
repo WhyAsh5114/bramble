@@ -1,4 +1,4 @@
-// Gate 0.4 (docs/11_DAY0_GATES.md): a trivial HTTP route gated behind a real
+// Gate 0.4 (docs/10_DAY0_GATES.md): a trivial HTTP route gated behind a real
 // x402 payment, settled through Blocky402's hosted testnet facilitator on
 // Hedera testnet. Settlement asset is native HBAR (0.0.0) — deliberately not
 // an HTS token, to sidestep the TOKEN_NOT_ASSOCIATED_TO_ACCOUNT trap

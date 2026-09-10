@@ -9,7 +9,7 @@
 //   (a) that address CAN write the one key it was granted, and
 //   (b) that address CANNOT write any other key or record type.
 //
-// (b) is the actual K2 kill-criterion check from 08_RISKS.md: if a
+// (b) is the actual K2 kill-criterion check from 07_RISKS.md: if a
 // delegated account can act outside its grant, EAC doesn't restrict and
 // the ENS pitch collapses. This script proves it does or doesn't, against
 // the real deployed hackathon contracts, not the general ENSv2 beta.
@@ -115,7 +115,7 @@ const resolverInitAbi = parseAbi([
 // Grant[] array instead, same shape as the resolver's grants but without the
 // `calls` array. Confirmed empirically: the two-arg version reverts inside
 // the nested initializer call every time; this one succeeds. Docs vs. deployed
-// bytecode drift — noted in docs/12_SOURCE_NOTES.md.
+// bytecode drift — noted in docs/11_SOURCE_NOTES.md.
 const userRegistryInitAbi = parseAbi([
   'function initialize((address account, uint256 roleBitmap)[] grants)',
 ])

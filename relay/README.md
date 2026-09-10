@@ -1,6 +1,6 @@
 # relay
 
-The dumb rendezvous relay (`docs/11_DAY0_GATES.md` Gate 0.2, `docs/adr/0003-rendezvous-relay-split.md`). Forwards opaque candidate-exchange blobs between two node agents; never decides who may talk to whom.
+The dumb rendezvous relay (`docs/10_DAY0_GATES.md` Gate 0.2, `docs/adr/0003-rendezvous-relay-split.md`). Forwards opaque candidate-exchange blobs between two node agents; never decides who may talk to whom.
 
 ```bash
 go build -o bin/relay .

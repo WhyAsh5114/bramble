@@ -17,7 +17,7 @@ Judges on the ENS and Ledger tracks may not know this space; a networking-litera
 
 ## The passkey objection
 
-The strongest objection this project faces — a pinned admin key plus signed node keys, verified at the peer, no chain needed — is essentially Tailnet Lock already. See `10_JUDGING.md` objection 5 for the full answer (bootstrap, non-equivocation, unwithholdable revocation).
+The strongest objection this project faces — a pinned admin key plus signed node keys, verified at the peer, no chain needed — is essentially Tailnet Lock already. See `09_JUDGING.md` objection 5 for the full answer (bootstrap, non-equivocation, unwithholdable revocation).
 
 ## Related-but-different
 

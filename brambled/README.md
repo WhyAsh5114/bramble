@@ -87,14 +87,14 @@ tailnet it belongs to; this isn't discovered automatically).
 
 ## Gate 0.2 runbook — two peers, two networks, no trusted coordinator
 
-`docs/11_DAY0_GATES.md` Gate 0.2 requires a real laptop-to-VPS (or hotspot)
+`docs/10_DAY0_GATES.md` Gate 0.2 requires a real laptop-to-VPS (or hotspot)
 run: candidate exchange through a dumb relay, real `ping` + one TCP
 connection across the tunnel, from two genuinely different networks. This
 can't be executed from this environment (no VPS, no second physical network
 available here) — the steps below are for whoever runs it.
 
 **Topology:** VPS has a public IP and needs no NAT traversal on its side —
-the easier, currently-supported case (`11_DAY0_GATES.md:30`). The relay runs
+the easier, currently-supported case (`10_DAY0_GATES.md:30`). The relay runs
 on the VPS too, since it already has a reachable address.
 
 1. On the VPS, build and run the relay:
@@ -138,7 +138,7 @@ on the VPS too, since it already has a reachable address.
    ```
    Both `brambled serve` logs should show `admission: <label>: authorized`
    for the other side.
-6. Record the result in `docs/11_DAY0_GATES.md` — pass/fail, which
+6. Record the result in `docs/10_DAY0_GATES.md` — pass/fail, which
    topology, and the date — only once actually run this way. A CI-only or
    same-machine run does not count (see "Known gaps").
 
@@ -371,7 +371,7 @@ serve` stderr for its `admission: device2: not authorized` line. The
   (only in test code and never in `serve`'s default) removes that failure
   class entirely instead of documenting around it.
 - **Real OS TUN addressing/routing is verified on Linux (Ubuntu 26.04
-  arm64) and macOS, laptop-to-VPS topology only** (`11_DAY0_GATES.md` Gate
+  arm64) and macOS, laptop-to-VPS topology only** (`10_DAY0_GATES.md` Gate
   0.2, ✅ 2026-09-06). A same-machine rehearsal was tried first and abandoned
   as a validation method — both nodes' addresses are local to one host
   there, so a shell `ping` resolves via local delivery (or fails
@@ -384,7 +384,7 @@ serve` stderr for its `admission: device2: not authorized` line. The
   carries candidate exchange, but there's no NAT traversal for the harder
   two-NAT case — only the laptop-to-VPS topology (VPS has a public IP,
   needs no traversal on its side) is currently supported end to end.
-  `11_DAY0_GATES.md` Gate 0.2's own note explicitly separates this easier
+  `10_DAY0_GATES.md` Gate 0.2's own note explicitly separates this easier
   case from the harder one. Multi-relay failover is still deferred until this
   exists — Gate 1.2's hostile-relay test itself doesn't need it (see
   `docs/05_BUILD_PLAN.md` Gate 1.2, ✅ verified).

@@ -79,7 +79,7 @@ const verifiableFactoryAbi = parseAbi([
 
 const resolverInitAbi = parseAbi(['function initialize((address account, uint256 roleBitmap)[] grants, bytes[] calls)'])
 
-// See docs/12_SOURCE_NOTES.md: the docs' two-arg initializer for
+// See docs/11_SOURCE_NOTES.md: the docs' two-arg initializer for
 // UserRegistryImpl reverts against the actually-deployed bytecode. This is
 // the corrected signature, verified by Gate 0.3.
 const userRegistryInitAbi = parseAbi(['function initialize((address account, uint256 roleBitmap)[] grants)'])

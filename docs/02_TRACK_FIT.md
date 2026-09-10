@@ -16,7 +16,7 @@ Tightest fit on the board. Their ask, mapped:
 
 **Hard requirements:** built on ENSv2 Sepolia; ENSv2 features central, not cosmetic; **demo must be functional and not hard-coded**; video or live demo; open source.
 
-**Also in their resources, worth using:** ENSIP-25 (AI agent registry name verification) and ENSIP-26 (agent text records). Using the standard record keys instead of inventing your own is close to free and signals you read their docs. See `docs/10_JUDGING.md` objection 13 for how ENSIP-26 applies to relay subnames but not device/agent subnames.
+**Also in their resources, worth using:** ENSIP-25 (AI agent registry name verification) and ENSIP-26 (agent text records). Using the standard record keys instead of inventing your own is close to free and signals you read their docs. See `docs/09_JUDGING.md` objection 13 for how ENSIP-26 applies to relay subnames but not device/agent subnames.
 
 ## Ledger — AI Agents x Ledger
 

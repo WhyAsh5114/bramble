@@ -1,6 +1,6 @@
 # ADR 0003 — Separate rendezvous relays (signaling) from the data-plane relay market, and meter both
 
-**Status:** Decided, Sept 5 2026. Rendezvous relay + candidate exchange implemented and verified end-to-end Sept 6 2026 (`relay/`, `brambled/rendezvous/`, `11_DAY0_GATES.md` Gate 0.2). x402 metering of rendezvous usage (Phase 4) and the data-plane relay market are still unimplemented.
+**Status:** Decided, Sept 5 2026. Rendezvous relay + candidate exchange implemented and verified end-to-end Sept 6 2026 (`relay/`, `brambled/rendezvous/`, `10_DAY0_GATES.md` Gate 0.2). x402 metering of rendezvous usage (Phase 4) and the data-plane relay market are still unimplemented.
 
 ## Background, for anyone reading this without the rest of the NAT-traversal context
 
@@ -12,7 +12,7 @@ The standard fix is STUN + hole punching: each side asks a public STUN server "w
 
 ## Context
 
-`03_ARCHITECTURE.md` designs the relay as a permissionless, price/latency-chosen market: any operator runs one, clients pick per connection. That design has a gap it doesn't itself address: before any connection exists, peer A has no way to know *which* relay instance to send peer B's candidate-exchange offer through, if relay choice is arbitrary and per-connection — each side would pick independently, with no shared meeting point. A single hand-run relay hides this during Gate 0.2's Day-0 test (there's only one relay to pick), but it surfaces at Gate 4.3 ("two relays, client chooses") — see `12_SOURCE_NOTES.md`, "Day 1 technical sanity check," item 5.
+`03_ARCHITECTURE.md` designs the relay as a permissionless, price/latency-chosen market: any operator runs one, clients pick per connection. That design has a gap it doesn't itself address: before any connection exists, peer A has no way to know *which* relay instance to send peer B's candidate-exchange offer through, if relay choice is arbitrary and per-connection — each side would pick independently, with no shared meeting point. A single hand-run relay hides this during Gate 0.2's Day-0 test (there's only one relay to pick), but it surfaces at Gate 4.3 ("two relays, client chooses") — see `11_SOURCE_NOTES.md`, "Day 1 technical sanity check," item 5.
 
 A second, separate problem surfaced once the first was solved: if data relays are only used when hole punching *fails*, and a lot of realistic topologies (e.g. a laptop connecting to a VPS, which has a public IP and needs no traversal at all on its side) succeed at hole punching essentially every time, then the paid data-relay path might rarely or never fire — which is a weak position for a track whose qualification bar is a real, metered, repeatedly-settled payment.
 
@@ -37,13 +37,13 @@ This needs to be stated explicitly, because it's the difference between "another
 
 **The residual risk that is real: selective censorship.** A rogue relay operator could quietly drop messages for one specific targeted pair while working normally for everyone else — indistinguishable from ordinary packet loss, much harder to notice than an outright outage. If a tailnet publishes only *one* rendezvous relay, that's a genuine single point of failure for connectivity (not admission — a narrower, but still real, weakness).
 
-**Mitigation, now a requirement, not just a recommendation:** a tailnet's published rendezvous set must have more than one relay, and node agents must attempt candidate exchange across the *whole* published set (parallel query, or sequential retry on timeout — implementation detail, not a hard gate) rather than only the first one reached. One rogue or unreachable relay in the set must not be able to unilaterally block a connection that another relay in the same set would have carried. See `05_BUILD_PLAN.md` Gate 1.2's caution and `10_JUDGING.md` objection 14 for the judge-facing version of this argument.
+**Mitigation, now a requirement, not just a recommendation:** a tailnet's published rendezvous set must have more than one relay, and node agents must attempt candidate exchange across the *whole* published set (parallel query, or sequential retry on timeout — implementation detail, not a hard gate) rather than only the first one reached. One rogue or unreachable relay in the set must not be able to unilaterally block a connection that another relay in the same set would have carried. See `05_BUILD_PLAN.md` Gate 1.2's caution and `09_JUDGING.md` objection 14 for the judge-facing version of this argument.
 
 **The clean contrast for a judge:** a compromised Tailscale/Headscale coordinator can inject a fully-legitimate-looking device — an admission-integrity failure, the whole trust model breaks. A rogue rendezvous relay can, at worst, deny connectivity for pairs routed through it — an availability failure, recoverable by trying another relay in the set. Different class of failure; the admission thesis in `03_ARCHITECTURE.md` is untouched either way.
 
 ## Rationale
 
-This preserves the "no fixed DERP-style set" claim in `07_ADJACENT_WORK.md` for the part that matters (bulk data relay stays an open market) while giving discovery a concrete mechanism instead of leaving it implicit. Metering rendezvous costs almost nothing to add (it's the same x402 flow already needed for data relays, applied to a smaller payload) and directly hedges against the demo's own topology being *too well-behaved* to naturally need a data relay — a risk that cuts the opposite direction from `08_RISKS.md` K4 (which worries about *too much* relaying), and one the original design didn't account for either way.
+This preserves the "no fixed DERP-style set" claim in `06_ADJACENT_WORK.md` for the part that matters (bulk data relay stays an open market) while giving discovery a concrete mechanism instead of leaving it implicit. Metering rendezvous costs almost nothing to add (it's the same x402 flow already needed for data relays, applied to a smaller payload) and directly hedges against the demo's own topology being *too well-behaved* to naturally need a data relay — a risk that cuts the opposite direction from `07_RISKS.md` K4 (which worries about *too much* relaying), and one the original design didn't account for either way.
 
 ## Consequence
 
