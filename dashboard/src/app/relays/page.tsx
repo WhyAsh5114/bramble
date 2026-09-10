@@ -2,6 +2,7 @@
 
 import { usePolling } from '@/hooks/use-polling'
 import { MonoValue } from '@/components/mono-value'
+import { StatusText } from '@/components/status-text'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { AssetAmount, Relays } from '@/lib/types'
@@ -17,6 +18,26 @@ interface PricedDataRelay {
   sidecarUrl: string
   price: AssetAmount | null
   priceError: string | null
+}
+
+interface HealthByLabel {
+  [label: string]: boolean | null // null: no payment sidecar published, so nothing to check
+}
+
+async function fetchRendezvousHealth(relays: Relays): Promise<HealthByLabel> {
+  const entries = await Promise.all(
+    relays.rendezvous.map(async (r): Promise<[string, boolean | null]> => {
+      if (!r.sidecarUrl) return [r.label, null]
+      try {
+        const res = await fetch(`/api/relay-health?url=${encodeURIComponent(r.sidecarUrl)}`, { cache: 'no-store' })
+        const body = await res.json().catch(() => ({ reachable: false }))
+        return [r.label, Boolean(body.reachable)]
+      } catch {
+        return [r.label, false]
+      }
+    })
+  )
+  return Object.fromEntries(entries)
 }
 
 async function fetchDataRelayPrices(relays: Relays): Promise<PricedDataRelay[]> {
@@ -45,6 +66,11 @@ export default function RelaysPage() {
   const priced = usePolling(async () => (relays.data ? fetchDataRelayPrices(relays.data) : []), 15_000, [
     relays.data ? JSON.stringify(relays.data.dataRelays) : '',
   ])
+  const rendezvousHealth = usePolling<HealthByLabel>(
+    async () => (relays.data ? fetchRendezvousHealth(relays.data) : {}),
+    15_000,
+    [relays.data ? JSON.stringify(relays.data.rendezvous) : '']
+  )
 
   return (
     <div className="flex flex-col gap-10">
@@ -70,16 +96,31 @@ export default function RelaysPage() {
                 <TableHead>Label</TableHead>
                 <TableHead>Address</TableHead>
                 <TableHead>Payment sidecar</TableHead>
+                <TableHead>Reachable</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {relays.data.rendezvous.map((r) => (
-                <TableRow key={r.label}>
-                  <TableCell className="font-mono text-sm">{r.label}</TableCell>
-                  <TableCell className="font-mono text-sm">{r.address}</TableCell>
-                  <TableCell className="font-mono text-sm">{r.sidecarUrl ?? 'unmetered'}</TableCell>
-                </TableRow>
-              ))}
+              {relays.data.rendezvous.map((r) => {
+                const health = rendezvousHealth.data?.[r.label]
+                return (
+                  <TableRow key={r.label}>
+                    <TableCell className="font-mono text-sm">{r.label}</TableCell>
+                    <TableCell className="font-mono text-sm">{r.address}</TableCell>
+                    <TableCell className="font-mono text-sm">{r.sidecarUrl ?? 'unmetered'}</TableCell>
+                    <TableCell>
+                      {health === undefined ? (
+                        <span className="text-sm text-muted-foreground">…</span>
+                      ) : health === null ? (
+                        <span className="text-sm text-muted-foreground">no sidecar to check</span>
+                      ) : health ? (
+                        <StatusText tone="positive">reachable</StatusText>
+                      ) : (
+                        <StatusText tone="negative">unreachable</StatusText>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         )}
