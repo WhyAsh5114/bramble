@@ -7,7 +7,7 @@
 //
 // Authorization rule: pubkey is set AND expiry is in the future. The
 // registry's `status` field is read but deliberately not used — its enum
-// meaning isn't documented anywhere verified yet (see docs/12_SOURCE_NOTES.md).
+// meaning isn't documented anywhere verified yet (see docs/11_SOURCE_NOTES.md).
 // Revocation may turn out to need status once that's confirmed; using only
 // expiry for now is a known, flagged gap, not a guess dressed up as one.
 //
@@ -46,6 +46,7 @@ package admission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -174,13 +175,29 @@ func (l *Loop) SyncOnce() {
 			// clearing its own record could never be found again to remove
 			// from the live peer table — see docs/05_BUILD_PLAN.md Gate 1.3,
 			// TestGate1_3_RevocationDropsAlreadyConnectedPeer.
-			removeKey := pubkey
-			if removeKey == "" {
-				removeKey = l.knownPubkeys[p.Label]
+			// The record can change its pubkey and become unauthorized in
+			// the same polling interval. In that case pubkey is the new,
+			// never-admitted key while knownPubkeys holds the old key that is
+			// still live. Remove both distinct values. Keep remembered state
+			// when either removal fails so the next poll retries it.
+			knownKey := l.knownPubkeys[p.Label]
+			removeKeys := []string{knownKey}
+			if pubkey != knownKey {
+				removeKeys = append(removeKeys, pubkey)
 			}
-			if removeKey != "" {
-				syncErr = l.Table.RemovePeer(removeKey)
+			var removeErrs []error
+			for _, removeKey := range removeKeys {
+				if removeKey == "" {
+					continue
+				}
+				if err := l.Table.RemovePeer(removeKey); err != nil {
+					removeErrs = append(removeErrs, fmt.Errorf("removing peer %s: %w", removeKey, err))
+					continue
+				}
 				delete(l.resolvedEndpoints, removeKey)
+			}
+			syncErr = errors.Join(removeErrs...)
+			if syncErr == nil {
 				delete(l.knownPubkeys, p.Label)
 			}
 		}

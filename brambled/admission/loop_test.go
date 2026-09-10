@@ -401,6 +401,43 @@ func TestSyncOnce_RemovesPeerMarkedRevoked(t *testing.T) {
 	}
 }
 
+// A rotation and revocation can land between the same two polls. The record
+// then reports a new key that was never admitted, while the old admitted key
+// exists only in Loop's memory. Revocation must remove that remembered key.
+func TestSyncOnce_RotationAndRevocationRemovesPreviouslyAdmittedKey(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	future := now.Add(time.Hour).Unix()
+	resolver := fakeResolver{
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("old-key"), Expiry: itoa(future)},
+	}
+	table := newFakeTable()
+	loop := &Loop{
+		Resolver: resolver,
+		Table:    table,
+		Peers:    []Peer{{Label: "device1", AllowedIP: netip.MustParsePrefix("10.0.0.1/32")}},
+		Now:      func() time.Time { return now },
+	}
+
+	loop.SyncOnce()
+	resolver["device1"] = &sidecar.DeviceRecord{
+		Fullname: "device1.acme.eth",
+		Pubkey:   strPtr("new-key"),
+		Expiry:   itoa(future),
+		Revoked:  true,
+	}
+	loop.SyncOnce()
+
+	if !table.removed["old-key"] {
+		t.Fatal("expected the previously admitted key to be removed")
+	}
+	if _, ok := table.added["old-key"]; ok {
+		t.Fatal("previously admitted key remained in the live peer table")
+	}
+	if !table.removed["new-key"] {
+		t.Fatal("expected the current unauthorized key to be removed defensively")
+	}
+}
+
 func TestSyncOnce_EmitsEventPerPeer(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
