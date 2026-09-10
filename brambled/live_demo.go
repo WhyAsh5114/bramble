@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -26,7 +25,7 @@ import (
 func runDemoDataRelay(args []string) error {
 	fs := flag.NewFlagSet("demo-data-relay", flag.ContinueOnError)
 	rendezvousAddr := fs.String("rendezvous", "127.0.0.1:9420", "primary relay's rendezvous TCP address")
-	rendezvousBackupAddr := fs.String("rendezvous-backup", "127.0.0.1:9421", "backup relay's rendezvous TCP address — killing the primary process takes its rendezvous listener down too, so failover's own candidate re-exchange needs somewhere else to go (docs/adr/0003's ExchangeAny)")
+	rendezvousBackupAddr := fs.String("rendezvous-backup", "127.0.0.1:9421", "backup relay's rendezvous TCP address — killing the primary process takes its rendezvous listener down too, so failover's own candidate re-exchange needs somewhere else to go (docs/adr/0003's exchangeAnyMetered)")
 	primaryURL := fs.String("primary", "http://127.0.0.1:7891", "primary (cheap) relay-sidecar URL")
 	backupURL := fs.String("backup", "http://127.0.0.1:7893", "backup (expensive) relay-sidecar URL")
 	smallBytes := fs.Int64("small-bytes", 1000, "small session size, for the cost-scaling proof")
@@ -51,7 +50,6 @@ func runDemoDataRelay(args []string) error {
 			Port:                   port,
 			TailnetName:            tailnetName,
 			TailnetRegistry:        tailnetRegistry,
-			RendezvousPaymentURL:   *primaryURL,
 			HederaClientAccountID:  hederaAccount,
 			HederaClientPrivateKey: hederaKey,
 		})
@@ -114,7 +112,18 @@ func runDemoDataRelay(args []string) error {
 	defer bob.Close()
 
 	pool := dataRelayFlag{"primary": *primaryURL, "backup": *backupURL}
-	relayAddrs := []string{*rendezvousAddr, *rendezvousBackupAddr}
+	// Each relay paired with its OWN payment sidecar — not just a flat list
+	// of TCP addresses. This pairing is the fix docs/adr/0008 records:
+	// every relay mints rendezvous tokens under its own process-local
+	// secret, so a token bought from the primary's sidecar was never valid
+	// at the backup's TCP listener once the primary died mid-failover.
+	// exchangeAnyMetered (via relayRoutedEndpoint/watchDataRelayFailover/
+	// watchDataRelayAdopt) now buys a fresh token from whichever relay it's
+	// actually about to try.
+	relays := []sidecar.RendezvousRelay{
+		{Label: "primary", Address: *rendezvousAddr, SidecarURL: *primaryURL},
+		{Label: "backup", Address: *rendezvousBackupAddr, SidecarURL: *backupURL},
+	}
 
 	// Asymmetric, matching docs/adr/0008 and runServe's actual wiring:
 	// only alice is -relay-peer for bob (she buys, publishes, and later
@@ -125,11 +134,6 @@ func runDemoDataRelay(args []string) error {
 	// independently buy (an earlier draft of this demo) only ever
 	// "worked" by accident against a stub that didn't do that — a live
 	// run against the real relay binary is what surfaced it.
-	aliceTok, err := aliceM.RendezvousToken()
-	if err != nil {
-		return fmt.Errorf("buying alice's rendezvous token: %w", err)
-	}
-
 	var aliceEndpoint *netip.AddrPort
 	var aliceLabel string
 	var aliceErr error
@@ -139,15 +143,11 @@ func runDemoDataRelay(args []string) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, relayAddrs, alicePub, bobPub, aliceTok.Token, 15*time.Second)
+		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, relays, alicePub, bobPub, 15*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		var token string
-		if resp, tokErr := bobM.RendezvousToken(); tokErr == nil {
-			token = resp.Token
-		}
-		candidate, err := rendezvous.ExchangeAny(relayAddrs, bobPub, alicePub, "", token, 15*time.Second)
+		candidate, _, err := exchangeAnyMetered(relays, bobM, bobPub, alicePub, "", 15*time.Second)
 		if err != nil {
 			bobErr = err
 			return
@@ -204,8 +204,8 @@ func runDemoDataRelay(args []string) error {
 	aliceState := newRelayState()
 	aliceState.set("bob", bobPub, aliceLabel)
 
-	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, *sessionBytes, relayAddrs, alicePub, 15*time.Second)
-	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, relayAddrs)
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, *sessionBytes, relays, alicePub, 15*time.Second)
+	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, relays)
 
 	fmt.Fprintln(os.Stderr, ">>> kill the primary relay process now to trigger failover <<<")
 
