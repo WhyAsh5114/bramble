@@ -8,6 +8,7 @@ const links = [
   { href: '/', label: 'Overview' },
   { href: '/devices', label: 'Devices' },
   { href: '/relays', label: 'Relays' },
+  { href: '/activity', label: 'Activity' },
 ]
 
 export function Nav() {

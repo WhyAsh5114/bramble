@@ -46,3 +46,31 @@ export interface AssetAmount {
 export interface ApiError {
   error: string
 }
+
+// Mirrors brambled/statusapi/server.go's PeerStatus/ActivityEvent — this
+// node's own runtime state (live WireGuard peer table, recent
+// admission/gateway decisions), distinct from the ENS-sourced DeviceRecord
+// above. Same "duplicated types, no shared package" discipline as the
+// sidecar types: the dashboard only ever talks to brambled over HTTP too.
+export interface PeerStatus {
+  label: string
+  publicKeyHex: string
+  authorized: boolean
+  allowedIPs: string[] | null
+  handshaked: boolean
+  lastHandshakeUnixNs: number
+  rxBytes: number
+}
+
+export interface ActivityEvent {
+  time: string
+  kind: 'admission' | 'gateway'
+  label: string
+  message: string
+}
+
+export interface PingResponse {
+  reachable: boolean
+  rtt?: string
+  detail?: string
+}

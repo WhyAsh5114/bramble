@@ -41,3 +41,18 @@ export function isAuthorized(record: { pubkey: string | null; revoked: boolean; 
   if (!record.pubkey || record.revoked) return false
   return !parseExpiry(record.expiry).expired
 }
+
+// lastHandshakeUnixNs is brambled/wgnode.PeerInfo.LastHandshakeUnixNs
+// straight from WireGuard's own UAPI state — 0 means never handshaked, not
+// "just now" (see wgnode.PeerInfo.Handshaked's own doc comment).
+export function formatHandshakeAge(lastHandshakeUnixNs: number): string {
+  if (!lastHandshakeUnixNs) return 'never'
+  const deltaMs = Date.now() - lastHandshakeUnixNs / 1_000_000
+  if (deltaMs < 0) return 'just now'
+  const secs = Math.floor(deltaMs / 1000)
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  return `${hours}h ago`
+}

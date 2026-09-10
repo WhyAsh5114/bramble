@@ -6,7 +6,7 @@ import { MonoValue } from '@/components/mono-value'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { ENS_EXPLORER_URL, SEPOLIA_ETHERSCAN_URL } from '@/lib/config'
-import type { Relays, SidecarHealth } from '@/lib/types'
+import type { ActivityEvent, Relays, SidecarHealth } from '@/lib/types'
 
 async function fetchHealth(): Promise<SidecarHealth> {
   const res = await fetch('/api/sidecar/health', { cache: 'no-store' })
@@ -26,10 +26,18 @@ async function fetchRelays(): Promise<Relays> {
   return res.json()
 }
 
+async function fetchRecentActivity(): Promise<ActivityEvent[]> {
+  const res = await fetch('/api/brambled/activity', { cache: 'no-store' })
+  if (!res.ok) return []
+  const events = (await res.json()) as ActivityEvent[]
+  return events.slice(-5).reverse()
+}
+
 export default function OverviewPage() {
   const health = usePolling(fetchHealth, 10_000)
   const config = usePolling(fetchConfig, 30_000)
   const relays = usePolling(fetchRelays, 10_000)
+  const activity = usePolling(fetchRecentActivity, 3_000)
 
   return (
     <div className="flex flex-col gap-10">
@@ -104,6 +112,37 @@ export default function OverviewPage() {
           </dd>
         </div>
       </dl>
+
+      <Separator />
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm text-muted-foreground">Recent activity</h2>
+          <Link
+            href="/activity"
+            className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
+          >
+            view all →
+          </Link>
+        </div>
+        {!activity.data && !activity.error && <Skeleton className="h-20 w-full" />}
+        {activity.data && activity.data.length === 0 && (
+          <p className="text-sm text-muted-foreground">No activity yet.</p>
+        )}
+        {activity.data && activity.data.length > 0 && (
+          <ul className="flex flex-col gap-1">
+            {activity.data.map((e, i) => (
+              <li key={`${e.time}-${i}`} className="flex items-baseline gap-3 text-sm">
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  {new Date(e.time).toLocaleTimeString()}
+                </span>
+                <span className="shrink-0 font-mono text-sm text-foreground">{e.label}</span>
+                <span className="truncate text-muted-foreground">{e.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <Separator />
 
