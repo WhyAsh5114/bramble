@@ -52,10 +52,14 @@ HashScan: https://hashscan.io/testnet/transaction/0.0.7162784@1788941365.9616127
 
 **Gate 4.1: ✅ satisfied.** A real connection attempt through the actual rendezvous relay settled a real, on-chain, metered payment — not a standalone proof, the relay's own live payment path.
 
+## Live run (Sept 10, 2026) — two relays, two real machines, real kill
+
+Gate 4.3's kill-mid-transfer failover needed two _metered_ relays, each minting tokens under its own process-local secret (`docs/adr/0008`'s "Kill-mid-transfer failover" section) — one instance of this sidecar isn't enough to prove that. Provisioned a second real EC2 host (`ap-south-1`, arm64, same AMI/subnet/key as the existing `Bramble` box) and ran a `-meter -data-relay` relay on each: the existing box on a fresh port pair (`:9430`/`:7901`, to avoid disturbing the already-running Gate 2.3 demo sharing that machine) and the new box on `:9421`/`:7893`, both paying the same funded Gate 4.1 payee account. `brambled demo-data-relay` ran locally against both real public IPs. Killed the primary `relay` process for real mid-run (`ps` confirmed it dead); `brambled` bought a fresh session from the backup's sidecar and reconnected — `=== Gate 4.3: PASS ===`. Mirror node confirmed both the pre-kill and post-kill/failover session purchases as real, independent on-chain USDC transfers to the two relays' shared payee account. Full evidence: `docs/adr/0008`'s "Kill-mid-transfer failover" section and `docs/05_BUILD_PLAN.md`'s Section D.
+
 ## Running it yourself
 
 ```bash
 bun install
 ```
 
-Then start the relay with `-meter` (see `relay/README.md`'s flags) — it spawns this sidecar automatically. To call this sidecar's payment route directly instead (e.g. for testing), see `sidecar/src/payments/client.ts`'s `payForRendezvousToken()`, which needs `BRAMBLE_RENDEZVOUS_PAYMENT_URL`, `HEDERA_CLIENT_ACCOUNT_ID`, `HEDERA_CLIENT_PRIVATE_KEY` in its environment.
+Then start the relay with `-meter` (see `relay/README.md`'s flags) — it spawns this sidecar automatically. To call this sidecar's payment route directly instead (e.g. for testing), see `sidecar/src/payments/client.ts`'s `payForRendezvousToken(sidecarUrl)` — it needs `HEDERA_CLIENT_ACCOUNT_ID`/`HEDERA_CLIENT_PRIVATE_KEY` in its environment and this sidecar's own base URL passed as an argument (not read from `BRAMBLE_RENDEZVOUS_PAYMENT_URL` — that env var now only means brambled's own static single-relay `-rendezvous` flag, not this sidecar's config; see docs/adr/0008's "Kill-mid-transfer failover" section for why a token has to be bought per relay rather than once per node).
