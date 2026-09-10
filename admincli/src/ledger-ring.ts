@@ -3,7 +3,7 @@
 // split.md's "Pivot" section). This key is never used to sign anything —
 // it's an X25519 scalar fed into aclDigestECDH (roles.ts) — so a signing
 // device can't protect it; only a hardware-rooted encryption primitive
-// (Key Ring) can. Text always crosses the wallet-cli boundary via
+// (Key Ring) can. Ciphertext always crosses the wallet-cli boundary via
 // stdin/stdout, never a plaintext intermediate file: decrypt() only ever
 // returns the key in memory, for the caller's own brief use at grant time.
 //
@@ -19,14 +19,21 @@ import { spawn } from 'node:child_process'
 // key.ts, run once) and every decrypt() call here.
 const RING_KEY_NAME = 'bramble-granter-key'
 
-function runRing(subcommand: 'encrypt' | 'decrypt', input: string): Promise<string> {
+// Ciphertext is raw binary, not text — despite `--help` calling this mode
+// "text via stdin/stdout" (that phrase describes the transport, pipes vs
+// -i/-o files, not the payload encoding). Decoding it through a UTF-8
+// string and back is lossy: invalid byte sequences silently become U+FFFD,
+// corrupting the ciphertext. Buffers in, Buffer out, no string in between
+// on the ciphertext side — this cost a real debugging cycle to find (the
+// corruption was invisible until decrypt failed with a generic error).
+function runRing(subcommand: 'encrypt' | 'decrypt', input: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const proc = spawn('wallet-cli', ['ring', subcommand, '-k', RING_KEY_NAME], {
       stdio: ['pipe', 'pipe', 'inherit'],
     })
-    let stdout = ''
+    const chunks: Buffer[] = []
     proc.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8')
+      chunks.push(chunk)
     })
     proc.on('error', (err) => reject(new Error(`failed to spawn wallet-cli: ${err.message}`)))
     proc.on('close', (code) => {
@@ -34,7 +41,7 @@ function runRing(subcommand: 'encrypt' | 'decrypt', input: string): Promise<stri
         reject(new Error(`wallet-cli ring ${subcommand} exited with code ${code}`))
         return
       }
-      resolve(stdout.trim())
+      resolve(Buffer.concat(chunks))
     })
     proc.stdin.write(input)
     proc.stdin.end()
@@ -43,10 +50,15 @@ function runRing(subcommand: 'encrypt' | 'decrypt', input: string): Promise<stri
 
 // encrypt is only ever called once, interactively, by provision-granter-
 // key.ts — never by set-acl.ts itself, which must only ever decrypt.
-export function ringEncrypt(plaintext: string): Promise<string> {
-  return runRing('encrypt', plaintext)
+// Plaintext in is always a hex string (a private key), so UTF-8 is safe
+// on that one side.
+export function ringEncrypt(plaintext: string): Promise<Buffer> {
+  return runRing('encrypt', Buffer.from(plaintext, 'utf8'))
 }
 
-export function ringDecrypt(ciphertext: string): Promise<string> {
-  return runRing('decrypt', ciphertext)
+// Decrypted output is always a hex string (a private key) too, so UTF-8
+// decoding the result — unlike the ciphertext itself — is safe.
+export async function ringDecrypt(ciphertext: Buffer): Promise<string> {
+  const plaintext = await runRing('decrypt', ciphertext)
+  return plaintext.toString('utf8').trim()
 }

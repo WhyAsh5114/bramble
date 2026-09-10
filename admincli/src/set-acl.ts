@@ -47,9 +47,9 @@ async function main() {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
 
-  let granterCiphertext: string
+  let granterCiphertext: Buffer
   try {
-    granterCiphertext = readFileSync(GRANTER_KEY_RING_PATH, 'utf8').trim()
+    granterCiphertext = readFileSync(GRANTER_KEY_RING_PATH)
   } catch {
     throw new Error(
       `no ring-encrypted granter key at ${GRANTER_KEY_RING_PATH} — run ` +

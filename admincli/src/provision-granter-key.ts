@@ -28,7 +28,7 @@ async function main() {
   }
 
   const ciphertext = await ringEncrypt(plaintext)
-  writeFileSync(GRANTER_KEY_RING_PATH, ciphertext + '\n', { mode: 0o600 })
+  writeFileSync(GRANTER_KEY_RING_PATH, ciphertext, { mode: 0o600 })
   console.log(`encrypted granter key written to ${GRANTER_KEY_RING_PATH}`)
   console.log('now delete BRAMBLE_GRANTER_PRIVATE_KEY from .env — set-acl.ts no longer reads it.')
 }
