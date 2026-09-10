@@ -189,7 +189,7 @@ func startFakeDataRelaySidecar(t *testing.T) string {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/price", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"asset": "test", "amount": "1"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"asset": "0.0.429274", "amount": "1"})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -273,11 +273,11 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, _, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, relays, alicePub, bobPub, 5*time.Second)
+		aliceEndpoint, _, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1000, unrestrictedDataRelayPurchasePolicy, relays, alicePub, bobPub, 5*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
-		bobEndpoint, _, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, relays, bobPub, alicePub, 5*time.Second)
+		bobEndpoint, _, bobErr = relayRoutedEndpoint(bob, bobM, pool, 1000, unrestrictedDataRelayPurchasePolicy, relays, bobPub, alicePub, 5*time.Second)
 	}()
 	wg.Wait()
 	if aliceErr != nil {
@@ -415,7 +415,7 @@ func startFakeDataRelaySidecarPriced(t *testing.T, priceAmount string) string {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/price", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"asset": "test", "amount": priceAmount})
+		_ = json.NewEncoder(w).Encode(map[string]string{"asset": "0.0.429274", "amount": priceAmount})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -584,7 +584,7 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1_000_000, relays, alicePub, bobPub, 15*time.Second)
+		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, 1_000_000, unrestrictedDataRelayPurchasePolicy, relays, alicePub, bobPub, 15*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
@@ -654,7 +654,7 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	// adopting side) gets watchDataRelayAdopt — the asymmetric pairing
 	// runServe now wires for real (main.go's non-relay-peer watcher loop),
 	// not two independent buyers racing for the same lucky port.
-	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, relays, alicePub, 15*time.Second)
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, 1_000_000, unrestrictedDataRelayPurchasePolicy, relays, alicePub, 15*time.Second)
 	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, relays)
 
 	// Kill "the primary relay process": both its data relay and its

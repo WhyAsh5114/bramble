@@ -10,7 +10,7 @@
 // candidate exchange (`-rendezvous`, see brambled/rendezvous and ../relay),
 // so two nodes on different networks can find each other without a trusted
 // coordinator. STUN/hole-punching for the harder two-NAT case is still not
-// implemented — see docs/11_DAY0_GATES.md Gate 0.2's note on laptop-to-VPS
+// implemented — see docs/10_DAY0_GATES.md Gate 0.2's note on laptop-to-VPS
 // being the easier, currently-supported topology.
 // Phase 2 Section A: EAC-gated enrollment/revocation/rotation (Gate 2.1) —
 // built in ../admincli, a separate package that writes to the registry
@@ -253,12 +253,57 @@ type priceQuote struct {
 	Amount string `json:"amount"`
 }
 
+const dataRelayQuoteTimeout = 5 * time.Second
+
+type dataRelayPurchasePolicy struct {
+	MaxPricePerByte int64
+	MaxSessionCost  int64
+}
+
+var unrestrictedDataRelayPurchasePolicy = dataRelayPurchasePolicy{
+	MaxPricePerByte: 1<<63 - 1,
+	MaxSessionCost:  1<<63 - 1,
+}
+
+func validateDataRelayQuote(q datarelay.Quote, bytes int64, policy dataRelayPurchasePolicy) error {
+	if bytes <= 0 {
+		return fmt.Errorf("session bytes must be positive")
+	}
+	if policy.MaxPricePerByte <= 0 || policy.MaxSessionCost <= 0 {
+		return fmt.Errorf("relay purchase limits must be positive")
+	}
+	if q.PricePerByte <= 0 {
+		return fmt.Errorf("price must be positive")
+	}
+	if q.PricePerByte > policy.MaxPricePerByte {
+		return fmt.Errorf("price %d exceeds per-byte limit %d", q.PricePerByte, policy.MaxPricePerByte)
+	}
+	// Division avoids overflowing price*bytes for an untrusted quote.
+	if q.PricePerByte > policy.MaxSessionCost/bytes {
+		return fmt.Errorf("session cost exceeds limit %d atomic USDC", policy.MaxSessionCost)
+	}
+	return nil
+}
+
 // quoteDataRelay fetches label's advertised per-byte price and measures the
 // round trip as a latency proxy — both inputs to datarelay.Pick's
 // composite score (docs/adr/0008, "Relay selection").
 func quoteDataRelay(label, sidecarURL string) (datarelay.Quote, error) {
+	relayURL, err := url.Parse(sidecarURL)
+	if err != nil || (relayURL.Scheme != "http" && relayURL.Scheme != "https") || relayURL.Host == "" {
+		return datarelay.Quote{}, fmt.Errorf("%s has an invalid HTTP(S) sidecar URL", label)
+	}
+	if relayURL.User != nil || relayURL.RawQuery != "" || relayURL.Fragment != "" {
+		return datarelay.Quote{}, fmt.Errorf("%s sidecar URL must not contain credentials, a query, or a fragment", label)
+	}
 	start := time.Now()
-	resp, err := http.Get(strings.TrimRight(sidecarURL, "/") + "/price")
+	client := &http.Client{
+		Timeout: dataRelayQuoteTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(strings.TrimRight(sidecarURL, "/") + "/price")
 	latency := time.Since(start)
 	if err != nil {
 		return datarelay.Quote{}, fmt.Errorf("querying %s price: %w", label, err)
@@ -274,6 +319,12 @@ func quoteDataRelay(label, sidecarURL string) (datarelay.Quote, error) {
 	price, err := strconv.ParseInt(q.Amount, 10, 64)
 	if err != nil {
 		return datarelay.Quote{}, fmt.Errorf("%s price %q is not an integer: %w", label, q.Amount, err)
+	}
+	if q.Asset != "0.0.429274" {
+		return datarelay.Quote{}, fmt.Errorf("%s quoted unsupported asset %q; expected Hedera testnet USDC 0.0.429274", label, q.Asset)
+	}
+	if price <= 0 {
+		return datarelay.Quote{}, fmt.Errorf("%s quoted non-positive price %d", label, price)
 	}
 	return datarelay.Quote{Label: label, SidecarURL: sidecarURL, PricePerByte: price, LatencyMS: latency.Milliseconds()}, nil
 }
@@ -295,11 +346,18 @@ type dataRelaySession struct {
 // co-location between a relay-sidecar and its Go relay is an assumed,
 // documented deployment convention (docs/adr/0008), not something
 // discovered dynamically.
-func buyDataRelaySession(m *sidecar.Manager, pool dataRelayFlag, bytes int64) (*dataRelaySession, error) {
+func buyDataRelaySession(m *sidecar.Manager, pool dataRelayFlag, bytes int64, policy dataRelayPurchasePolicy) (*dataRelaySession, error) {
+	if bytes <= 0 {
+		return nil, fmt.Errorf("data-relay session bytes must be positive")
+	}
 	quotes := make([]datarelay.Quote, 0, len(pool))
 	for label, sidecarURL := range pool {
 		q, err := quoteDataRelay(label, sidecarURL)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
+			continue
+		}
+		if err := validateDataRelayQuote(q, bytes, policy); err != nil {
 			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
 			continue
 		}
@@ -365,8 +423,8 @@ type keepaliveSetter interface {
 // D's failover watcher (below) needs to know which relay a peer is
 // currently routed through, so it can exclude that one when picking a
 // replacement.
-func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, relays []sidecar.RendezvousRelay, own, peerPubkey string, ttl time.Duration) (*netip.AddrPort, string, error) {
-	session, err := buyDataRelaySession(m, pool, sessionBytes)
+func relayRoutedEndpoint(node keepaliveSetter, m *sidecar.Manager, pool dataRelayFlag, sessionBytes int64, policy dataRelayPurchasePolicy, relays []sidecar.RendezvousRelay, own, peerPubkey string, ttl time.Duration) (*netip.AddrPort, string, error) {
+	session, err := buyDataRelaySession(m, pool, sessionBytes, policy)
 	if err != nil {
 		return nil, "", fmt.Errorf("buying data-relay session: %w", err)
 	}
@@ -528,7 +586,7 @@ func exchangeAnyMetered(relays []sidecar.RendezvousRelay, m *sidecar.Manager, ow
 // also fails. Gives up (logs and returns) if the pool is exhausted or a
 // reconnect attempt itself fails — matches this file's existing "log and
 // move on" posture for discovery/pricing failures elsewhere.
-func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, state *relayState, peerLabel string, allowedIP netip.Prefix, pool dataRelayFlag, sessionBytes int64, relays []sidecar.RendezvousRelay, ownPubkey string, ttl time.Duration) {
+func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, state *relayState, peerLabel string, allowedIP netip.Prefix, pool dataRelayFlag, sessionBytes int64, policy dataRelayPurchasePolicy, relays []sidecar.RendezvousRelay, ownPubkey string, ttl time.Duration) {
 	// Every relay ever excluded, not just the one currently in use —
 	// without this, a second stall (e.g. the just-adopted backup relay
 	// also looking dead because the *other* side hasn't picked it up yet)
@@ -574,7 +632,7 @@ func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m *sidecar.M
 		// rate-limits the retry, since usedLabel is unchanged and RxBytes
 		// still isn't moving. Only pool exhaustion above is a real reason
 		// to stop.
-		endpoint, newLabel, err := relayRoutedEndpoint(node, m, remaining, sessionBytes, relays, ownPubkey, pubkey, ttl)
+		endpoint, newLabel, err := relayRoutedEndpoint(node, m, remaining, sessionBytes, policy, relays, ownPubkey, pubkey, ttl)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "data-relay: %s: failover attempt failed, will retry: %v\n", peerLabel, err)
 			continue
@@ -680,11 +738,20 @@ func runServe(args []string) error {
 	relayPeers := relayPeerFlag{}
 	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — an explicit substitute for hole-punch-failure detection, which this project doesn't implement (docs/adr/0008)")
 	relaySessionBytes := fs.Int64("relay-session-bytes", 10_000, "byte allotment to buy per data-relay session (docs/adr/0008) — size this to the transfer you're about to demo; running out mid-transfer needs a fresh session, not an automatic top-up. At the -price-per-byte default (1 atomic USDC/byte), the default here is 0.01 USDC per session — raise deliberately, since cost scales linearly with this")
+	maxRelayPricePerByte := fs.Int64("max-relay-price-per-byte", 10, "maximum acceptable data-relay price in atomic USDC per byte")
+	maxRelaySessionCost := fs.Int64("max-relay-session-cost", 100_000, "maximum acceptable data-relay session cost in atomic USDC (0.10 USDC by default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if len(peers) == 0 {
 		return fmt.Errorf("at least one -peer label=allowed-ip/prefix is required")
+	}
+	if *relaySessionBytes <= 0 || *maxRelayPricePerByte <= 0 || *maxRelaySessionCost <= 0 {
+		return fmt.Errorf("relay session bytes and relay price/cost limits must all be positive")
+	}
+	relayPurchasePolicy := dataRelayPurchasePolicy{
+		MaxPricePerByte: *maxRelayPricePerByte,
+		MaxSessionCost:  *maxRelaySessionCost,
 	}
 	if *ownLabel == "" {
 		return fmt.Errorf("-label (this node's own ENS label) is required")
@@ -821,7 +888,7 @@ func runServe(args []string) error {
 		relays, own, defaultCandidate := rendezvousRelays, ownPubkey, *myCandidate
 		loop.EndpointResolver = func(p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
 			if relayPeers[p.Label] {
-				endpoint, label, err := relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relays, own, peerPubkey, *ttl)
+				endpoint, label, err := relayRoutedEndpoint(node, m, dataRelays, *relaySessionBytes, relayPurchasePolicy, relays, own, peerPubkey, *ttl)
 				if err == nil {
 					relState.set(p.Label, peerPubkey, label)
 				}
@@ -881,7 +948,7 @@ func runServe(args []string) error {
 			continue
 		}
 		p := p
-		go watchDataRelayFailover(ctx, node, m, relState, p.Label, p.AllowedIP, dataRelays, *relaySessionBytes, rendezvousRelays, ownPubkey, *ttl)
+		go watchDataRelayFailover(ctx, node, m, relState, p.Label, p.AllowedIP, dataRelays, *relaySessionBytes, relayPurchasePolicy, rendezvousRelays, ownPubkey, *ttl)
 	}
 
 	// The other half of Gate 4.3: every tracked peer that ISN'T a

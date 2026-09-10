@@ -8,7 +8,7 @@
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from '@x402/fetch'
 import { createClientHederaSigner, PrivateKey } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
-import { hederaClientAccountID, hederaClientPrivateKey } from './config'
+import { HEDERA_USDC_ASSET_ID, hederaClientAccountID, hederaClientPrivateKey, hederaMaxPaymentAtomic } from './config'
 
 export type DataRelaySessionResult = {
   sessionId: string
@@ -18,6 +18,9 @@ export type DataRelaySessionResult = {
 }
 
 export async function payForDataRelaySession(sidecarUrl: string, bytes: number): Promise<DataRelaySessionResult> {
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+    throw new Error('data-relay session bytes must be a positive safe integer')
+  }
   const signer = createClientHederaSigner(
     hederaClientAccountID(),
     PrivateKey.fromStringECDSA(hederaClientPrivateKey()),
@@ -26,10 +29,15 @@ export async function payForDataRelaySession(sidecarUrl: string, bytes: number):
 
   const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
     schemes: [{ network: 'hedera:testnet', client: new ExactHederaScheme(signer) }],
-    // Same reasoning as payments/client.ts: neither HBAR nor testnet USDC
-    // is recognized as a Hedera "default asset" by the spend-control
-    // allowlist yet.
-    spendControls: false,
+    spendControls: {
+      allowedAssets: [
+        {
+          network: 'hedera:testnet',
+          asset: HEDERA_USDC_ASSET_ID,
+          maxAmountPerPayment: hederaMaxPaymentAtomic(),
+        },
+      ],
+    },
   })
 
   const url = `${sidecarUrl.replace(/\/$/, '')}/data-relay-session?bytes=${bytes}`

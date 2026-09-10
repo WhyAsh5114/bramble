@@ -5,7 +5,7 @@
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from '@x402/fetch'
 import { createClientHederaSigner, PrivateKey } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
-import { hederaClientAccountID, hederaClientPrivateKey } from './config'
+import { HEDERA_USDC_ASSET_ID, hederaClientAccountID, hederaClientPrivateKey, hederaMaxPaymentAtomic } from './config'
 
 export type RendezvousTokenResult = {
   token: string
@@ -38,11 +38,15 @@ export async function payForRendezvousToken(sidecarUrl: string): Promise<Rendezv
 
   const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
     schemes: [{ network: 'hedera:testnet', client: new ExactHederaScheme(signer) }],
-    // Settling in an HTS token (testnet USDC, docs/adr/0007), which the
-    // client's default spend-control allowlist doesn't recognize as a
-    // Hedera "default asset" any more than native HBAR was in Gate 0.4 —
-    // same reasoning as that script's client.mjs for disabling this.
-    spendControls: false,
+    spendControls: {
+      allowedAssets: [
+        {
+          network: 'hedera:testnet',
+          asset: HEDERA_USDC_ASSET_ID,
+          maxAmountPerPayment: hederaMaxPaymentAtomic(),
+        },
+      ],
+    },
   })
 
   const response = await fetchWithPayment(`${sidecarUrl.replace(/\/$/, '')}/rendezvous-token`, { method: 'POST' })

@@ -31,9 +31,14 @@ func runDemoDataRelay(args []string) error {
 	smallBytes := fs.Int64("small-bytes", 1000, "small session size, for the cost-scaling proof")
 	largeBytes := fs.Int64("large-bytes", 100000, "large session size, for the cost-scaling proof")
 	sessionBytes := fs.Int64("session-bytes", 5000, "session size used for the selection+failover run")
+	maxPricePerByte := fs.Int64("max-price-per-byte", 1000, "maximum relay price accepted during this deliberately high-price comparison")
+	maxSessionCost := fs.Int64("max-session-cost", 10_000_000, "maximum session cost in atomic USDC for this demo; also set HEDERA_MAX_PAYMENT_ATOMIC to at least this value")
 	sidecarDir := fs.String("sidecar-dir", "../sidecar", "brambled's own ENS sidecar project directory")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *smallBytes <= 0 || *largeBytes <= 0 || *sessionBytes <= 0 || *maxPricePerByte <= 0 || *maxSessionCost <= 0 {
+		return fmt.Errorf("session sizes and relay price/cost limits must all be positive")
 	}
 
 	hederaAccount := envOr("HEDERA_CLIENT_ACCOUNT_ID", "")
@@ -43,6 +48,7 @@ func runDemoDataRelay(args []string) error {
 	if hederaAccount == "" || hederaKey == "" || tailnetName == "" || tailnetRegistry == "" {
 		return fmt.Errorf("HEDERA_CLIENT_ACCOUNT_ID, HEDERA_CLIENT_PRIVATE_KEY, BRAMBLE_TAILNET_NAME, and BRAMBLE_TAILNET_REGISTRY must all be set")
 	}
+	policy := dataRelayPurchasePolicy{MaxPricePerByte: *maxPricePerByte, MaxSessionCost: *maxSessionCost}
 
 	newManager := func(port int) (*sidecar.Manager, error) {
 		return sidecar.Start(sidecar.Config{
@@ -62,13 +68,13 @@ func runDemoDataRelay(args []string) error {
 	}
 	defer scaleM.Stop()
 
-	small, err := buyDataRelaySession(scaleM, dataRelayFlag{"primary": *primaryURL}, *smallBytes)
+	small, err := buyDataRelaySession(scaleM, dataRelayFlag{"primary": *primaryURL}, *smallBytes, policy)
 	if err != nil {
 		return fmt.Errorf("buying small session: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "small session (%d bytes): id=%s tx=%s\n", *smallBytes, small.id, small.settlementTxID)
 
-	large, err := buyDataRelaySession(scaleM, dataRelayFlag{"primary": *primaryURL}, *largeBytes)
+	large, err := buyDataRelaySession(scaleM, dataRelayFlag{"primary": *primaryURL}, *largeBytes, policy)
 	if err != nil {
 		return fmt.Errorf("buying large session: %w", err)
 	}
@@ -143,7 +149,7 @@ func runDemoDataRelay(args []string) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, relays, alicePub, bobPub, 15*time.Second)
+		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, policy, relays, alicePub, bobPub, 15*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
@@ -204,7 +210,7 @@ func runDemoDataRelay(args []string) error {
 	aliceState := newRelayState()
 	aliceState.set("bob", bobPub, aliceLabel)
 
-	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, *sessionBytes, relays, alicePub, 15*time.Second)
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, *sessionBytes, policy, relays, alicePub, 15*time.Second)
 	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, relays)
 
 	fmt.Fprintln(os.Stderr, ">>> kill the primary relay process now to trigger failover <<<")
