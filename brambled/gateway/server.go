@@ -56,6 +56,26 @@ type Server struct {
 	// Logf receives one line per accepted/denied/proxied connection.
 	// Defaults to log.Printf if unset.
 	Logf func(format string, args ...any)
+
+	// OnDecision, if set, is called once per CONNECT attempt alongside the
+	// Logf call at the same point — a structured counterpart to the log
+	// line, for a caller that wants to keep a queryable feed of recent
+	// gateway activity (e.g. brambled/statusapi) without scraping log text.
+	OnDecision func(Decision)
+}
+
+// Decision reports the outcome of one CONNECT attempt handled by Server.
+type Decision struct {
+	RequesterLabel string
+	Service        string
+	Allowed        bool
+	Detail         string
+}
+
+func (s *Server) emit(d Decision) {
+	if s.OnDecision != nil {
+		s.OnDecision(d)
+	}
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -99,6 +119,7 @@ func (s *Server) handle(conn net.Conn) {
 	port, known := s.Services[service]
 	if !known {
 		s.logf("gateway: %s requested unknown service %q — denied", requesterLabel, service)
+		s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: false, Detail: "unknown service"})
 		fmt.Fprintf(conn, "DENY\n")
 		return
 	}
@@ -106,11 +127,13 @@ func (s *Server) handle(conn net.Conn) {
 	allowed, err := CheckACL(s.Resolver, s.PrivateKeyHex, s.OwnLabel, requesterLabel, service)
 	if err != nil {
 		s.logf("gateway: ACL check failed for %s requesting %q: %v", requesterLabel, service, err)
+		s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: false, Detail: "ACL check failed: " + err.Error()})
 		fmt.Fprintf(conn, "DENY\n")
 		return
 	}
 	if !allowed {
 		s.logf("gateway: %s denied for service %q (no matching granted digest)", requesterLabel, service)
+		s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: false, Detail: "no matching granted digest"})
 		fmt.Fprintf(conn, "DENY\n")
 		return
 	}
@@ -118,6 +141,7 @@ func (s *Server) handle(conn net.Conn) {
 	backend, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		s.logf("gateway: %s allowed for %q but local service unreachable: %v", requesterLabel, service, err)
+		s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: false, Detail: "local service unreachable: " + err.Error()})
 		fmt.Fprintf(conn, "DENY\n")
 		return
 	}
@@ -127,6 +151,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	s.logf("gateway: %s allowed for %q — proxying to 127.0.0.1:%d", requesterLabel, service, port)
+	s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: true, Detail: fmt.Sprintf("proxying to 127.0.0.1:%d", port)})
 	// reader, not conn, is the read side from here — see readRequest's doc
 	// comment on why using the raw conn here would silently drop bytes.
 	proxy(bufferedConn{reader: reader, Conn: conn}, backend)
