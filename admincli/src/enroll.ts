@@ -34,6 +34,7 @@ import {
 } from '../../sidecar/src/ens/config'
 import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
 import { registryWriteAbi, resolverWriteAbi } from './roles'
+import { connectLedgerAccount } from './ledger-eth-sign'
 
 const verifiableFactoryAbi = parseAbi([
   'function deployProxy(address implementation, uint256 salt, bytes data) returns (address proxy)',
@@ -48,7 +49,17 @@ async function main() {
   }
   const expiryYears = expiryYearsArg ? Number(expiryYearsArg) : 10
 
-  const account = accountFromEnv()
+  // LEDGER_SIGN=1 signs all three writes below through a real Ledger,
+  // via a from-scratch hw-app-eth signer (docs/adr/0001's Pivot section,
+  // "Upgrade" note) -- wallet-cli's own `send` can't sign on Sepolia at
+  // all (Gap 4, docs/12_LEDGER_DX_FEEDBACK.md). Defaults to the existing
+  // SEPOLIA_PRIVATE_KEY/viem path so this is opt-in, not a behavior change
+  // for every other caller (rotate.ts, revoke.ts, set-acl.ts) that still
+  // needs software signing.
+  const useLedger = process.env.LEDGER_SIGN === '1'
+  const ledger = useLedger ? await connectLedgerAccount() : null
+  const account = ledger ? ledger.account : accountFromEnv()
+  if (useLedger) console.log(`signing as Ledger account ${account.address} -- confirm each transaction on-device`)
   const wallet = createWalletClient({ account, chain: hackathonSepolia, transport: http(RPC_URL) })
 
   async function writeAndWait(label: string, args: Parameters<typeof wallet.writeContract>[0]) {
@@ -59,59 +70,63 @@ async function main() {
     return receipt
   }
 
-  console.log(`[1/3] Deploying a dedicated resolver for ${deviceLabel}...`)
-  const version = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000))
-  const salt = BigInt(
-    keccak256(
-      encodeAbiParameters(
-        [{ type: 'bytes32' }, { type: 'address' }, { type: 'uint256' }],
-        [keccak256(stringToHex('OwnedResolver')), account.address, version]
+  try {
+    console.log(`[1/3] Deploying a dedicated resolver for ${deviceLabel}...`)
+    const version = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000))
+    const salt = BigInt(
+      keccak256(
+        encodeAbiParameters(
+          [{ type: 'bytes32' }, { type: 'address' }, { type: 'uint256' }],
+          [keccak256(stringToHex('OwnedResolver')), account.address, version]
+        )
       )
     )
-  )
-  const initData = encodeFunctionData({
-    abi: resolverInitAbi,
-    functionName: 'initialize',
-    args: [[{ account: account.address, roleBitmap: ALL_ROLES }], []],
-  })
-  const deployReceipt = await writeAndWait('deploy resolver proxy', {
-    address: VERIFIABLE_FACTORY,
-    abi: verifiableFactoryAbi,
-    functionName: 'deployProxy',
-    args: [PERMISSIONED_RESOLVER_IMPL, salt, initData],
-  })
-  const [deployLog] = parseEventLogs({
-    abi: verifiableFactoryAbi,
-    eventName: 'ProxyDeployed',
-    logs: deployReceipt.logs,
-  })
-  const resolverAddress = deployLog.args.proxyAddress
-  console.log(`   resolver: ${resolverAddress}`)
+    const initData = encodeFunctionData({
+      abi: resolverInitAbi,
+      functionName: 'initialize',
+      args: [[{ account: account.address, roleBitmap: ALL_ROLES }], []],
+    })
+    const deployReceipt = await writeAndWait('deploy resolver proxy', {
+      address: VERIFIABLE_FACTORY,
+      abi: verifiableFactoryAbi,
+      functionName: 'deployProxy',
+      args: [PERMISSIONED_RESOLVER_IMPL, salt, initData],
+    })
+    const [deployLog] = parseEventLogs({
+      abi: verifiableFactoryAbi,
+      eventName: 'ProxyDeployed',
+      logs: deployReceipt.logs,
+    })
+    const resolverAddress = deployLog.args.proxyAddress
+    console.log(`   resolver: ${resolverAddress}`)
 
-  console.log(`\n[2/3] Registering ${deviceLabel}.${tailnetName()} (requires ROLE_REGISTRAR)...`)
-  const farExpiry = BigInt(Math.floor(Date.now() / 1000) + expiryYears * 365 * 24 * 60 * 60)
-  const zeroAddress = '0x0000000000000000000000000000000000000000' as const
-  await writeAndWait('register', {
-    address: tailnetRegistry(),
-    abi: registryWriteAbi,
-    functionName: 'register',
-    args: [deviceLabel, account.address, zeroAddress, resolverAddress, REGISTRATION_ROLE_BITMAP, farExpiry],
-  })
+    console.log(`\n[2/3] Registering ${deviceLabel}.${tailnetName()} (requires ROLE_REGISTRAR)...`)
+    const farExpiry = BigInt(Math.floor(Date.now() / 1000) + expiryYears * 365 * 24 * 60 * 60)
+    const zeroAddress = '0x0000000000000000000000000000000000000000' as const
+    await writeAndWait('register', {
+      address: tailnetRegistry(),
+      abi: registryWriteAbi,
+      functionName: 'register',
+      args: [deviceLabel, account.address, zeroAddress, resolverAddress, REGISTRATION_ROLE_BITMAP, farExpiry],
+    })
 
-  console.log('\n[3/3] Writing initial pubkey...')
-  const fullname = normalize(`${deviceLabel}.${tailnetName()}`)
-  const dnsName = toHex(packetToBytes(fullname))
-  await writeAndWait('setText(pubkey)', {
-    address: resolverAddress,
-    abi: resolverWriteAbi,
-    functionName: 'setText',
-    args: [dnsName, 'pubkey', pubkey],
-  })
+    console.log('\n[3/3] Writing initial pubkey...')
+    const fullname = normalize(`${deviceLabel}.${tailnetName()}`)
+    const dnsName = toHex(packetToBytes(fullname))
+    await writeAndWait('setText(pubkey)', {
+      address: resolverAddress,
+      abi: resolverWriteAbi,
+      functionName: 'setText',
+      args: [dnsName, 'pubkey', pubkey],
+    })
 
-  const readBack = await publicClient.getEnsText({ name: fullname, key: 'pubkey' })
-  if (readBack !== pubkey) throw new Error(`pubkey did not round-trip: got ${JSON.stringify(readBack)}`)
+    const readBack = await publicClient.getEnsText({ name: fullname, key: 'pubkey' })
+    if (readBack !== pubkey) throw new Error(`pubkey did not round-trip: got ${JSON.stringify(readBack)}`)
 
-  console.log(`\ndone. ${fullname} enrolled, resolver ${resolverAddress}, pubkey ${readBack}.`)
+    console.log(`\ndone. ${fullname} enrolled, resolver ${resolverAddress}, pubkey ${readBack}.`)
+  } finally {
+    if (ledger) await ledger.close()
+  }
 }
 
 main().catch((err) => {
