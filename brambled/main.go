@@ -100,9 +100,15 @@ func usage() {
 }
 
 func sidecarConfig() sidecar.Config {
+	port := 7890
+	if v := os.Getenv("BRAMBLE_SIDECAR_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			port = n
+		}
+	}
 	return sidecar.Config{
 		Dir:             envOr("BRAMBLE_SIDECAR_DIR", "../sidecar"),
-		Port:            7890,
+		Port:            port,
 		TailnetName:     os.Getenv("BRAMBLE_TAILNET_NAME"),
 		TailnetRegistry: os.Getenv("BRAMBLE_TAILNET_REGISTRY"),
 		RPCURL:          os.Getenv("SEPOLIA_RPC_URL"),

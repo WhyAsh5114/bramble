@@ -375,6 +375,64 @@ serve` stderr for its `admission: device2: not authorized` line. The
    `docs/05_BUILD_PLAN.md`'s Gate 1.3 entry — only once actually run this
    way, same standard as Gate 0.2.
 
+## Gate 5.1 runbook — the agent path, live, two real machines
+
+`docs/05_BUILD_PLAN.md` Hard Gate 5.1 requires a real two-machine run with a
+real ENS write, not just `pnpm test:access-flow`'s in-memory-resolver
+version. **Run Sept 10, 2026 — pass.** Laptop: this machine, `-netstack`,
+agent identity `agent-1`. VPS: `Bramble` (`13.207.155.93`, real OS TUN),
+already-enrolled `vps-demo`, offering `web` (real `demo-service`, not a
+stub — reports its own hostname and a timestamp so a response provably
+crossed the tunnel).
+
+1. Enrolled `agent-1` fresh (`enroll.ts agent-1 <pubkey>`), no ACL —
+   `register` tx `0x5653842b...d42b97`, `pubkey` tx `0x795b8cd9...8177f18`.
+2. Restarted `vps-demo` with `agent-1` added to its own `-peer` flags (both
+   sides need each other in their `-peer` list — this isn't ENS-discovered,
+   see "Known gaps" below) and trusted `ledger-granter-test` as an
+   additional `acl-granters` entry alongside the existing `device1`
+   (`set-acl-granters.ts vps-demo device1,ledger-granter-test`, tx
+   `0x0d69a8b3...318a806`).
+3. **Denied, for real:** `demo-agent` against the forward failed; the VPS's
+   own gateway logged `gateway: agent-1 denied for service "web" (no
+matching granted digest)` — a real ACL check, not a network failure (the
+   WireGuard handshake itself succeeds; the gateway layer is what refuses).
+4. **Granted, for real:** `set-acl.ts agent-1 vps-demo ledger-granter-test
+web` — decrypts the granter's key from the Ledger Key Ring headlessly
+   (Gate 3.2), no device attached for this step. Tx `0x20ae7109...30bfa`.
+5. **Succeeded, without restarting anything:** same `demo-agent` invocation
+   now printed `task complete: report-private-service-health is healthy on
+ip-172-31-28-162 (observed ...)` — the VPS's gateway logged `gateway:
+agent-1 allowed for "web" — proxying to 127.0.0.1:9100`.
+6. **Revoked, for real:** `revoke.ts agent-1 true`, tx
+   `0xb4e0cf91...51db0f`. Next resync (`-ttl` default 30s, no override used
+   this run): VPS logged `admission: agent-1: not authorized` and the same
+   `demo-agent` request failed again.
+7. Reset for the next run (including tomorrow's recording): `revoke.ts
+agent-1 false` (tx `0x16ccb2f6...141e0178a`) and cleared `agent-1`'s
+   `acl` text record back to empty (tx `0xd9bfa8f1...4c2edb57052`) — so the
+   demo starts from the same denied state again, not mid-story.
+
+Two real, pre-existing bugs surfaced and fixed by this run, not staged:
+
+- `brambled/main.go`'s `sidecarConfig()` hardcoded its spawned sidecar to
+  port 7890, so a second `brambled serve` on the same machine (`agent-1`,
+  alongside the already-running `laptop-demo`) couldn't start its own
+  sidecar at all. Now reads `BRAMBLE_SIDECAR_PORT` if set, same env var the
+  spawned child already expected.
+- The VPS's `demo-service` binary predated the `/task` JSON-response
+  handler (`6351201`) — it was still the earlier generic echo build, so
+  requests reached it fine but got a plain-text response `demo-agent`
+  couldn't parse. Rebuilt for `linux/arm64` and redeployed.
+
+**Gotcha worth knowing, not a bug:** `-gateway-port` isn't just "the port
+this node's own gateway binds to" — a node's forward mechanism dials a peer
+using _its own_ `-gateway-port` value as the assumed port on that peer too
+(`main.go`'s forward dial, `node.DialTCP(peerAddr, gatewayPort)`). Every
+node sharing a tailnet must use the same `-gateway-port`, or forwards to
+mismatched-port peers fail with a connection error that looks like a
+network problem, not a config mismatch.
+
 ## Known gaps, deliberately not solved yet
 
 - **Real OS TUN is the unconditional default, not a flag you have to
