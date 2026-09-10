@@ -4,9 +4,9 @@ import { useState } from 'react'
 import { usePolling } from '@/hooks/use-polling'
 import { MonoValue } from '@/components/mono-value'
 import { StatusText } from '@/components/status-text'
+import { StatusDot } from '@/components/status-dot'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatHandshakeAge, isAuthorized, parseExpiry, truncateHex } from '@/lib/format'
 import { SEPOLIA_ETHERSCAN_URL } from '@/lib/config'
 import type { DeviceRecord, PeerStatus, PingResponse } from '@/lib/types'
@@ -71,9 +71,9 @@ export default function DevicesPage() {
       </div>
 
       {!devices.data && !devices.error && (
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <Skeleton className="h-20 w-full rounded-lg" />
         </div>
       )}
 
@@ -85,35 +85,11 @@ export default function DevicesPage() {
       )}
 
       {devices.data && devices.data.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Label</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Connectivity</TableHead>
-              <TableHead>Pubkey</TableHead>
-              <TableHead>Expiry</TableHead>
-              <TableHead className="text-right">ACL grants</TableHead>
-              <TableHead className="text-right">ACL granters</TableHead>
-              <TableHead>Token</TableHead>
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {devices.data.map((row) => (
-              <TableRow key={row.label}>
-                <TableCell className="font-mono text-sm">{row.label}</TableCell>
-                {row.error || !row.record ? (
-                  <TableCell colSpan={7}>
-                    <StatusText tone="negative">unresolved — {row.error}</StatusText>
-                  </TableCell>
-                ) : (
-                  <DeviceCells label={row.label} record={row.record} peer={peers.data?.get(row.label) ?? null} />
-                )}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="flex flex-col gap-3">
+          {devices.data.map((row) => (
+            <DeviceCard key={row.label} row={row} peer={peers.data?.get(row.label) ?? null} />
+          ))}
+        </div>
       )}
 
       {devices.error && <p className="text-sm text-destructive">{devices.error}</p>}
@@ -121,47 +97,79 @@ export default function DevicesPage() {
   )
 }
 
-function DeviceCells({ label, record, peer }: { label: string; record: DeviceRecord; peer: PeerStatus | null }) {
+function DeviceCard({ row, peer }: { row: DeviceRow; peer: PeerStatus | null }) {
+  if (row.error || !row.record) {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-dashed p-4">
+        <StatusDot tone="neutral" />
+        <span className="font-mono text-sm text-foreground">{row.label}</span>
+        <StatusText tone="negative">unresolved — {row.error}</StatusText>
+      </div>
+    )
+  }
+
+  const { record } = row
   const authorized = isAuthorized(record)
   const expiry = parseExpiry(record.expiry)
+  const connected = Boolean(peer?.handshaked)
+  const tone = record.revoked ? 'negative' : authorized ? 'positive' : 'neutral'
 
   return (
-    <>
-      <TableCell>
-        {record.revoked ? (
-          <StatusText tone="negative">revoked</StatusText>
-        ) : authorized ? (
-          <StatusText tone="positive">authorized</StatusText>
-        ) : (
-          <StatusText tone="neutral">not authorized</StatusText>
+    <div className="flex flex-col gap-3 rounded-lg border bg-card p-4 transition-colors hover:border-foreground/20">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <StatusDot tone={tone} pulse={tone === 'positive' && connected} />
+          <span className="truncate font-mono text-sm font-medium text-foreground">{row.label}</span>
+          {record.revoked ? (
+            <StatusText tone="negative">revoked</StatusText>
+          ) : authorized ? (
+            <StatusText tone="positive">authorized</StatusText>
+          ) : (
+            <StatusText tone="neutral">not authorized</StatusText>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <ConnectivitySummary peer={peer} />
+          <PingButton label={row.label} pingable={connected} />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t pt-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          pubkey
+          <MonoValue value={record.pubkey ?? ''} display={truncateHex(record.pubkey)} />
+        </span>
+        <span className={expiry.expired ? 'text-destructive' : undefined}>{expiry.relative}</span>
+        <span>
+          {record.acl.length} ACL grant{record.acl.length === 1 ? '' : 's'}
+        </span>
+        <span>
+          {record.aclGranters.length} granter{record.aclGranters.length === 1 ? '' : 's'}
+        </span>
+        <span className="flex items-center gap-1.5">
+          token
+          <MonoValue
+            value={record.tokenId}
+            display={truncateHex(record.tokenId, 4, 4)}
+            href={`${SEPOLIA_ETHERSCAN_URL}/search?q=${record.tokenId}`}
+          />
+        </span>
+        {record.resolverAddress && (
+          <span className="flex items-center gap-1.5">
+            own resolver
+            <MonoValue
+              value={record.resolverAddress}
+              display={truncateHex(record.resolverAddress, 4, 4)}
+              href={`${SEPOLIA_ETHERSCAN_URL}/address/${record.resolverAddress}`}
+            />
+          </span>
         )}
-      </TableCell>
-      <TableCell>
-        <ConnectivityCell peer={peer} />
-      </TableCell>
-      <TableCell>
-        <MonoValue value={record.pubkey ?? ''} display={truncateHex(record.pubkey)} />
-      </TableCell>
-      <TableCell>
-        <span className={expiry.expired ? 'text-destructive' : 'text-foreground'}>{expiry.relative}</span>
-      </TableCell>
-      <TableCell className="text-right font-mono text-sm">{record.acl.length}</TableCell>
-      <TableCell className="text-right font-mono text-sm">{record.aclGranters.length}</TableCell>
-      <TableCell>
-        <MonoValue
-          value={record.tokenId}
-          display={truncateHex(record.tokenId, 4, 4)}
-          href={`${SEPOLIA_ETHERSCAN_URL}/search?q=${record.tokenId}`}
-        />
-      </TableCell>
-      <TableCell>
-        <PingButton label={label} pingable={Boolean(peer?.handshaked)} />
-      </TableCell>
-    </>
+      </div>
+    </div>
   )
 }
 
-function ConnectivityCell({ peer }: { peer: PeerStatus | null }) {
+function ConnectivitySummary({ peer }: { peer: PeerStatus | null }) {
   if (!peer) return <StatusText tone="neutral">not tracked here</StatusText>
   if (!peer.handshaked) return <StatusText tone="neutral">no handshake yet</StatusText>
   return <StatusText tone="positive">handshake {formatHandshakeAge(peer.lastHandshakeUnixNs)}</StatusText>
@@ -191,14 +199,14 @@ function PingButton({ label, pingable }: { label: string; pingable: boolean }) {
 
   return (
     <div className="flex items-center gap-2">
-      <Button size="sm" variant="outline" disabled={!pingable || pending} onClick={ping}>
-        {pending ? 'Pinging…' : 'Ping'}
-      </Button>
       {result && (
-        <span className={result.reachable ? 'text-sm text-foreground' : 'text-sm text-destructive'}>
+        <span className={result.reachable ? 'text-xs text-positive' : 'text-xs text-destructive'}>
           {result.reachable ? (result.rtt ?? 'reply') : (result.detail ?? 'no reply')}
         </span>
       )}
+      <Button size="sm" variant={pingable ? 'default' : 'outline'} disabled={!pingable || pending} onClick={ping}>
+        {pending ? 'Pinging…' : 'Ping'}
+      </Button>
     </div>
   )
 }

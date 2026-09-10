@@ -12,6 +12,7 @@ export interface DeviceRecord {
   revoked: boolean
   acl: string[]
   aclGranters: string[]
+  resolverAddress: string | null
 }
 
 export interface RendezvousRelay {
@@ -35,6 +36,20 @@ export interface SidecarHealth {
   ok: boolean
   tailnetName: string
   tailnetRegistry: string
+  relayRegistry: string | null
+}
+
+// A real, mirror-node-confirmed Hedera token transfer -- see
+// dashboard/src/app/api/hedera/payments/route.ts. Not a bramble-specific
+// shape, just the fields worth showing out of the mirror node's own
+// transaction record.
+export interface HederaPayment {
+  transactionId: string
+  consensusTimestamp: string
+  amount: string // decimal USDC, already divided by the token's 6 decimals
+  from: string
+  to: string
+  hashscanUrl: string
 }
 
 // relay-sidecar's GET /price (relay-sidecar/src/pricing.ts's priceForBytes).

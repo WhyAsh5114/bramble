@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { SIDECAR_PORT, tailnetName, tailnetRegistry } from './ens/config'
+import { SIDECAR_PORT, relayRegistry, tailnetName, tailnetRegistry } from './ens/config'
 import { deviceRoute } from './routes/device'
 import { paymentsRoute } from './routes/payments'
 import { relaysRoute } from './routes/relays'
@@ -11,7 +11,17 @@ const app = new Hono()
 // another node, or anything else) is answering on this port" — a fixed port
 // with a bare ok:true health check can't distinguish those, which is a
 // silent-wrong-tailnet landmine on any host running more than one node.
-app.get('/health', (c) => c.json({ ok: true, tailnetName: tailnetName(), tailnetRegistry: tailnetRegistry() }))
+app.get('/health', (c) =>
+  c.json({
+    ok: true,
+    tailnetName: tailnetName(),
+    tailnetRegistry: tailnetRegistry(),
+    // Distinct, optional field -- a tailnet with no relay registry
+    // configured just omits it, same "absent means not configured, not an
+    // error" convention as resolveRelays() itself.
+    relayRegistry: relayRegistry() ?? null,
+  })
+)
 app.route('/device', deviceRoute)
 app.route('/', paymentsRoute)
 app.route('/', relaysRoute)

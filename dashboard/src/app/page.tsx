@@ -6,6 +6,8 @@ import { MonoValue } from '@/components/mono-value'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { ENS_EXPLORER_URL, SEPOLIA_ETHERSCAN_URL } from '@/lib/config'
+import { activityTone } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import type { ActivityEvent, Relays, SidecarHealth } from '@/lib/types'
 
 async function fetchHealth(): Promise<SidecarHealth> {
@@ -49,69 +51,49 @@ export default function OverviewPage() {
         </p>
       </div>
 
-      <Separator />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatTile label="Devices watched" href="/devices">
+          {config.data ? (
+            <span className="text-2xl font-medium text-foreground">{config.data.deviceLabels.length}</span>
+          ) : (
+            <Skeleton className="h-8 w-10" />
+          )}
+        </StatTile>
 
-      <dl className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <div className="flex flex-col gap-1.5">
-          <dt className="text-sm text-muted-foreground">Name</dt>
-          <dd>
-            {health.data ? (
-              <span className="font-mono text-sm text-foreground">{health.data.tailnetName}</span>
-            ) : health.error ? (
-              <span className="text-sm text-destructive">sidecar unreachable — {health.error}</span>
-            ) : (
-              <Skeleton className="h-5 w-40" />
-            )}
-          </dd>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <dt className="text-sm text-muted-foreground">Registry</dt>
-          <dd>
-            {health.data ? (
-              <MonoValue
-                value={health.data.tailnetRegistry}
-                display={health.data.tailnetRegistry}
-                href={`${SEPOLIA_ETHERSCAN_URL}/address/${health.data.tailnetRegistry}`}
-              />
-            ) : (
-              <Skeleton className="h-5 w-64" />
-            )}
-          </dd>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <dt className="text-sm text-muted-foreground">Devices watched</dt>
-          <dd>
-            {config.data ? (
-              <Link
-                href="/devices"
-                className="text-sm text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
-              >
-                {config.data.deviceLabels.length}
-              </Link>
-            ) : (
-              <Skeleton className="h-5 w-8" />
-            )}
-          </dd>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <dt className="text-sm text-muted-foreground">Relays discovered</dt>
-          <dd>
-            {relays.data ? (
-              <Link
-                href="/relays"
-                className="text-sm text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground"
-              >
+        <StatTile label="Relays discovered" href="/relays">
+          {relays.data ? (
+            <span className="text-2xl font-medium text-foreground">
+              {relays.data.rendezvous.length + relays.data.dataRelays.length}
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
                 {relays.data.rendezvous.length} rendezvous · {relays.data.dataRelays.length} data
-              </Link>
-            ) : (
-              <Skeleton className="h-5 w-24" />
-            )}
-          </dd>
+              </span>
+            </span>
+          ) : (
+            <Skeleton className="h-8 w-24" />
+          )}
+        </StatTile>
+
+        <StatTile label="Tailnet">
+          {health.data ? (
+            <span className="truncate font-mono text-lg text-foreground">{health.data.tailnetName}</span>
+          ) : health.error ? (
+            <span className="text-sm text-destructive">sidecar unreachable</span>
+          ) : (
+            <Skeleton className="h-7 w-32" />
+          )}
+        </StatTile>
+      </div>
+
+      {health.data && (
+        <div className="-mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+          registry
+          <MonoValue
+            value={health.data.tailnetRegistry}
+            display={health.data.tailnetRegistry}
+            href={`${SEPOLIA_ETHERSCAN_URL}/address/${health.data.tailnetRegistry}`}
+          />
         </div>
-      </dl>
+      )}
 
       <Separator />
 
@@ -130,9 +112,17 @@ export default function OverviewPage() {
           <p className="text-sm text-muted-foreground">No activity yet.</p>
         )}
         {activity.data && activity.data.length > 0 && (
-          <ul className="flex flex-col gap-1">
+          <ul className="flex flex-col gap-1.5">
             {activity.data.map((e, i) => (
-              <li key={`${e.time}-${i}`} className="flex items-baseline gap-3 text-sm">
+              <li
+                key={`${e.time}-${i}`}
+                className={cn(
+                  'flex items-baseline gap-3 border-l-2 py-0.5 pl-3 text-sm',
+                  activityTone(e) === 'negative' && 'border-destructive',
+                  activityTone(e) === 'positive' && 'border-positive',
+                  activityTone(e) === 'neutral' && 'border-border'
+                )}
+              >
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">
                   {new Date(e.time).toLocaleTimeString()}
                 </span>
@@ -168,5 +158,20 @@ export default function OverviewPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function StatTile({ label, href, children }: { label: string; href?: string; children: React.ReactNode }) {
+  const content = (
+    <div className="flex h-full flex-col justify-between gap-2 rounded-lg border bg-card p-4 transition-colors hover:border-foreground/20">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  )
+  if (!href) return content
+  return (
+    <Link href={href} className="block">
+      {content}
+    </Link>
   )
 }

@@ -3,6 +3,7 @@
 import { usePolling } from '@/hooks/use-polling'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusText } from '@/components/status-text'
+import { activityTone } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ActivityEvent } from '@/lib/types'
 
@@ -10,14 +11,6 @@ async function fetchActivity(): Promise<ActivityEvent[]> {
   const res = await fetch('/api/brambled/activity', { cache: 'no-store' })
   if (!res.ok) throw new Error(`brambled status /activity returned ${res.status}`)
   return res.json()
-}
-
-function isDenied(e: ActivityEvent): boolean {
-  return e.kind === 'gateway' && e.message.startsWith('denied')
-}
-
-function isAuthorizedFalse(e: ActivityEvent): boolean {
-  return e.kind === 'admission' && (e.message.startsWith('authorized=false') || e.message.startsWith('resolve error'))
 }
 
 export default function ActivityPage() {
@@ -45,17 +38,27 @@ export default function ActivityPage() {
       {events && events.length === 0 && <p className="text-sm text-muted-foreground">No activity yet.</p>}
 
       {events && events.length > 0 && (
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-1">
           {events.map((e, i) => {
-            const negative = isDenied(e) || isAuthorizedFalse(e)
+            const tone = activityTone(e)
             return (
-              <li key={`${e.time}-${i}`} className="flex items-baseline gap-3 border-b py-1.5 text-sm last:border-b-0">
+              <li
+                key={`${e.time}-${i}`}
+                className={cn(
+                  'flex items-baseline gap-3 border-l-2 py-1.5 pl-3 text-sm transition-colors hover:bg-muted/40',
+                  tone === 'negative' && 'border-destructive',
+                  tone === 'positive' && 'border-positive',
+                  tone === 'neutral' && 'border-border'
+                )}
+              >
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">
                   {new Date(e.time).toLocaleTimeString()}
                 </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">[{e.kind}]</span>
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] text-muted-foreground uppercase">
+                  {e.kind}
+                </span>
                 <span className="shrink-0 font-mono text-sm text-foreground">{e.label}</span>
-                <span className={cn('truncate', negative ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className={cn('truncate', tone === 'negative' ? 'text-destructive' : 'text-muted-foreground')}>
                   {e.message}
                 </span>
               </li>

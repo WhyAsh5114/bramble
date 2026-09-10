@@ -3,6 +3,7 @@
 import { usePolling } from '@/hooks/use-polling'
 import { MonoValue } from '@/components/mono-value'
 import { StatusText } from '@/components/status-text'
+import { StatusDot } from '@/components/status-dot'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { AssetAmount, Relays } from '@/lib/types'
@@ -112,10 +113,13 @@ export default function RelaysPage() {
                         <span className="text-sm text-muted-foreground">…</span>
                       ) : health === null ? (
                         <span className="text-sm text-muted-foreground">no sidecar to check</span>
-                      ) : health ? (
-                        <StatusText tone="positive">reachable</StatusText>
                       ) : (
-                        <StatusText tone="negative">unreachable</StatusText>
+                        <span className="flex items-center gap-2">
+                          <StatusDot tone={health ? 'positive' : 'negative'} pulse={health} />
+                          <StatusText tone={health ? 'positive' : 'negative'}>
+                            {health ? 'reachable' : 'unreachable'}
+                          </StatusText>
+                        </span>
                       )}
                     </TableCell>
                   </TableRow>

@@ -1,3 +1,17 @@
+import type { ActivityEvent } from './types'
+
+// Shared between the overview widget and the full activity page so a
+// "denied"/gateway-refused event reads as negative in exactly one place,
+// not two copies that could drift.
+export function activityTone(e: ActivityEvent): 'positive' | 'negative' | 'neutral' {
+  if (e.kind === 'gateway' && e.message.startsWith('denied')) return 'negative'
+  if (e.kind === 'admission' && (e.message.startsWith('authorized=false') || e.message.startsWith('resolve error')))
+    return 'negative'
+  if (e.kind === 'gateway' && e.message.startsWith('allowed')) return 'positive'
+  if (e.kind === 'admission' && e.message.startsWith('authorized=true')) return 'positive'
+  return 'neutral'
+}
+
 export function truncateHex(hex: string | null, lead = 6, trail = 4): string {
   if (!hex) return '—'
   const clean = hex.startsWith('0x') ? hex : `0x${hex}`

@@ -44,6 +44,14 @@ export interface DeviceRecord {
   // role, actually honors. Meaningless for a device that never serves
   // anything locally — harmless to be empty in that case.
   aclGranters: string[]
+  // The device's own dedicated Permissioned Resolver (enroll.ts deploys a
+  // fresh one per device, never a shared one — see docs/adr/0004) — worth
+  // surfacing on its own: it's the concrete, on-chain-verifiable evidence
+  // that "each device gets its own resolver" isn't just a design claim.
+  // null only if the name has no resolver set at all (shouldn't happen for
+  // an enrolled device; resolveDevice() is still called against arbitrary
+  // labels, so this stays nullable rather than throwing).
+  resolverAddress: `0x${string}` | null
 }
 
 export async function resolveDevice(label: string): Promise<DeviceRecord> {
@@ -56,6 +64,16 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
   const revokedText = await publicClient.getEnsText({ name: fullname, key: 'revoked' })
   const aclText = await publicClient.getEnsText({ name: fullname, key: 'acl' })
   const aclGrantersText = await publicClient.getEnsText({ name: fullname, key: 'acl-granters' })
+  // getEnsResolver's own type says non-nullable, but an unset name returns
+  // the zero address rather than throwing or returning null (same "falsy
+  // check catches it" convention already used at every other
+  // getEnsResolver call site in this repo, e.g. set-acl.ts) — normalize to
+  // null here so the dashboard doesn't have to know that quirk too.
+  const resolverAddressRaw = await publicClient.getEnsResolver({ name: fullname })
+  const resolverAddress =
+    resolverAddressRaw && resolverAddressRaw !== '0x0000000000000000000000000000000000000000'
+      ? resolverAddressRaw
+      : null
 
   // getState() is registry-specific, not hierarchy-resolved — it must be
   // called against the subname's own subregistry contract, which this node's
@@ -86,5 +104,6 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
       .split(',')
       .map((s) => s.trim())
       .filter((s) => s.length > 0),
+    resolverAddress,
   }
 }
