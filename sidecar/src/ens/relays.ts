@@ -59,12 +59,20 @@ export async function resolveRelays(): Promise<Relays> {
     toBlock: 'latest',
   })
 
+  // A label can be re-registered (its prior registration expired, then
+  // someone registers the same string again) — getLogs returns one
+  // LabelRegistered per registration, so a re-registered label would
+  // otherwise appear twice in this scan. Collapse to unique labels first;
+  // each one's text records are resolved fresh against current chain state
+  // below regardless of which log entry surfaced it, so a duplicate log
+  // entry would only ever have produced a duplicate, never stale, result —
+  // but a duplicate entry in the returned list is still wrong on its own.
+  const uniqueLabels = new Set(logs.map((log) => log.args.label).filter((label): label is string => !!label))
+
   const rendezvous: RendezvousRelay[] = []
   const dataRelays: DataRelay[] = []
 
-  for (const log of logs) {
-    const label = log.args.label
-    if (!label) continue
+  for (const label of uniqueLabels) {
     const fullname = normalize(`${label}.relays.${tailnetName()}`)
 
     const [address, sidecarUrl, pricePerByte] = await Promise.all([
