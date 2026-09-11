@@ -732,7 +732,7 @@ func runServe(args []string) error {
 	localPrefix := fs.String("local-addr", "10.77.0.1/24", "this node's address and mesh subnet (CIDR)")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
-	maxStale := fs.Duration("max-stale", 0, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; 0 disables this and fails open forever (see admission package doc)")
+	maxStale := fs.Duration("max-stale", 2*time.Minute, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; defaults to a bounded 2 minutes rather than unbounded fail-open — pass 0 explicitly to disable this and fail open forever (see admission package doc)")
 	keepaliveSeconds := fs.Int("keepalive", 0, "send an unsolicited WireGuard packet to every authorized peer this often (seconds) so NAT mappings/roaming state don't go stale on an otherwise-idle connection; 0 disables this (existing behavior — a data-relay pool already arms its own keepalive independently of this flag, see dataRelayKeepaliveSeconds)")
 	privateKeyHex := fs.String("private-key", os.Getenv("BRAMBLE_PRIVATE_KEY"), "hex-encoded WireGuard private key (generated ephemerally if unset — not persisted)")
 	ownLabel := fs.String("label", "", "this node's own ENS label — required to resolve its own acl-granters record for gateway enforcement (docs/adr/0005-acl-record-schema.md)")

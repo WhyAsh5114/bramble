@@ -475,12 +475,13 @@ network problem, not a config mismatch.
   this daemon.
 - **x402 metering of rendezvous relay usage is not implemented** — the
   relay is currently free to use. That's Phase 4's job.
-- **Resolver errors fail open by default.** If the sidecar dies or its RPC
-  breaks, `SyncOnce` logs the error but does not by itself remove an
-  already-admitted peer — Gate 1.3's "bounded by TTL" revocation-latency
-  claim implicitly assumes sidecar+RPC liveness. `-max-stale` bounds this
-  (remove a peer once resolution has been failing for that long); it
-  defaults to `0` (unbounded fail-open, unchanged prior behavior). See
-  `admission/loop.go`'s package comment for the full reasoning, and set
-  `-max-stale` for any real demo or deployment rather than relying on the
-  default.
+- **Resolver errors fail open, but bounded by default.** If the sidecar dies
+  or its RPC breaks, `SyncOnce` logs the error but does not immediately
+  remove an already-admitted peer — Gate 1.3's "bounded by TTL"
+  revocation-latency claim implicitly assumes sidecar+RPC liveness.
+  `-max-stale` bounds this (remove a peer once resolution has been failing
+  for that long); it defaults to `2m` (changed Sept 11 2026 — a genuinely
+  revoked peer staying admitted forever if the sidecar happened to be
+  flaky was a real gap, not just a documented one). Pass `-max-stale 0`
+  explicitly to restore unbounded fail-open. See `admission/loop.go`'s
+  package comment for the full reasoning.
