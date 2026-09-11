@@ -14,9 +14,17 @@ import (
 // fails after touching ACLDigestECDH, the Go and TS implementations have
 // diverged and a granter/gateway pair running different halves of the stack
 // would silently fail to agree on a digest.
+//
+// vectorRequesterPriv is deliberately "66", not "22" — "22" is what
+// vectorPub itself was originally derived from (checked directly before
+// picking this), and reusing it here would make vectorPub and the
+// requester's pubkey coincide, which is confusing to read even though it's
+// not cryptographically wrong.
 var (
-	vectorPriv = strings.Repeat("11", 32)
-	vectorPub  = "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20"
+	vectorPriv          = strings.Repeat("11", 32)
+	vectorPub           = "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20"
+	vectorRequesterPriv = strings.Repeat("66", 32)
+	vectorRequesterPub  = "219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424"
 )
 
 func publicFromPrivate(privateKeyHex string) (string, error) {
@@ -36,12 +44,12 @@ func TestACLDigestECDH_MatchesTypeScriptReferenceImplementation(t *testing.T) {
 		service string
 		want    string
 	}{
-		{"db", "a001f886b8a082696bf80b7eac0a4660129837021ef4587d15bebd48c795521c"},
-		{"cache", "8a2605b6326d4b97059ca0336d8944ca8b45ce4f03044e3cc85f8caa5100cb51"},
+		{"db", "765af225493b5404393c4e206e842314154426020ab47f0fce9f33961e6376cb"},
+		{"cache", "0945f097c5c7c0703bf88def5717691ebf8ca762c28f726536e470a5fdb9e2a6"},
 	}
 
 	for _, tc := range cases {
-		got, err := ACLDigestECDH(vectorPriv, vectorPub, tc.service)
+		got, err := ACLDigestECDH(vectorPriv, vectorPub, vectorRequesterPub, tc.service)
 		if err != nil {
 			t.Fatalf("service %q: %v", tc.service, err)
 		}
@@ -53,10 +61,12 @@ func TestACLDigestECDH_MatchesTypeScriptReferenceImplementation(t *testing.T) {
 
 // TestACLDigestECDH_Symmetric proves the load-bearing claim from adr/0005:
 // a granter and a gateway, computing with their own private key and the
-// other's public key, derive the identical digest.
+// other's public key (plus the same requester pubkey either way), derive
+// the identical digest.
 func TestACLDigestECDH_Symmetric(t *testing.T) {
 	granterPriv := strings.Repeat("33", 32)
 	gatewayPriv := strings.Repeat("44", 32)
+	requesterPriv := strings.Repeat("77", 32)
 
 	granterPub, err := publicFromPrivate(granterPriv)
 	if err != nil {
@@ -66,12 +76,16 @@ func TestACLDigestECDH_Symmetric(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	fromGranter, err := ACLDigestECDH(granterPriv, gatewayPub, "db")
+	requesterPub, err := publicFromPrivate(requesterPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fromGateway, err := ACLDigestECDH(gatewayPriv, granterPub, "db")
+
+	fromGranter, err := ACLDigestECDH(granterPriv, gatewayPub, requesterPub, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromGateway, err := ACLDigestECDH(gatewayPriv, granterPub, requesterPub, "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +96,11 @@ func TestACLDigestECDH_Symmetric(t *testing.T) {
 }
 
 func TestACLDigestECDH_CanonicalizesServiceName(t *testing.T) {
-	got1, err := ACLDigestECDH(vectorPriv, vectorPub, "db")
+	got1, err := ACLDigestECDH(vectorPriv, vectorPub, vectorRequesterPub, "db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got2, err := ACLDigestECDH(vectorPriv, vectorPub, "  DB  ")
+	got2, err := ACLDigestECDH(vectorPriv, vectorPub, vectorRequesterPub, "  DB  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +109,55 @@ func TestACLDigestECDH_CanonicalizesServiceName(t *testing.T) {
 	}
 }
 
+// TestACLDigestECDH_CanonicalizesRequesterPubkey: the requester pubkey is
+// mixed into the same HMAC message as the service name and must canonicalize
+// the same way (case/whitespace-insensitive), since ENS text records and
+// hex encoding don't guarantee a single canonical case.
+func TestACLDigestECDH_CanonicalizesRequesterPubkey(t *testing.T) {
+	got1, err := ACLDigestECDH(vectorPriv, vectorPub, vectorRequesterPub, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got2, err := ACLDigestECDH(vectorPriv, vectorPub, strings.ToUpper(vectorRequesterPub), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got1 != got2 {
+		t.Fatalf("expected trim+lowercase canonicalization of requester pubkey, got %s vs %s", got1, got2)
+	}
+}
+
+// TestACLDigestECDH_DifferentRequesterDifferentDigest: this is the actual
+// property the requester-binding fix depends on — two different requester
+// pubkeys, everything else identical, must not produce the same digest.
+func TestACLDigestECDH_DifferentRequesterDifferentDigest(t *testing.T) {
+	otherRequesterPub, err := publicFromPrivate(strings.Repeat("88", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forVectorRequester, err := ACLDigestECDH(vectorPriv, vectorPub, vectorRequesterPub, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forOtherRequester, err := ACLDigestECDH(vectorPriv, vectorPub, otherRequesterPub, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if forVectorRequester == forOtherRequester {
+		t.Fatal("expected different requester pubkeys to produce different digests")
+	}
+}
+
 func TestACLDigestECDH_RejectsBadKeyLength(t *testing.T) {
-	if _, err := ACLDigestECDH("ab", vectorPub, "db"); err == nil {
+	if _, err := ACLDigestECDH("ab", vectorPub, vectorRequesterPub, "db"); err == nil {
 		t.Fatal("expected error for short private key")
 	}
-	if _, err := ACLDigestECDH(vectorPriv, "ab", "db"); err == nil {
+	if _, err := ACLDigestECDH(vectorPriv, "ab", vectorRequesterPub, "db"); err == nil {
 		t.Fatal("expected error for short public key")
+	}
+	if _, err := ACLDigestECDH(vectorPriv, vectorPub, "ab", "db"); err == nil {
+		t.Fatal("expected error for short requester pubkey")
 	}
 }

@@ -153,7 +153,7 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 	// written. gatewayB is a real, separately-keyed gateway that also
 	// trusts granter1 (isolating the "digests aren't portable across
 	// gateways" property, not merely "gatewayB doesn't trust this granter").
-	digestForA, err := ACLDigestECDH(granterPriv, gwAPub, "db")
+	digestForA, err := ACLDigestECDH(granterPriv, gwAPub, devicePub, "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 	// denied above succeeds immediately after the resolver reports a new
 	// capability, without restarting either node or gateway.
 	t.Run("same request succeeds after live capability expansion", func(t *testing.T) {
-		cacheDigest, err := ACLDigestECDH(granterPriv, gwAPub, "cache")
+		cacheDigest, err := ACLDigestECDH(granterPriv, gwAPub, devicePub, "cache")
 		if err != nil {
 			t.Fatal(err)
 		}

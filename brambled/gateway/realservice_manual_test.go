@@ -74,17 +74,17 @@ func TestManual_RealPostgresAndHTTPBackendsProxyCorrectly(t *testing.T) {
 		t.Fatal("no handshake")
 	}
 
-	dbDigest, err := ACLDigestECDH(granterPriv, gwPub, "db")
+	dbDigest, err := ACLDigestECDH(granterPriv, gwPub, devicePub, "db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	webDigest, err := ACLDigestECDH(granterPriv, gwPub, "web")
+	webDigest, err := ACLDigestECDH(granterPriv, gwPub, devicePub, "web")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	resolver := fakeResolver{
-		"device1":  {ACL: []string{dbDigest, webDigest}},
+		"device1":  {ACL: []string{dbDigest, webDigest}, Pubkey: &devicePub},
 		"gateway1": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: &granterPub},
 	}

@@ -38,12 +38,17 @@ To grant "device D may reach service `db` on gateway G," vouched for by already-
 ```
 sharedSecret = X25519(A's private key, G's already-published pubkey)
 aclKey       = HKDF-SHA256(ikm=sharedSecret, salt=none, info="bramble-acl-v1", length=32)
-digest       = hex(HMAC-SHA256(key=aclKey, message=utf8(trim(lowercase("db")))))
+message      = utf8(trim(lowercase(D's already-published pubkey)) + "|" + trim(lowercase("db")))
+digest       = hex(HMAC-SHA256(key=aclKey, message=message))
 ```
 
-`admincli/src/roles.ts`'s `aclDigestECDH()` is the reference implementation (`@noble/curves`'s `x25519`, `@noble/hashes`'s `hkdf`/`hmac`/`sha256` — already transitive dependencies via `viem`, pinned directly here). The digest is appended to D's `acl` record via `admincli/src/set-acl.ts`.
+**Sept 11 update — D's own pubkey is now mixed into the digest.** The original version of this algorithm omitted it (message was just the canonicalized service name). Since `acl` records are public (this ADR's own Context section), that meant a digest was a bearer token: any device able to write its own `acl` record could read a digest off a *different* device's public record and copy it verbatim into its own, and it would validate identically — nothing tied a digest to the specific device it was computed for. Mixing D's pubkey into the HMAC message closes this: a digest now only matches when presented by the exact device it was issued for. Confirmed by `brambled/gateway/acl_test.go`'s `TestCheckACL_DigestCopiedToAnotherDeviceDenied`.
 
-Gateway G later verifies without anything being transmitted: it reads its own `acl-granters` list, and for each trusted granter label, computes `X25519(G's own private key, that granter's already-published pubkey)` — by Diffie-Hellman symmetry, **identical** to what A computed — derives the same `aclKey`, and checks whether the resulting digest for the requested service name appears in D's `acl` record. HKDF domain-separates this from WireGuard's own Noise_IK use of the same raw key, since reusing a raw ECDH output across two unrelated protocols is exactly the failure mode HKDF exists to prevent.
+`admincli/src/roles.ts`'s `aclDigestECDH()` is the reference implementation (`@noble/curves`'s `x25519`, `@noble/hashes`'s `hkdf`/`hmac`/`sha256` — already transitive dependencies via `viem`, pinned directly here). The digest is appended to D's `acl` record via `admincli/src/set-acl.ts`, which now also fetches D's own on-chain pubkey (failing loudly if D isn't enrolled) before computing it.
+
+Gateway G later verifies without anything being transmitted: it reads its own `acl-granters` list, and for each trusted granter label, computes `X25519(G's own private key, that granter's already-published pubkey)` — by Diffie-Hellman symmetry, **identical** to what A computed — derives the same `aclKey`, and checks whether the resulting digest for the requesting device's own pubkey plus the requested service name appears in D's `acl` record. HKDF domain-separates this from WireGuard's own Noise_IK use of the same raw key, since reusing a raw ECDH output across two unrelated protocols is exactly the failure mode HKDF exists to prevent.
+
+**Also fixed Sept 11 — a revoked granter's past vouches no longer count.** `CheckACL` previously only checked that a granter in `acl-granters` had a published pubkey, never whether it had since been revoked, so a revoked granter's earlier digests stayed valid forever. `CheckACL` now also requires `!granter.Revoked`.
 
 **Why this doesn't concentrate power the way a shared pepper did:** nothing is transmitted or copied by hand — a gateway independently rederives the identical shared secret from public data plus its own private key, exactly like two ordinary PKI peers agreeing on a session key from nothing but each other's public keys. And unlike a single tailnet-wide pepper, no one identity's key lets you forge a grant a gateway that doesn't trust you will accept: each gateway's own `acl-granters` list is the actual authorization boundary, owned by that gateway alone.
 

@@ -31,9 +31,16 @@ func mustPub(t *testing.T, privHex string) string {
 	return pub
 }
 
-func mustDigest(t *testing.T, granterPriv, gatewayPub, service string) string {
+// device1Priv/device1Pub is the requester identity every test below uses
+// unless it's specifically testing the requester-binding itself — every
+// digest now has to be computed for a specific requester pubkey (see
+// digest.go's doc comment), so tests need a real one, not just a device
+// label.
+var device1Priv = strings.Repeat("22", 32)
+
+func mustDigest(t *testing.T, granterPriv, gatewayPub, requesterPub, service string) string {
 	t.Helper()
-	d, err := ACLDigestECDH(granterPriv, gatewayPub, service)
+	d, err := ACLDigestECDH(granterPriv, gatewayPub, requesterPub, service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,18 +50,20 @@ func mustDigest(t *testing.T, granterPriv, gatewayPub, service string) string {
 // TestCheckACL_TrustedGranterVouchesForDevice mirrors adr/0005's worked
 // example: granter A vouches for device D to reach service "db" on gateway
 // G. G trusts A (A is in G's acl-granters). D's acl record holds the digest
-// A computed for G. G should independently derive the same digest and allow.
+// A computed for G, bound to D's own pubkey. G should independently derive
+// the same digest and allow.
 func TestCheckACL_TrustedGranterVouchesForDevice(t *testing.T) {
 	granterPriv := strings.Repeat("aa", 32)
 	gatewayPriv := strings.Repeat("bb", 32)
 	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
 
-	digest := mustDigest(t, granterPriv, gatewayPub, "db")
+	digest := mustDigest(t, granterPriv, gatewayPub, device1Pub, "db")
 
 	resolver := fakeResolver{
 		"gateway1": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv))},
-		"device1":  {ACL: []string{digest}},
+		"device1":  {ACL: []string{digest}, Pubkey: strPtr(device1Pub)},
 	}
 
 	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")
@@ -74,12 +83,13 @@ func TestCheckACL_UntrustedGranterIsIgnored(t *testing.T) {
 	untrustedGranterPriv := strings.Repeat("cc", 32)
 	gatewayPriv := strings.Repeat("bb", 32)
 	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
 
-	digest := mustDigest(t, untrustedGranterPriv, gatewayPub, "db")
+	digest := mustDigest(t, untrustedGranterPriv, gatewayPub, device1Pub, "db")
 
 	resolver := fakeResolver{
 		"gateway1": {ACLGranters: []string{"someone-else"}}, // untrustedGranterPriv's label is never listed
-		"device1":  {ACL: []string{digest}},
+		"device1":  {ACL: []string{digest}, Pubkey: strPtr(device1Pub)},
 	}
 
 	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")
@@ -91,19 +101,101 @@ func TestCheckACL_UntrustedGranterIsIgnored(t *testing.T) {
 	}
 }
 
+// TestCheckACL_RevokedGranterIsIgnored: the granter's digest is otherwise
+// valid and the granter is still listed in acl-granters, but the granter
+// identity itself has been revoked — its past vouches must stop counting,
+// not remain valid forever.
+func TestCheckACL_RevokedGranterIsIgnored(t *testing.T) {
+	granterPriv := strings.Repeat("aa", 32)
+	gatewayPriv := strings.Repeat("bb", 32)
+	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
+
+	digest := mustDigest(t, granterPriv, gatewayPub, device1Pub, "db")
+
+	resolver := fakeResolver{
+		"gateway1": {ACLGranters: []string{"granter1"}},
+		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv)), Revoked: true},
+		"device1":  {ACL: []string{digest}, Pubkey: strPtr(device1Pub)},
+	}
+
+	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected a revoked granter's digest to be rejected")
+	}
+}
+
+// TestCheckACL_DigestCopiedToAnotherDeviceDenied is the bug this session's
+// review found and this change fixes: before requester-binding, a digest
+// read off one device's public acl record could be copied verbatim into a
+// different device's own acl record and would validate identically, since
+// nothing tied it to the requester at all. It must not validate for a
+// device it wasn't computed for, even though every other input (granter,
+// gateway, service) is identical.
+func TestCheckACL_DigestCopiedToAnotherDeviceDenied(t *testing.T) {
+	granterPriv := strings.Repeat("aa", 32)
+	gatewayPriv := strings.Repeat("bb", 32)
+	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
+	device2Priv := strings.Repeat("66", 32)
+	device2Pub := mustPub(t, device2Priv)
+
+	digestForDevice1 := mustDigest(t, granterPriv, gatewayPub, device1Pub, "db")
+
+	resolver := fakeResolver{
+		"gateway1": {ACLGranters: []string{"granter1"}},
+		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv))},
+		// device2 never received a grant — this is device1's digest, copied
+		// verbatim into device2's own acl record.
+		"device2": {ACL: []string{digestForDevice1}, Pubkey: strPtr(device2Pub)},
+	}
+
+	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device2", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected a digest computed for device1 to be rejected when presented by device2")
+	}
+}
+
+// TestCheckACL_RequesterWithNoPubkeyDenied: a device with no published
+// pubkey couldn't have had a valid digest computed for it — treat it the
+// same as "no acl" rather than erroring.
+func TestCheckACL_RequesterWithNoPubkeyDenied(t *testing.T) {
+	gatewayPriv := strings.Repeat("bb", 32)
+	resolver := fakeResolver{
+		"gateway1": {ACLGranters: []string{"granter1"}},
+		"granter1": {Pubkey: strPtr(mustPub(t, strings.Repeat("aa", 32)))},
+		"device1":  {ACL: []string{"anything"}, Pubkey: nil},
+	}
+
+	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected a requester with no published pubkey to be denied")
+	}
+}
+
 // TestCheckACL_WrongServiceNameDenied: a digest for "db" doesn't authorize
 // "cache" — HMAC over a different message produces an unrelated digest.
 func TestCheckACL_WrongServiceNameDenied(t *testing.T) {
 	granterPriv := strings.Repeat("aa", 32)
 	gatewayPriv := strings.Repeat("bb", 32)
 	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
 
-	digest := mustDigest(t, granterPriv, gatewayPub, "db")
+	digest := mustDigest(t, granterPriv, gatewayPub, device1Pub, "db")
 
 	resolver := fakeResolver{
 		"gateway1": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv))},
-		"device1":  {ACL: []string{digest}},
+		"device1":  {ACL: []string{digest}, Pubkey: strPtr(device1Pub)},
 	}
 
 	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "cache")
@@ -125,13 +217,14 @@ func TestCheckACL_DifferentGatewayDenied(t *testing.T) {
 	gateway1Priv := strings.Repeat("bb", 32)
 	gateway2Priv := strings.Repeat("dd", 32)
 	gateway1Pub := mustPub(t, gateway1Priv)
+	device1Pub := mustPub(t, device1Priv)
 
-	digestForGateway1 := mustDigest(t, granterPriv, gateway1Pub, "db")
+	digestForGateway1 := mustDigest(t, granterPriv, gateway1Pub, device1Pub, "db")
 
 	resolver := fakeResolver{
 		"gateway2": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv))},
-		"device1":  {ACL: []string{digestForGateway1}},
+		"device1":  {ACL: []string{digestForGateway1}, Pubkey: strPtr(device1Pub)},
 	}
 
 	ok, err := CheckACL(resolver, gateway2Priv, "gateway2", "device1", "db")
@@ -148,7 +241,7 @@ func TestCheckACL_DeviceWithNoACLDenied(t *testing.T) {
 	resolver := fakeResolver{
 		"gateway1": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: strPtr(mustPub(t, strings.Repeat("aa", 32)))},
-		"device1":  {ACL: nil},
+		"device1":  {ACL: nil, Pubkey: strPtr(mustPub(t, device1Priv))},
 	}
 
 	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")
@@ -164,13 +257,14 @@ func TestCheckACL_UnresolvableGranterIsSkippedNotFatal(t *testing.T) {
 	granterPriv := strings.Repeat("aa", 32)
 	gatewayPriv := strings.Repeat("bb", 32)
 	gatewayPub := mustPub(t, gatewayPriv)
+	device1Pub := mustPub(t, device1Priv)
 
-	digest := mustDigest(t, granterPriv, gatewayPub, "db")
+	digest := mustDigest(t, granterPriv, gatewayPub, device1Pub, "db")
 
 	resolver := fakeResolver{
 		"gateway1": {ACLGranters: []string{"ghost-granter", "granter1"}}, // ghost-granter doesn't resolve
 		"granter1": {Pubkey: strPtr(mustPub(t, granterPriv))},
-		"device1":  {ACL: []string{digest}},
+		"device1":  {ACL: []string{digest}, Pubkey: strPtr(device1Pub)},
 	}
 
 	ok, err := CheckACL(resolver, gatewayPriv, "gateway1", "device1", "db")

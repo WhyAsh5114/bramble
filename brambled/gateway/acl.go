@@ -25,6 +25,12 @@ type Resolver interface {
 // check — every input is either already-public chain state or this
 // gateway's own private key.
 //
+// The digest is bound to the requester's own pubkey (ACLDigestECDH's fourth
+// argument): ACL records are public, so without this binding any device
+// able to write its own acl record could copy a digest read off another
+// device's public record and gain the same grant. Binding makes a digest
+// only ever match the specific requester it was actually computed for.
+//
 // A granter or requester that fails to resolve is treated as "grants
 // nothing" for that one identity rather than failing the whole check —
 // consistent with admission's fail-open-per-label posture elsewhere in this
@@ -44,6 +50,13 @@ func CheckACL(resolver Resolver, myPrivateKeyHex, myLabel, requesterLabel, servi
 	if len(requester.ACL) == 0 {
 		return false, nil
 	}
+	if requester.Pubkey == nil || *requester.Pubkey == "" {
+		// A digest is now bound to the requester's own pubkey (closes the
+		// copy-a-digest-into-my-own-record gap — see docs/adr/0005). No
+		// pubkey means no digest could ever have been legitimately computed
+		// for this requester, so there's nothing to check.
+		return false, nil
+	}
 	requesterACL := make(map[string]struct{}, len(requester.ACL))
 	for _, digest := range requester.ACL {
 		requesterACL[digest] = struct{}{}
@@ -51,11 +64,11 @@ func CheckACL(resolver Resolver, myPrivateKeyHex, myLabel, requesterLabel, servi
 
 	for _, granterLabel := range me.ACLGranters {
 		granter, err := resolver.ResolveDevice(granterLabel)
-		if err != nil || granter.Pubkey == nil || *granter.Pubkey == "" {
+		if err != nil || granter.Pubkey == nil || *granter.Pubkey == "" || granter.Revoked {
 			continue
 		}
 
-		digest, err := ACLDigestECDH(myPrivateKeyHex, *granter.Pubkey, serviceName)
+		digest, err := ACLDigestECDH(myPrivateKeyHex, *granter.Pubkey, *requester.Pubkey, serviceName)
 		if err != nil {
 			continue
 		}

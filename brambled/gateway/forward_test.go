@@ -60,12 +60,12 @@ func TestForwarder_PlainClientProxiedThroughACL(t *testing.T) {
 		t.Fatal("no handshake")
 	}
 
-	digest, err := ACLDigestECDH(granterPriv, gwPub, "web")
+	digest, err := ACLDigestECDH(granterPriv, gwPub, devicePub, "web")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolver := fakeResolver{
-		"device1":  {ACL: []string{digest}},
+		"device1":  {ACL: []string{digest}, Pubkey: &devicePub},
 		"gateway1": {ACLGranters: []string{"granter1"}},
 		"granter1": {Pubkey: &granterPub},
 	}

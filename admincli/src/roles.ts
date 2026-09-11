@@ -69,23 +69,38 @@ export function aclGrantersSetter(): `0x${string}` {
 // recomputes the identical shared secret from its own private key plus the
 // granter's already-published pubkey.
 //
-// Canonical algorithm (must match byte-for-byte in Section C's future Go
-// gateway implementation — golang.org/x/crypto/curve25519 for the ECDH,
-// stdlib crypto/hmac + a manual HKDF for the rest, already imported in
+// Canonical algorithm (must match byte-for-byte with brambled/gateway/digest.go's
+// ACLDigestECDH — golang.org/x/crypto/curve25519 for the ECDH, stdlib
+// crypto/hmac + a manual HKDF for the rest, already imported in
 // brambled/wgnode):
 //   sharedSecret = X25519(myPrivateKey32Bytes, theirPublicKey32Bytes)
 //   aclKey       = HKDF-SHA256(ikm=sharedSecret, salt=none, info="bramble-acl-v1", length=32)
-//   digest       = hex(HMAC-SHA256(key=aclKey, message=utf8(trim(lowercase(serviceName)))))
+//   message      = utf8(trim(lowercase(requesterPubkeyHex)) + "|" + trim(lowercase(serviceName)))
+//   digest       = hex(HMAC-SHA256(key=aclKey, message=message))
 //
 // HKDF domain-separates this from WireGuard's own Noise_IK handshake, which
 // also consumes these same keys for an unrelated protocol — reusing a raw
 // ECDH output directly across two different protocols is the thing HKDF
 // exists to avoid, not a hypothetical concern.
+//
+// requesterPubkeyHex binds the digest to the specific device's own pubkey it
+// will be written under — without this, since acl records are public
+// (adr/0005's Context section), any device able to write its own acl record
+// could copy a digest read off another device's public record and gain the
+// same grant. It's mixed into the HMAC message the same way serviceName is,
+// not used as X25519 key material.
 const ACL_HKDF_INFO = utf8ToBytes('bramble-acl-v1')
 
-export function aclDigestECDH(myPrivateKeyHex: string, theirPublicKeyHex: string, serviceName: string): string {
+export function aclDigestECDH(
+  myPrivateKeyHex: string,
+  theirPublicKeyHex: string,
+  requesterPubkeyHex: string,
+  serviceName: string
+): string {
   const sharedSecret = x25519.getSharedSecret(hexToBytes(myPrivateKeyHex), hexToBytes(theirPublicKeyHex))
   const aclKey = hkdf(sha256, sharedSecret, undefined, ACL_HKDF_INFO, 32)
-  const canonical = serviceName.trim().toLowerCase()
-  return bytesToHex(hmac(sha256, aclKey, utf8ToBytes(canonical)))
+  const canonicalRequester = requesterPubkeyHex.trim().toLowerCase()
+  const canonicalService = serviceName.trim().toLowerCase()
+  const message = `${canonicalRequester}|${canonicalService}`
+  return bytesToHex(hmac(sha256, aclKey, utf8ToBytes(message)))
 }

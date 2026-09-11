@@ -26,15 +26,24 @@ const aclHKDFInfo = "bramble-acl-v1"
 //
 //	sharedSecret = X25519(myPrivateKey, theirPublicKey)
 //	aclKey       = HKDF-SHA256(ikm=sharedSecret, salt=none, info="bramble-acl-v1", length=32)
-//	digest       = hex(HMAC-SHA256(key=aclKey, message=utf8(trim(lowercase(serviceName)))))
+//	message      = utf8(trim(lowercase(requesterPubkeyHex)) + "|" + trim(lowercase(serviceName)))
+//	digest       = hex(HMAC-SHA256(key=aclKey, message=message))
 //
 // A granter and a gateway each compute this independently from their own
 // private key plus the other's already-published pubkey — by Diffie-Hellman
 // symmetry the two calls (with arguments swapped) produce the identical
-// digest, with nothing ever transmitted between them (adr/0005). Both
-// arguments are hex-encoded, unprefixed 32-byte X25519 keys, matching the raw
-// WireGuard key format brambled/wgnode already uses.
-func ACLDigestECDH(myPrivateKeyHex, theirPublicKeyHex, serviceName string) (string, error) {
+// digest, with nothing ever transmitted between them (adr/0005). myPrivateKeyHex
+// and theirPublicKeyHex are hex-encoded, unprefixed 32-byte X25519 keys,
+// matching the raw WireGuard key format brambled/wgnode already uses.
+//
+// requesterPubkeyHex binds the digest to the specific device it was computed
+// for: ACL records are public (adr/0005's Context section), so without this
+// binding any device able to write its own acl record could copy a digest
+// read off another device's public record and gain the same grant. Also
+// hex-encoded, unprefixed — same format as the other two key arguments,
+// even though it's never used as a key material input to X25519 itself,
+// just canonicalized and mixed into the HMAC message like serviceName.
+func ACLDigestECDH(myPrivateKeyHex, theirPublicKeyHex, requesterPubkeyHex, serviceName string) (string, error) {
 	priv, err := decodeKey32(myPrivateKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("decoding private key: %w", err)
@@ -42,6 +51,9 @@ func ACLDigestECDH(myPrivateKeyHex, theirPublicKeyHex, serviceName string) (stri
 	pub, err := decodeKey32(theirPublicKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("decoding public key: %w", err)
+	}
+	if _, err := decodeKey32(requesterPubkeyHex); err != nil {
+		return "", fmt.Errorf("decoding requester pubkey: %w", err)
 	}
 
 	shared, err := curve25519.X25519(priv, pub)
@@ -54,9 +66,11 @@ func ACLDigestECDH(myPrivateKeyHex, theirPublicKeyHex, serviceName string) (stri
 		return "", fmt.Errorf("deriving ACL key: %w", err)
 	}
 
-	canonical := strings.ToLower(strings.TrimSpace(serviceName))
+	canonicalRequester := strings.ToLower(strings.TrimSpace(requesterPubkeyHex))
+	canonicalService := strings.ToLower(strings.TrimSpace(serviceName))
+	message := canonicalRequester + "|" + canonicalService
 	mac := hmac.New(sha256.New, aclKey)
-	mac.Write([]byte(canonical))
+	mac.Write([]byte(message))
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
