@@ -18,7 +18,18 @@ if (existsSync(envPath)) {
   const env = await Bun.file(envPath).text()
   for (const line of env.split('\n')) {
     const match = line.match(/^([^#=]+)=(.*)$/)
-    if (match && !process.env[match[1].trim()]) process.env[match[1].trim()] = match[2].trim()
+    if (match && !process.env[match[1].trim()]) {
+      // Strip one layer of matching surrounding quotes — every other
+      // env-loading path in this repo does this for free (shell `source`,
+      // Vite/vitest, Next.js), but this hand-rolled parser is a regex
+      // split with no quote handling at all, so a quoted .env value (e.g.
+      // BRAMBLE_TAILNET_NAME="foo.eth") previously landed in process.env
+      // with the literal quote characters still attached — silently
+      // breaking anything sensitive to the exact string (ENS name
+      // normalization, hex key parsing).
+      const rawValue = match[2].trim()
+      process.env[match[1].trim()] = rawValue.replace(/^(['"])(.*)\1$/, '$2')
+    }
   }
 }
 

@@ -24,7 +24,12 @@ if (existsSync(envPath)) {
   const env = await Bun.file(envPath).text()
   for (const line of env.split('\n')) {
     const match = line.match(/^([^#=]+)=(.*)$/)
-    if (match && !process.env[match[1].trim()]) process.env[match[1].trim()] = match[2].trim()
+    if (match && !process.env[match[1].trim()]) {
+      // Strip one layer of matching surrounding quotes — see
+      // admincli/src/setup.ts's identical loader for the full reasoning.
+      const rawValue = match[2].trim()
+      process.env[match[1].trim()] = rawValue.replace(/^(['"])(.*)\1$/, '$2')
+    }
   }
 }
 
