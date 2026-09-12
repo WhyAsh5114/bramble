@@ -58,7 +58,7 @@ async function main() {
   }
   const expiryYears = expiryYearsArg ? Number(expiryYearsArg) : 10
 
-  // LEDGER_SIGN=1 signs all three writes below through a real Ledger,
+  // LEDGER_SIGN=1 signs all four writes below through a real Ledger,
   // via a from-scratch hw-app-eth signer (docs/adr/0001's Pivot section,
   // "Upgrade" note) -- wallet-cli's own `send` can't sign on Sepolia at
   // all (Gap 4, docs/12_LEDGER_DX_FEEDBACK.md). Defaults to the existing
