@@ -238,3 +238,37 @@ func (m *Manager) Relays() (*RelaysResponse, error) {
 	}
 	return &out, nil
 }
+
+// ListDevices asks the local sidecar to enumerate every label ever
+// registered on the tailnet's own device subregistry (docs/adr/0010's
+// full-mesh-by-default peer discovery) — the same LabelRegistered-log-scan
+// technique as Relays() above, against the device registry instead of the
+// relay one. Includes revoked/expired/self labels; callers filter those out
+// (admission.Loop's own authorization check already handles revoked/expired
+// gracefully for a statically-listed peer, so this only needs to exclude
+// self).
+func (m *Manager) ListDevices() ([]string, error) {
+	url := fmt.Sprintf("http://localhost:%d/devices", m.Port)
+	resp, err := sidecarHTTPClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("calling sidecar: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading sidecar response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sidecar returned %d: %s", resp.StatusCode, body)
+	}
+
+	var out struct {
+		Labels []string `json:"labels"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decoding sidecar response: %w", err)
+	}
+	return out.Labels, nil
+}

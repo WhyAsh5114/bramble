@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { SIDECAR_PORT, relayRegistry, tailnetName, tailnetRegistry } from './ens/config'
 import { deviceRoute } from './routes/device'
+import { devicesRoute } from './routes/devices'
 import { paymentsRoute } from './routes/payments'
 import { relaysRoute } from './routes/relays'
 
@@ -23,6 +24,7 @@ app.get('/health', (c) =>
   })
 )
 app.route('/device', deviceRoute)
+app.route('/', devicesRoute)
 app.route('/', paymentsRoute)
 app.route('/', relaysRoute)
 

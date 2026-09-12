@@ -29,7 +29,7 @@ func TestResolvePeerMeshIPs_ResolvesBareLabelFromChain(t *testing.T) {
 		"self":  {MeshIP: meshIPPtr("10.77.0.2/24")},
 		"other": {MeshIP: meshIPPtr("10.77.0.5/24")},
 	}
-	prefix, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other"}})
+	prefix, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other"}}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestResolvePeerMeshIPs_ResolvesBareLabelFromChain(t *testing.T) {
 func TestResolvePeerMeshIPs_ExplicitAllowedIPWinsOverChain(t *testing.T) {
 	resolver := fakeMeshResolver{"self": {MeshIP: meshIPPtr("10.77.0.2/24")}}
 	explicit := netip.MustParsePrefix("10.77.0.9/32")
-	_, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other", AllowedIP: explicit}})
+	_, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other", AllowedIP: explicit}}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestResolvePeerMeshIPs_ExplicitAllowedIPWinsOverChain(t *testing.T) {
 
 func TestResolvePeerMeshIPs_ExplicitLocalAddrWinsOverChain(t *testing.T) {
 	resolver := fakeMeshResolver{"self": {MeshIP: meshIPPtr("10.77.0.2/24")}}
-	prefix, _, err := resolvePeerMeshIPs(resolver, "self", "10.9.9.9/24", nil)
+	prefix, _, err := resolvePeerMeshIPs(resolver, "self", "10.9.9.9/24", nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestResolvePeerMeshIPs_ExplicitLocalAddrWinsOverChain(t *testing.T) {
 
 func TestResolvePeerMeshIPs_MissingMeshIPRecordErrors(t *testing.T) {
 	resolver := fakeMeshResolver{"self": {MeshIP: nil}}
-	if _, _, err := resolvePeerMeshIPs(resolver, "self", "", nil); err == nil {
+	if _, _, err := resolvePeerMeshIPs(resolver, "self", "", nil, false); err == nil {
 		t.Fatal("expected an error for a device with no mesh-ip record and no -local-addr override")
 	}
 }
@@ -79,8 +79,38 @@ func TestResolvePeerMeshIPs_CollisionIsRejected(t *testing.T) {
 		"self":  {MeshIP: meshIPPtr("10.77.0.2/24")},
 		"other": {MeshIP: meshIPPtr("10.77.0.2/24")}, // same host as self
 	}
-	if _, _, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other"}}); err == nil {
+	if _, _, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other"}}, false); err == nil {
 		t.Fatal("expected a collision error when two resolved addresses match")
+	}
+}
+
+func TestResolvePeerMeshIPs_SkipsUnresolvableAutoDiscoveredPeerInsteadOfErroring(t *testing.T) {
+	resolver := fakeMeshResolver{
+		"self":  {MeshIP: meshIPPtr("10.77.0.2/24")},
+		"other": {MeshIP: nil}, // never got a mesh-ip record
+		"good":  {MeshIP: meshIPPtr("10.77.0.5/24")},
+	}
+	_, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "other"}, {Label: "good"}}, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(peers) != 1 || peers[0].Label != "good" {
+		t.Errorf("got %+v, want only \"good\" to survive (unresolvable \"other\" skipped)", peers)
+	}
+}
+
+func TestResolvePeerMeshIPs_SkipsCollidingAutoDiscoveredPeerInsteadOfErroring(t *testing.T) {
+	resolver := fakeMeshResolver{
+		"self":  {MeshIP: meshIPPtr("10.77.0.2/24")},
+		"clash": {MeshIP: meshIPPtr("10.77.0.2/24")}, // same host as self
+		"good":  {MeshIP: meshIPPtr("10.77.0.5/24")},
+	}
+	_, peers, err := resolvePeerMeshIPs(resolver, "self", "", []admission.Peer{{Label: "clash"}, {Label: "good"}}, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(peers) != 1 || peers[0].Label != "good" {
+		t.Errorf("got %+v, want only \"good\" to survive (colliding \"clash\" skipped)", peers)
 	}
 }
 

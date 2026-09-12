@@ -8,7 +8,9 @@ WireGuard device's peer table from it.
 
 - `brambled resolve <device-label>` — Phase 1 Section A. Prints a device
   subname's resolved ENS state (pubkey, expiry, status, tokenId).
-- `brambled serve -label <own-label> -peer <label> [-peer ...]` —
+- `brambled serve -label <own-label> [-peer <label> ...]` (omit `-peer`
+  entirely to auto-discover and track the whole tailnet,
+  `docs/adr/0010-full-mesh-peer-discovery.md`) —
   the admission verifier (Gate 1.1) plus, as of Section C, real connectivity
   and gateway/ACL enforcement. Starts a WireGuard device and keeps its peer
   table synced to the tracked labels' ENS state, polling every `-ttl`
@@ -23,6 +25,11 @@ WireGuard device's peer table from it.
     `admincli/src/enroll.ts`. `<label>=<allowed-ip>/<prefix>` still works
     and always wins outright over the chain record, e.g. for a device
     enrolled before `mesh-ip` existed, or to override it deliberately.
+    **Omit `-peer` entirely** to auto-discover and track every other
+    registered device on the tailnet instead — full-mesh-by-default
+    (`docs/adr/0010-full-mesh-peer-discovery.md`); any `-peer` given at all
+    disables this and uses exactly what was typed. A discovered device with
+    no usable `mesh-ip` is skipped with a warning, not a startup failure.
   - `-local-addr` — this node's address and mesh subnet, CIDR. Omit to
     resolve it from `-label`'s own on-chain `mesh-ip` record instead
     (`docs/adr/0009`); an explicit value always wins.
@@ -479,17 +486,29 @@ network problem, not a config mismatch.
   anywhere verified (our one fixture reads back `2`) — see
   `admission/loop.go`'s package comment. Revocation may need `status` once
   its meaning is confirmed; Phase 2 owns EAC/registry-state semantics.
-- **`serve`'s peer _list_ is still static CLI config** — which labels to
-  track is passed via `-peer`, not discovered from ENS. Narrower than it
-  used to be: each listed peer's _address_ no longer has to be, since
-  `-peer <label>` now resolves that device's own `mesh-ip` record instead
-  of requiring `=allowed-ip/prefix` (`docs/adr/0009-mesh-ip-allocation.md`,
-  Sept 12 2026). Discovering "which labels belong to my tailnet"
-  automatically — the remaining half — would reuse the same
-  `LabelRegistered`-scan technique `sidecar/src/ens/devices.ts` already
-  uses for allocation, but deciding _which_ of a tailnet's devices a given
-  node should track (all of them? some role-based subset?) is a real design
-  question, not just a scan — left to Phase 2.
+- ~~`serve`'s peer list is static CLI config~~ — **resolved Sept 12, 2026.**
+  Omitting `-peer` entirely now auto-discovers and tracks every other
+  registered device on the tailnet, full-mesh-by-default like a real
+  tailnet gives you (`docs/adr/0010-full-mesh-peer-discovery.md`); any
+  `-peer` given at all still uses exactly what was typed, unchanged. A
+  device with no `mesh-ip` record yet is skipped with a warning rather than
+  aborting startup. Role-based subset discovery (mesh with _some_ of a
+  tailnet's devices, not all) is still out of scope — full-mesh-or-explicit-
+  list is the whole policy surface for now, left to Phase 2 if that's ever
+  needed.
+- **The public Sepolia RPC this repo defaults to
+  (`https://ethereum-sepolia-rpc.publicnode.com`) is a load-balanced pool
+  of independently-syncing nodes, not one consistent node** — discovered
+  while live-verifying ADR 0010: two `eth_getLogs` calls against the same
+  contract, seconds apart, were served by backends over 17,000 blocks apart
+  in sync height, and a `getEnsText` read once landed on a backend that
+  hadn't yet seen a `setText` confirmed moments earlier. This isn't a bug
+  in this project's own scanning/allocation code — it's a property of the
+  specific endpoint. **Set `SEPOLIA_RPC_URL` to a single dedicated endpoint
+  before a live demo recording** (Alchemy/Infura free tier, or any single
+  non-pooled RPC) — full-mesh discovery in particular can silently miss
+  recently-registered devices on a lagging backend otherwise. See
+  `docs/adr/0010`'s own verification section for the exact numbers.
 - **No key persistence.** `serve` generates an ephemeral key if
   `-private-key`/`BRAMBLE_PRIVATE_KEY` isn't set — a real node's identity
   eventually comes from enrollment (Ledger-backed, `docs/adr/0001`), not from

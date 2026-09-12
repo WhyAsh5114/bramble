@@ -94,7 +94,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: brambled resolve <device-label>")
-	fmt.Fprintln(os.Stderr, "       brambled serve -label <own-label> [-peer label=allowed-ip/prefix ...] [-service name=port ...] [-forward local-port=gateway-label:service ...] [-rendezvous host:port] [-netstack]")
+	fmt.Fprintln(os.Stderr, "       brambled serve -label <own-label> [-peer label[=allowed-ip/prefix] ...] [-service name=port ...] [-forward local-port=gateway-label:service ...] [-rendezvous host:port] [-netstack]  (omit -peer entirely to auto-discover the whole tailnet)")
 	fmt.Fprintln(os.Stderr, "       brambled genkey")
 	fmt.Fprintln(os.Stderr, "       brambled demo-data-relay [-rendezvous host:port] [-primary url] [-backup url] [-small-bytes n] [-large-bytes n] [-session-bytes n]")
 }
@@ -175,16 +175,24 @@ func (p *peerFlag) Set(value string) error {
 }
 
 // resolvePeerMeshIPs fills in any peer entry that left AllowedIP zero (the
-// bare-label -peer form, docs/adr/0009) from that device's own mesh-ip ENS
+// bare-label -peer form, docs/adr/0009 — including every peer produced by
+// discoverAllPeers, docs/adr/0010) from that device's own mesh-ip ENS
 // record, and — if localAddr is empty — resolves this node's own local
 // prefix the same way from ownLabel's record. A resolved peer route always
 // gets a synthesized /32 regardless of what mask is published on chain, so
 // one mis-published mesh-ip can never swallow routing for the whole mesh;
 // the local prefix keeps its full on-chain mask, since that's this node's
-// own subnet width, not a route to a single peer. Returns an error if two
-// resolved addresses collide — defense in depth on top of enroll.ts's own
-// allocation never handing out a taken address.
-func resolvePeerMeshIPs(resolver admission.Resolver, ownLabel, localAddr string, peers []admission.Peer) (netip.Prefix, []admission.Peer, error) {
+// own subnet width, not a route to a single peer.
+//
+// skipUnresolvable changes how a peer that can't be resolved (no usable
+// mesh-ip, or a mesh IP colliding with one already claimed) is handled:
+// false (an operator explicitly named this peer with -peer) hard-errors,
+// since they asked for that specific one and silently dropping it would
+// hide a real misconfiguration. true (this peer came from auto-discovery)
+// logs a warning and drops just that one peer instead — a live,
+// heterogeneous tailnet with one device missing a mesh-ip record shouldn't
+// refuse everyone else network access.
+func resolvePeerMeshIPs(resolver admission.Resolver, ownLabel, localAddr string, peers []admission.Peer, skipUnresolvable bool) (netip.Prefix, []admission.Peer, error) {
 	var localPrefix netip.Prefix
 	if localAddr != "" {
 		p, err := netip.ParsePrefix(localAddr)
@@ -201,23 +209,62 @@ func resolvePeerMeshIPs(resolver admission.Resolver, ownLabel, localAddr string,
 	}
 
 	used := map[netip.Addr]string{localPrefix.Addr(): ownLabel + " (self)"}
-	resolved := make([]admission.Peer, len(peers))
-	for i, p := range peers {
+	resolved := make([]admission.Peer, 0, len(peers))
+	for _, p := range peers {
 		if !p.AllowedIP.IsValid() {
 			parsed, err := resolveMeshIPPrefix(resolver, p.Label)
 			if err != nil {
+				if skipUnresolvable {
+					fmt.Fprintf(os.Stderr, "serve: auto-discovered peer %q skipped: %v\n", p.Label, err)
+					continue
+				}
 				return netip.Prefix{}, nil, fmt.Errorf("-peer %q gave no allowed-ip: %w", p.Label, err)
 			}
 			p.AllowedIP = netip.PrefixFrom(parsed.Addr(), 32)
 		}
 		addr := p.AllowedIP.Addr()
 		if other, ok := used[addr]; ok {
+			if skipUnresolvable {
+				fmt.Fprintf(os.Stderr, "serve: auto-discovered peer %q skipped: mesh IP collision with %s\n", p.Label, other)
+				continue
+			}
 			return netip.Prefix{}, nil, fmt.Errorf("mesh IP collision: %s and %s both resolve to %s", other, p.Label, addr)
 		}
 		used[addr] = p.Label
-		resolved[i] = p
+		resolved = append(resolved, p)
 	}
 	return localPrefix, resolved, nil
+}
+
+// discoverAllPeers lists every label ever registered on the tailnet
+// (docs/adr/0010) and returns all of them except ownLabel as bare peers,
+// for resolvePeerMeshIPs to fill in. Deliberately doesn't pre-filter by
+// revoked/expired status — admission.Loop's own per-sync authorization
+// check already handles that correctly for a statically-listed peer (it's
+// just never admitted), so doing it here too would only be able to get it
+// wrong in one direction: excluding a peer that gets un-revoked or
+// re-enrolled later, for the life of this process, since the peer list
+// itself is fixed at startup.
+// deviceLister is satisfied by *sidecar.Manager — kept as a small interface,
+// separate from admission.Resolver, so discoverAllPeers can be tested
+// without a live sidecar.
+type deviceLister interface {
+	ListDevices() ([]string, error)
+}
+
+func discoverAllPeers(m deviceLister, ownLabel string) ([]admission.Peer, error) {
+	labels, err := m.ListDevices()
+	if err != nil {
+		return nil, fmt.Errorf("auto-discovering peers: %w", err)
+	}
+	peers := make([]admission.Peer, 0, len(labels))
+	for _, label := range labels {
+		if label == ownLabel {
+			continue
+		}
+		peers = append(peers, admission.Peer{Label: label})
+	}
+	return peers, nil
 }
 
 // resolveMeshIPPrefix reads label's mesh-ip text record and parses it in
@@ -829,7 +876,7 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
-	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix, or a bare label to resolve that peer's mesh-ip from ENS instead (repeatable, docs/adr/0009) — requires the label to have a mesh-ip record, written by enroll.ts")
+	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix, or a bare label to resolve that peer's mesh-ip from ENS instead (repeatable, docs/adr/0009) — requires the label to have a mesh-ip record, written by enroll.ts. Omit entirely to auto-discover and track every other device on the tailnet instead (docs/adr/0010); any -peer given at all disables auto-discovery and uses exactly what was typed")
 	services := serviceFlag{}
 	fs.Var(services, "service", "local service this node offers as a gateway: name=local-port (repeatable); omit to offer none (docs/adr/0006-gateway-connect-protocol.md)")
 	var forwards forwardFlag
@@ -858,9 +905,10 @@ func runServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if len(peers) == 0 {
-		return fmt.Errorf("at least one -peer label=allowed-ip/prefix is required")
-	}
+	// No explicit -peer requirement anymore (docs/adr/0010) — an empty
+	// list means "auto-discover every other device on the tailnet"
+	// instead of an error; see the discoverAllPeers call below, after the
+	// sidecar exists to ask.
 	if *relaySessionBytes <= 0 || *maxRelayPricePerByte <= 0 || *maxRelaySessionCost <= 0 {
 		return fmt.Errorf("relay session bytes and relay price/cost limits must all be positive")
 	}
@@ -870,20 +918,6 @@ func runServe(args []string) error {
 	}
 	if *ownLabel == "" {
 		return fmt.Errorf("-label (this node's own ENS label) is required")
-	}
-	trackedPeerLabels := make(map[string]bool, len(peers))
-	for _, p := range peers {
-		trackedPeerLabels[p.Label] = true
-	}
-	for _, fwd := range forwards {
-		if !trackedPeerLabels[fwd.GatewayLabel] {
-			return fmt.Errorf("-forward %d=%s:%s: %q is not a tracked -peer — a forward target must be a peer this node admits", fwd.LocalPort, fwd.GatewayLabel, fwd.Service, fwd.GatewayLabel)
-		}
-	}
-	for label := range relayPeers {
-		if !trackedPeerLabels[label] {
-			return fmt.Errorf("-relay-peer %q is not a tracked -peer", label)
-		}
 	}
 	// The len(dataRelays)==0 case is checked further below, after relay
 	// discovery has had a chance to populate the pool — -data-relay isn't
@@ -914,15 +948,52 @@ func runServe(args []string) error {
 	}
 	defer m.Stop()
 
+	// No -peer flags at all: auto-discover every other device on the
+	// tailnet instead of requiring each one typed out by hand
+	// (docs/adr/0010) — full-mesh-by-default, matching what a real
+	// tailnet gives you elsewhere. Any -peer flags given at all disable
+	// this entirely and use exactly what was typed, unchanged.
+	autoDiscovering := len(peers) == 0
+	if autoDiscovering {
+		discovered, discErr := discoverAllPeers(m, *ownLabel)
+		if discErr != nil {
+			return fmt.Errorf("no -peer flags given: %w", discErr)
+		}
+		peers = discovered
+		fmt.Fprintf(os.Stderr, "no -peer flags given — auto-discovered %d other device(s) on the tailnet\n", len(peers))
+	}
+
 	// Fills in any -peer that gave a bare label (docs/adr/0009) from that
 	// device's own on-chain mesh-ip, and resolves this node's own local
 	// prefix the same way if -local-addr was left unset. Must run before
 	// peerAddrByLabel below, and before anything that dials a peer address.
-	prefix, resolvedPeers, err := resolvePeerMeshIPs(m, *ownLabel, *localPrefix, peers)
+	// Auto-discovered peers that can't resolve a usable mesh-ip are
+	// skipped with a warning rather than aborting the whole node — an
+	// operator who explicitly named a peer gets a hard error instead,
+	// since they asked for that specific one.
+	prefix, resolvedPeers, err := resolvePeerMeshIPs(m, *ownLabel, *localPrefix, peers, autoDiscovering)
 	if err != nil {
 		return err
 	}
 	peers = resolvedPeers
+	if len(peers) == 0 {
+		fmt.Fprintln(os.Stderr, "warning: tracking zero peers — nothing to admit or connect to")
+	}
+
+	trackedPeerLabels := make(map[string]bool, len(peers))
+	for _, p := range peers {
+		trackedPeerLabels[p.Label] = true
+	}
+	for _, fwd := range forwards {
+		if !trackedPeerLabels[fwd.GatewayLabel] {
+			return fmt.Errorf("-forward %d=%s:%s: %q is not a tracked -peer — a forward target must be a peer this node admits", fwd.LocalPort, fwd.GatewayLabel, fwd.Service, fwd.GatewayLabel)
+		}
+	}
+	for label := range relayPeers {
+		if !trackedPeerLabels[label] {
+			return fmt.Errorf("-relay-peer %q is not a tracked -peer", label)
+		}
+	}
 
 	peerAddrByLabel := make(map[string]netip.Addr, len(peers))
 	for _, p := range peers {
