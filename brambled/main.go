@@ -687,8 +687,27 @@ const dataRelayAdoptExchangeTimeout = 3 * time.Second
 // of when its own RxBytes happens to stall. A peer that is genuinely still
 // connected keeps re-exchanging the same candidate here too — harmless,
 // since AddPeer only runs again when the candidate actually changes.
+//
+// dataRelayAdoptBackoffGrace/dataRelayAdoptMaxBackoff bound the recurring
+// spend below: every cycle here buys a real rendezvous token from every
+// metered relay (exchangeAnyMetered), so polling at a fixed ~3s cadence
+// forever, long after a connection has settled, is an unbounded real-money
+// cost for a connection that isn't going anywhere. Backoff only starts
+// once nothing has changed for dataRelayAdoptBackoffGrace — comfortably
+// longer than any failover this project's own tests or demo exercise, so a
+// genuine failover (which happens within seconds of a stall, not minutes)
+// is never slowed down; only a connection that's been idle far longer than
+// that gets the extra sleep, on top of (not instead of) the exchange
+// call's own ~3s natural cadence.
+const (
+	dataRelayAdoptBackoffGrace = 2 * time.Minute
+	dataRelayAdoptMaxBackoff   = 30 * time.Second
+)
+
 func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Manager, peerLabel, ownPubkey, peerPubkey, ownCandidate string, allowedIP netip.Prefix, relays []sidecar.RendezvousRelay) {
 	var current string
+	lastChange := time.Now()
+	backoff := dataRelayAdoptExchangeTimeout
 	for {
 		select {
 		case <-ctx.Done():
@@ -697,6 +716,19 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 		}
 		candidate, _, err := exchangeAnyMetered(relays, m, ownPubkey, peerPubkey, ownCandidate, dataRelayAdoptExchangeTimeout)
 		if err != nil || candidate == "" || candidate == current {
+			if time.Since(lastChange) > dataRelayAdoptBackoffGrace {
+				// Long-idle connection — sleep extra before the next paid
+				// attempt, doubling up to dataRelayAdoptMaxBackoff. Reset
+				// the instant a real change is adopted below.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff *= 2; backoff > dataRelayAdoptMaxBackoff {
+					backoff = dataRelayAdoptMaxBackoff
+				}
+			}
 			continue
 		}
 		endpoint, err := netip.ParseAddrPort(candidate)
@@ -716,6 +748,8 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 			fmt.Fprintf(os.Stderr, "data-relay: %s: adopting new candidate failed, will retry: %v\n", peerLabel, err)
 			continue
 		}
+		lastChange = time.Now()
+		backoff = dataRelayAdoptExchangeTimeout
 		fmt.Fprintf(os.Stderr, "data-relay: %s adopted new candidate %s\n", peerLabel, candidate)
 		current = candidate
 	}
