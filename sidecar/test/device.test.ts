@@ -27,6 +27,9 @@ describe('resolveDevice', () => {
     // Same for `acl-granters` — this fixture device has never been
     // configured as a gateway for anything.
     expect(record.aclGranters).toEqual([])
+    // This fixture predates the `mesh-ip` record (docs/adr/0009) — must
+    // parse to null, not throw, same as every other never-written key here.
+    expect(record.meshIP).toBeNull()
   })
 
   it('resolves a nonexistent label to an unset record rather than throwing', async () => {

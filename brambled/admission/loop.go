@@ -67,10 +67,12 @@ type PeerTable interface {
 }
 
 // Peer is a mesh member this node should track. AllowedIP is supplied by the
-// caller, not derived from ENS — a mesh IP addressing scheme is a record
-// schema question Phase 2 owns (docs/05_BUILD_PLAN.md Phase 2 discretion),
-// not decided here. Endpoint, if set, is used as-is (static config) and
-// EndpointResolver is never consulted for this peer.
+// caller — this package itself still never derives it from ENS, that
+// happens one layer up, in brambled/main.go's resolvePeerMeshIPs, before a
+// Peer ever reaches this Loop (docs/adr/0009 resolves the mesh-IP addressing
+// scheme this comment used to defer to "Phase 2"). Endpoint, if set, is
+// used as-is (static config) and EndpointResolver is never consulted for
+// this peer.
 type Peer struct {
 	Label     string
 	AllowedIP netip.Prefix

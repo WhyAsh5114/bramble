@@ -1,0 +1,36 @@
+# ADR 0009 — Registrar-assigned mesh IP allocation
+
+**Status:** Decided and implemented, Sept 12 2026.
+
+## Context
+
+Until now, every mesh address was operator-supplied: `-local-addr <cidr>` for a node's own address, and `-peer label=allowed-ip/prefix` for every peer it tracks. This works, but it's the single biggest remaining onboarding gap next to Tailscale — `tailscale up` never asks an operator to pick and coordinate IP addresses by hand, and this project did (`docs/05_BUILD_PLAN.md`'s Phase 2 discretion list named this explicitly: "Still open and still the real blocker").
+
+The natural fix — a device writes its own `mesh-ip` text record, the same self-service pattern already used for `pubkey`/`acl`/`acl-granters` — turns out to reintroduce the exact bug this session's ACL work just closed, in a different subsystem. `brambled/main.go` builds a reverse map from tunnel source address to peer label (`peerLabels` in `runServe`, consumed by `gateway.Server.PeerLabels` for `CheckACL`), and WireGuard's `allowed_ips` are exclusive per node — the *last* `AddPeer` call for a given address wins the route. If a device could self-publish any address, a second device publishing the first device's address would, on its next resolve cycle, steal that route; the first device's traffic (and ACL grants, which are looked up by the label that address maps to) would start being misattributed. That is the ACL-digest bearer-token bug's shape — "whoever holds write access to a record can claim someone else's identity" — showing up again in address space instead of capability space.
+
+## Decision
+
+**The mesh-ip record is written by the enrolling operator, not the device.** `admincli/src/enroll.ts` gains a fourth step, after deploying the resolver, registering the subname, and writing the initial pubkey: allocate a free address and `setText(mesh-ip, ...)`. No new EAC grant is needed — the resolver deploy already grants the operator `ALL_ROLES` on it (the same reason step 3's pubkey write needs no separate `grantSetterRoles` call either). A device can rotate its own key but cannot move its own address — stronger than pubkey's guarantee, and the same property Tailscale's coordination server provides, achieved here without adding a trusted coordinator: the *enrollment* transaction is still on-chain and auditable, just like every other enrollment step.
+
+**Format: a full CIDR string, in exactly the format `-peer`/`-local-addr` already parse.** `mesh-ip` holds `"10.77.0.5/24"`, not a bare address — `netip.ParsePrefix` on the Go side and simple string slicing on the TS allocation side both work off the identical string, so there is exactly one format to keep in sync between the two languages (the digest cross-language drift and the `.env` quoting bug earlier this session were both instances of "two parsers, one format" going wrong — not repeating that here). Consumers choose what to do with the mask: `brambled/main.go`'s `resolvePeerMeshIPs` uses a resolved peer's address with a synthesized `/32` regardless of the on-chain mask (so one mis-published record's mask can never swallow routing for the rest of the mesh), but keeps the full stored mask for this node's own local prefix, since that's this node's real subnet width, not a route to a single peer.
+
+**Allocation: lowest free host in `10.77.0.0/24`, `.2`–`.254`.** Matches the /24 already hardcoded as `-local-addr`'s old default (`10.77.0.1/24`) — not a new convention. `sidecar/src/ens/devices.ts`'s `listDeviceLabels()` scans the tailnet subregistry's `LabelRegistered` events (the exact same technique `sidecar/src/ens/relays.ts` already uses for relay discovery; `PermissionedRegistry` has no enumeration view function), bounded by a new `BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK` env var — found via a real `eth_getCode` binary search against the deployed registry address, the same discipline `BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK` was already held to, not guessed. `enroll.ts` resolves every other label's `mesh-ip`, and `admincli/src/mesh-ip.ts`'s pure `allocateMeshIP()` picks the lowest address not already in use. This scan-then-write is not atomic — two concurrent enrollments could race for the same address — acceptable for an operator-driven, one-at-a-time enrollment flow (the same trust/operational model `admincli`'s other write scripts already assume), and closeable later with an on-chain lock if this project ever needs concurrent enrollment.
+
+**Backward compatible, not a breaking change.** `-peer label=allowed-ip/prefix` and an explicit `-local-addr <cidr>` both still work exactly as before and always win outright over chain state (same precedent as `-rendezvous` overriding relay discovery) — nothing in `brambled/README.md`'s existing runbooks, or a device enrolled before this record existed, breaks. The new behavior is additive: a bare `-peer <label>` (no `=`), and omitting `-local-addr` entirely, resolve from the label's own `mesh-ip` record instead. A device enrolled before this ADR has no `mesh-ip` record; back-fill one with `scripts/provision-dev-tailnet/set-mesh-ip.ts <label> <cidr>` (same shape as the existing `set-pubkey.ts`) before using the bare form for it.
+
+**Startup collision check.** `resolvePeerMeshIPs` hard-errors if any two resolved addresses (including this node's own) collide, rather than letting WireGuard's route table silently pick a winner — defense in depth on top of allocation never handing out a taken address in the first place.
+
+## Verification
+
+Live against the real Sepolia dev tailnet (`bramble-dev-c91e55e9.eth`), Sept 12 2026:
+
+- `enroll.ts meship-test-1 ...` allocated and wrote `10.77.0.2/24` (real tx); a second `enroll.ts meship-test-2 ...` immediately after correctly allocated `10.77.0.3/24`, skipping the address just taken (real tx) — proving the scan actually sees the just-written record, not a cached view.
+- The sidecar's `/device/meship-test-1` endpoint round-tripped `"meshIP": "10.77.0.2/24"` through a real running sidecar process, not a mock.
+- `brambled serve -label meship-test-1 -peer meship-test-2 -netstack ...`, with **no `-local-addr` and no `=allowed-ip` on `-peer`**, came up with `gateway: listening on 10.77.0.2:...` (its own address, resolved) and admitted `meship-test-2`; its own status API reported `"allowedIPs": ["10.77.0.3/32"]` for that peer — the on-chain `/24` correctly narrowed to a host route, not the wider mask.
+- `go test ./brambled/...` — new unit tests for `resolvePeerMeshIPs` (bare-label resolution, explicit-value precedence in both directions, missing-record error, collision rejection) and `peerFlag.Set`'s bare-label form, plus `admincli`'s `bun test` for `allocateMeshIP`'s pure allocation logic (empty tailnet, gap-filling, foreign/unparseable values ignored, exhaustion).
+
+## Explicitly out of scope
+
+- **Concurrent-safe allocation** (a lock or reservation step) — not needed for one-operator-at-a-time enrollment.
+- **Deallocation/address reuse on revoke** — a revoked device's address just stays reserved forever in the scan; fine at hackathon-tailnet scale (253 usable hosts), a real gap at any larger scale.
+- **IPv6 / larger address space** — the existing `/24` convention is carried forward unchanged, not revisited.

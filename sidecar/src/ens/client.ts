@@ -52,6 +52,15 @@ export interface DeviceRecord {
   // an enrolled device; resolveDevice() is still called against arbitrary
   // labels, so this stays nullable rather than throwing).
   resolverAddress: `0x${string}` | null
+  // meshIP mirrors the `mesh-ip` text record — this device's WireGuard
+  // tunnel address, as a CIDR string (e.g. "10.77.0.5/24"), matching the
+  // exact format brambled's own -peer/-local-addr flags already parse
+  // (docs/adr/0009). Written once, by the enrolling operator, at enroll
+  // time — never self-service like pubkey/acl, since a device that could
+  // move its own address could steal another device's, the same
+  // label-hijack failure mode docs/adr/0005's requester-binding fix closed
+  // for ACL digests. null for a device enrolled before this record existed.
+  meshIP: string | null
 }
 
 export async function resolveDevice(label: string): Promise<DeviceRecord> {
@@ -64,6 +73,7 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
   const revokedText = await publicClient.getEnsText({ name: fullname, key: 'revoked' })
   const aclText = await publicClient.getEnsText({ name: fullname, key: 'acl' })
   const aclGrantersText = await publicClient.getEnsText({ name: fullname, key: 'acl-granters' })
+  const meshIP = await publicClient.getEnsText({ name: fullname, key: 'mesh-ip' })
   // getEnsResolver's own type says non-nullable, but an unset name returns
   // the zero address rather than throwing or returning null (same "falsy
   // check catches it" convention already used at every other
@@ -105,5 +115,6 @@ export async function resolveDevice(label: string): Promise<DeviceRecord> {
       .map((s) => s.trim())
       .filter((s) => s.length > 0),
     resolverAddress,
+    meshIP,
   }
 }

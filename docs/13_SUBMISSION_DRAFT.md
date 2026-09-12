@@ -49,7 +49,7 @@ Bramble runs an x402-gated relay service on Hedera testnet through the Blocky402
 
 ## Known limitations
 
-Bramble does not yet implement STUN, automatic NAT-failure detection, automatic mesh addressing, or production relay authentication. Relay sessions are short-lived and do not handle NAT remapping. Node and Hedera payer keys are currently software keys. Revocation timing depends on the ENS polling interval and resolver availability. The demo uses explicit peer labels and mesh IP assignments.
+Bramble does not yet implement STUN, automatic NAT-failure detection, or production relay authentication. Relay sessions are short-lived and do not handle NAT remapping. Node and Hedera payer keys are currently software keys. Revocation timing depends on the ENS polling interval and resolver availability. Mesh addressing is auto-assigned at enroll time (`docs/adr/0009-mesh-ip-allocation.md`) — the demo still passes explicit peer *labels* (which peers to track is not yet auto-discovered), but no longer needs a manually-picked IP per peer.
 
 ## Final checklist
 

@@ -7,8 +7,15 @@
 // (root-scoped — see docs/adr/0004 and sidecar/src/ens/config.ts's
 // ROLE_REGISTRAR comment); the resolver deploy grants ALL_ROLES on the new
 // resolver to the deployer (this same caller), so no separate rotate/revoke
-// grant is needed just to write the initial pubkey — an operator running
-// this command already deployed the resolver they're writing to.
+// grant is needed just to write the initial pubkey or mesh-ip — an operator
+// running this command already deployed the resolver they're writing to.
+//
+// Also allocates and writes this device's mesh-ip (docs/adr/0009) — the
+// operator, not the device, since a self-writable address would let a
+// device steal another device's route (the same label-hijack failure mode
+// docs/adr/0005's requester-binding fix closed for ACL digests). This
+// replaces having to pass -peer label=allowed-ip/prefix by hand for every
+// device brambled tracks.
 //
 // Usage: bun run enroll.ts <device-label> <pubkey> [expiry-years=10]
 import {
@@ -35,6 +42,8 @@ import {
 import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
 import { registryWriteAbi, resolverWriteAbi } from './roles'
 import { connectLedgerAccount } from './ledger-eth-sign'
+import { allocateMeshIP } from './mesh-ip'
+import { listDeviceLabels } from '../../sidecar/src/ens/devices'
 
 const verifiableFactoryAbi = parseAbi([
   'function deployProxy(address implementation, uint256 salt, bytes data) returns (address proxy)',
@@ -71,7 +80,7 @@ async function main() {
   }
 
   try {
-    console.log(`[1/3] Deploying a dedicated resolver for ${deviceLabel}...`)
+    console.log(`[1/4] Deploying a dedicated resolver for ${deviceLabel}...`)
     const version = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000))
     const salt = BigInt(
       keccak256(
@@ -100,7 +109,7 @@ async function main() {
     const resolverAddress = deployLog.args.proxyAddress
     console.log(`   resolver: ${resolverAddress}`)
 
-    console.log(`\n[2/3] Registering ${deviceLabel}.${tailnetName()} (requires ROLE_REGISTRAR)...`)
+    console.log(`\n[2/4] Registering ${deviceLabel}.${tailnetName()} (requires ROLE_REGISTRAR)...`)
     const farExpiry = BigInt(Math.floor(Date.now() / 1000) + expiryYears * 365 * 24 * 60 * 60)
     const zeroAddress = '0x0000000000000000000000000000000000000000' as const
     await writeAndWait('register', {
@@ -110,7 +119,7 @@ async function main() {
       args: [deviceLabel, account.address, zeroAddress, resolverAddress, REGISTRATION_ROLE_BITMAP, farExpiry],
     })
 
-    console.log('\n[3/3] Writing initial pubkey...')
+    console.log('\n[3/4] Writing initial pubkey...')
     const fullname = normalize(`${deviceLabel}.${tailnetName()}`)
     const dnsName = toHex(packetToBytes(fullname))
     await writeAndWait('setText(pubkey)', {
@@ -123,7 +132,25 @@ async function main() {
     const readBack = await publicClient.getEnsText({ name: fullname, key: 'pubkey' })
     if (readBack !== pubkey) throw new Error(`pubkey did not round-trip: got ${JSON.stringify(readBack)}`)
 
-    console.log(`\ndone. ${fullname} enrolled, resolver ${resolverAddress}, pubkey ${readBack}.`)
+    console.log('\n[4/4] Allocating mesh-ip...')
+    const otherLabels = (await listDeviceLabels()).filter((l) => l !== deviceLabel)
+    const usedMeshIPs = await Promise.all(
+      otherLabels.map((l) => publicClient.getEnsText({ name: normalize(`${l}.${tailnetName()}`), key: 'mesh-ip' }))
+    )
+    const meshIP = allocateMeshIP(usedMeshIPs)
+    await writeAndWait('setText(mesh-ip)', {
+      address: resolverAddress,
+      abi: resolverWriteAbi,
+      functionName: 'setText',
+      args: [dnsName, 'mesh-ip', meshIP],
+    })
+
+    const meshIPReadBack = await publicClient.getEnsText({ name: fullname, key: 'mesh-ip' })
+    if (meshIPReadBack !== meshIP) throw new Error(`mesh-ip did not round-trip: got ${JSON.stringify(meshIPReadBack)}`)
+
+    console.log(
+      `\ndone. ${fullname} enrolled, resolver ${resolverAddress}, pubkey ${readBack}, mesh-ip ${meshIPReadBack}.`
+    )
   } finally {
     if (ledger) await ledger.close()
   }

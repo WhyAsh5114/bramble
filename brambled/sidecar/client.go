@@ -33,6 +33,13 @@ type DeviceRecord struct {
 	// verification loop iterates this list, not ACL above, to decide whose
 	// digests to even attempt matching.
 	ACLGranters []string `json:"aclGranters"`
+	// MeshIP mirrors the `mesh-ip` text record — this device's WireGuard
+	// tunnel address as a CIDR string (e.g. "10.77.0.5/24"), in exactly the
+	// format peerFlag.Set already parses for -peer's allowed-ip argument
+	// (docs/adr/0009). Written once by the enrolling operator, never by the
+	// device itself — see enroll.ts's mesh-ip allocation step. nil for a
+	// device enrolled before this record existed.
+	MeshIP *string `json:"meshIP"`
 }
 
 // RendezvousTokenResponse mirrors sidecar/src/routes/payments.ts's

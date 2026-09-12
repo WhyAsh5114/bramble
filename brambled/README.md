@@ -8,16 +8,24 @@ WireGuard device's peer table from it.
 
 - `brambled resolve <device-label>` — Phase 1 Section A. Prints a device
   subname's resolved ENS state (pubkey, expiry, status, tokenId).
-- `brambled serve -label <own-label> -peer <label>=<allowed-ip>/<prefix> [-peer ...]` —
+- `brambled serve -label <own-label> -peer <label> [-peer ...]` —
   the admission verifier (Gate 1.1) plus, as of Section C, real connectivity
   and gateway/ACL enforcement. Starts a WireGuard device and keeps its peer
   table synced to the tracked labels' ENS state, polling every `-ttl`
   (default 30s). Flags:
   - `-label <own-label>` — **required.** This node's own ENS label, used to
     resolve its own `acl-granters` record for gateway enforcement
-    (`docs/adr/0005-acl-record-schema.md`).
-  - `-local-addr` — this node's address and mesh subnet, CIDR (default
-    `10.77.0.1/24`).
+    (`docs/adr/0005-acl-record-schema.md`) and, if `-local-addr` is omitted,
+    its own mesh address.
+  - `-peer <label>` (repeatable) — a peer to track. Bare `<label>` resolves
+    that device's mesh address from its own on-chain `mesh-ip` record
+    (`docs/adr/0009-mesh-ip-allocation.md`), written once at enroll time by
+    `admincli/src/enroll.ts`. `<label>=<allowed-ip>/<prefix>` still works
+    and always wins outright over the chain record, e.g. for a device
+    enrolled before `mesh-ip` existed, or to override it deliberately.
+  - `-local-addr` — this node's address and mesh subnet, CIDR. Omit to
+    resolve it from `-label`'s own on-chain `mesh-ip` record instead
+    (`docs/adr/0009`); an explicit value always wins.
   - `-listen-port` — UDP port the WireGuard transport binds to (default
     `51820`).
   - `-service <name>=<local-port>` (repeatable) — a local, non-ENS service
@@ -106,7 +114,12 @@ tailnet it belongs to; this isn't discovered automatically).
 run: candidate exchange through a dumb relay, real `ping` + one TCP
 connection across the tunnel, from two genuinely different networks. This
 can't be executed from this environment (no VPS, no second physical network
-available here) — the steps below are for whoever runs it.
+available here) — the steps below are for whoever runs it. (Historical
+record of the run as actually executed, with explicit `-peer label=ip/prefix`
+and `-local-addr` — both still work exactly as shown. A device enrolled via
+the current `enroll.ts` gets a `mesh-ip` record automatically and can use
+the shorter bare `-peer <label>` / no `-local-addr` form instead, see
+`docs/adr/0009-mesh-ip-allocation.md`.)
 
 **Topology:** VPS has a public IP and needs no NAT traversal on its side —
 the easier, currently-supported case (`10_DAY0_GATES.md:30`). The relay runs
@@ -466,9 +479,17 @@ network problem, not a config mismatch.
   anywhere verified (our one fixture reads back `2`) — see
   `admission/loop.go`'s package comment. Revocation may need `status` once
   its meaning is confirmed; Phase 2 owns EAC/registry-state semantics.
-- **`serve`'s peer list is static CLI config**, not resolved from ENS.
-  Discovering "which peers belong to my tailnet" automatically is a record
-  schema question Phase 2 owns (`docs/05_BUILD_PLAN.md` Phase 2 discretion).
+- **`serve`'s peer _list_ is still static CLI config** — which labels to
+  track is passed via `-peer`, not discovered from ENS. Narrower than it
+  used to be: each listed peer's _address_ no longer has to be, since
+  `-peer <label>` now resolves that device's own `mesh-ip` record instead
+  of requiring `=allowed-ip/prefix` (`docs/adr/0009-mesh-ip-allocation.md`,
+  Sept 12 2026). Discovering "which labels belong to my tailnet"
+  automatically — the remaining half — would reuse the same
+  `LabelRegistered`-scan technique `sidecar/src/ens/devices.ts` already
+  uses for allocation, but deciding _which_ of a tailnet's devices a given
+  node should track (all of them? some role-based subset?) is a real design
+  question, not just a scan — left to Phase 2.
 - **No key persistence.** `serve` generates an ephemeral key if
   `-private-key`/`BRAMBLE_PRIVATE_KEY` isn't set — a real node's identity
   eventually comes from enrollment (Ledger-backed, `docs/adr/0001`), not from

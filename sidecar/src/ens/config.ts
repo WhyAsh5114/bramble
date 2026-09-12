@@ -72,6 +72,18 @@ export function tailnetRegistry(): `0x${string}` {
   return getAddress(requiredEnv('BRAMBLE_TAILNET_REGISTRY'))
 }
 
+// Bounds the tailnet device registry's own LabelRegistered log scan
+// (sidecar/src/ens/devices.ts's listDeviceLabels, used by admincli's
+// enroll.ts to allocate a mesh-ip — docs/adr/0009) to blocks that could
+// possibly contain a registration, the same role
+// relayRegistryDeployBlock() plays for resolveRelays() below. Set once, at
+// tailnet-provisioning time (the subregistry deploy transaction's own
+// block, verified directly against chain state — see .env's comment on
+// this var), never changes afterward.
+export function tailnetRegistryDeployBlock(): bigint {
+  return BigInt(requiredEnv('BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK'))
+}
+
 // The relay registry (docs/adr/0003's Consequence section, resolved): a
 // UserRegistry deployed structurally separate from the tailnet's own device
 // registry (Gate 1.4 requires this — relay records must live somewhere

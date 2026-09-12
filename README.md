@@ -24,7 +24,7 @@ flowchart TD
     relay --> payment["x402 + Blocky402 + Hedera"]
 ```
 
-The relay can affect availability but does not decide admission: a peer only configures a WireGuard public key after resolving an authorized ENS record. Device records contain public keys and authorization state, not IP addresses. Relay endpoints live in a separate relay registry.
+The relay can affect availability but does not decide admission: a peer only configures a WireGuard public key after resolving an authorized ENS record. Device records contain public keys, authorization state, and each device's own mesh address (`mesh-ip`, written once at enroll time — see [ADR 0009](docs/adr/0009-mesh-ip-allocation.md)). Relay endpoints live in a separate relay registry.
 
 The runtime is split into five small programs:
 
@@ -98,7 +98,7 @@ The paid relay proof is run separately with `brambled demo-data-relay`; it print
 
 The [build plan](docs/05_BUILD_PLAN.md) links the adversarial tests, live Sepolia transactions, two-machine runs, physical Ledger findings, and Hedera settlement IDs. The measured already-connected revocation time was 3.7 seconds with a five-second poll interval and a responsive resolver.
 
-This is a hackathon prototype. STUN and automatic hole-punch failure detection are not implemented; relay use is selected explicitly for the demo topology. Mesh IPs and peer labels remain operator-supplied. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
+This is a hackathon prototype. STUN and automatic hole-punch failure detection are not implemented; relay use is selected explicitly for the demo topology. Mesh IPs are auto-assigned at enroll time (`docs/adr/0009-mesh-ip-allocation.md`); peer _labels_ remain operator-supplied — which devices to track isn't yet auto-discovered. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
 
 ## Open source and AI usage
 

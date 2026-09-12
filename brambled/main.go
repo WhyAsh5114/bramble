@@ -150,7 +150,12 @@ func runResolve(label string) error {
 	return nil
 }
 
-// peerFlag accumulates repeated -peer label=allowed-ip/prefix flags.
+// peerFlag accumulates repeated -peer flags: either "label=allowed-ip/prefix"
+// (explicit, as before) or a bare "label" (docs/adr/0009) — the latter
+// leaves AllowedIP zero, meaning "resolve this peer's mesh-ip from ENS
+// instead," filled in by resolvePeerMeshIPs in runServe before the peer
+// list is used for anything. Explicit label=ip/prefix always wins outright,
+// same precedent as -rendezvous overriding relay discovery.
 type peerFlag []admission.Peer
 
 func (p *peerFlag) String() string { return fmt.Sprintf("%v", []admission.Peer(*p)) }
@@ -158,7 +163,8 @@ func (p *peerFlag) String() string { return fmt.Sprintf("%v", []admission.Peer(*
 func (p *peerFlag) Set(value string) error {
 	label, cidr, ok := strings.Cut(value, "=")
 	if !ok {
-		return fmt.Errorf("expected label=allowed-ip/prefix, got %q", value)
+		*p = append(*p, admission.Peer{Label: value})
+		return nil
 	}
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
@@ -166,6 +172,71 @@ func (p *peerFlag) Set(value string) error {
 	}
 	*p = append(*p, admission.Peer{Label: label, AllowedIP: prefix})
 	return nil
+}
+
+// resolvePeerMeshIPs fills in any peer entry that left AllowedIP zero (the
+// bare-label -peer form, docs/adr/0009) from that device's own mesh-ip ENS
+// record, and — if localAddr is empty — resolves this node's own local
+// prefix the same way from ownLabel's record. A resolved peer route always
+// gets a synthesized /32 regardless of what mask is published on chain, so
+// one mis-published mesh-ip can never swallow routing for the whole mesh;
+// the local prefix keeps its full on-chain mask, since that's this node's
+// own subnet width, not a route to a single peer. Returns an error if two
+// resolved addresses collide — defense in depth on top of enroll.ts's own
+// allocation never handing out a taken address.
+func resolvePeerMeshIPs(resolver admission.Resolver, ownLabel, localAddr string, peers []admission.Peer) (netip.Prefix, []admission.Peer, error) {
+	var localPrefix netip.Prefix
+	if localAddr != "" {
+		p, err := netip.ParsePrefix(localAddr)
+		if err != nil {
+			return netip.Prefix{}, nil, fmt.Errorf("parsing -local-addr: %w", err)
+		}
+		localPrefix = p
+	} else {
+		p, err := resolveMeshIPPrefix(resolver, ownLabel)
+		if err != nil {
+			return netip.Prefix{}, nil, fmt.Errorf("no -local-addr given: %w", err)
+		}
+		localPrefix = p
+	}
+
+	used := map[netip.Addr]string{localPrefix.Addr(): ownLabel + " (self)"}
+	resolved := make([]admission.Peer, len(peers))
+	for i, p := range peers {
+		if !p.AllowedIP.IsValid() {
+			parsed, err := resolveMeshIPPrefix(resolver, p.Label)
+			if err != nil {
+				return netip.Prefix{}, nil, fmt.Errorf("-peer %q gave no allowed-ip: %w", p.Label, err)
+			}
+			p.AllowedIP = netip.PrefixFrom(parsed.Addr(), 32)
+		}
+		addr := p.AllowedIP.Addr()
+		if other, ok := used[addr]; ok {
+			return netip.Prefix{}, nil, fmt.Errorf("mesh IP collision: %s and %s both resolve to %s", other, p.Label, addr)
+		}
+		used[addr] = p.Label
+		resolved[i] = p
+	}
+	return localPrefix, resolved, nil
+}
+
+// resolveMeshIPPrefix reads label's mesh-ip text record and parses it in
+// exactly the format enroll.ts writes and -peer's explicit form already
+// accepts ("a.b.c.d/bits") — one parser, one format, on both sides of the
+// chain (docs/adr/0009).
+func resolveMeshIPPrefix(resolver admission.Resolver, label string) (netip.Prefix, error) {
+	record, err := resolver.ResolveDevice(label)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("resolving %q: %w", label, err)
+	}
+	if record.MeshIP == nil || *record.MeshIP == "" {
+		return netip.Prefix{}, fmt.Errorf("%q has no mesh-ip record — set one with enroll.ts or scripts/provision-dev-tailnet/set-mesh-ip.ts, or pass its allowed-ip explicitly", label)
+	}
+	prefix, err := netip.ParsePrefix(*record.MeshIP)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("parsing %q's on-chain mesh-ip %q: %w", label, *record.MeshIP, err)
+	}
+	return prefix, nil
 }
 
 // serviceFlag accumulates repeated -service name=port flags — this node's
@@ -758,12 +829,12 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
-	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix (repeatable)")
+	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix, or a bare label to resolve that peer's mesh-ip from ENS instead (repeatable, docs/adr/0009) — requires the label to have a mesh-ip record, written by enroll.ts")
 	services := serviceFlag{}
 	fs.Var(services, "service", "local service this node offers as a gateway: name=local-port (repeatable); omit to offer none (docs/adr/0006-gateway-connect-protocol.md)")
 	var forwards forwardFlag
 	fs.Var(&forwards, "forward", "local port-forward to a peer's gateway service: local-port=gateway-label:service (repeatable) — lets an unmodified local client (psql, curl, ...) reach an ACL'd mesh service with no CONNECT knowledge of its own (docs/adr/0006-gateway-connect-protocol.md)")
-	localPrefix := fs.String("local-addr", "10.77.0.1/24", "this node's address and mesh subnet (CIDR)")
+	localPrefix := fs.String("local-addr", "", "this node's address and mesh subnet (CIDR); omit to resolve it from -label's own on-chain mesh-ip record instead (docs/adr/0009) — explicit value always wins")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
 	maxStale := fs.Duration("max-stale", 2*time.Minute, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; defaults to a bounded 2 minutes rather than unbounded fail-open — pass 0 explicitly to disable this and fail open forever (see admission package doc)")
@@ -800,28 +871,23 @@ func runServe(args []string) error {
 	if *ownLabel == "" {
 		return fmt.Errorf("-label (this node's own ENS label) is required")
 	}
-	peerAddrByLabel := make(map[string]netip.Addr, len(peers))
+	trackedPeerLabels := make(map[string]bool, len(peers))
 	for _, p := range peers {
-		peerAddrByLabel[p.Label] = p.AllowedIP.Addr()
+		trackedPeerLabels[p.Label] = true
 	}
 	for _, fwd := range forwards {
-		if _, ok := peerAddrByLabel[fwd.GatewayLabel]; !ok {
+		if !trackedPeerLabels[fwd.GatewayLabel] {
 			return fmt.Errorf("-forward %d=%s:%s: %q is not a tracked -peer — a forward target must be a peer this node admits", fwd.LocalPort, fwd.GatewayLabel, fwd.Service, fwd.GatewayLabel)
 		}
 	}
 	for label := range relayPeers {
-		if _, ok := peerAddrByLabel[label]; !ok {
+		if !trackedPeerLabels[label] {
 			return fmt.Errorf("-relay-peer %q is not a tracked -peer", label)
 		}
 	}
 	// The len(dataRelays)==0 case is checked further below, after relay
 	// discovery has had a chance to populate the pool — -data-relay isn't
 	// the only source of it anymore (docs/adr/0003's Consequence section).
-
-	prefix, err := netip.ParsePrefix(*localPrefix)
-	if err != nil {
-		return fmt.Errorf("parsing -local-addr: %w", err)
-	}
 
 	if *privateKeyHex == "" {
 		generated, _, genErr := wgnode.GenerateKeyPair()
@@ -847,6 +913,21 @@ func runServe(args []string) error {
 		return err
 	}
 	defer m.Stop()
+
+	// Fills in any -peer that gave a bare label (docs/adr/0009) from that
+	// device's own on-chain mesh-ip, and resolves this node's own local
+	// prefix the same way if -local-addr was left unset. Must run before
+	// peerAddrByLabel below, and before anything that dials a peer address.
+	prefix, resolvedPeers, err := resolvePeerMeshIPs(m, *ownLabel, *localPrefix, peers)
+	if err != nil {
+		return err
+	}
+	peers = resolvedPeers
+
+	peerAddrByLabel := make(map[string]netip.Addr, len(peers))
+	for _, p := range peers {
+		peerAddrByLabel[p.Label] = p.AllowedIP.Addr()
+	}
 
 	// Real ENS-based relay discovery (docs/adr/0003's Consequence section,
 	// resolved) — -rendezvous/-data-relay stay as explicit overrides
