@@ -11,6 +11,7 @@
 // addresses are already taken before writing a new one.
 import { parseAbiItem } from 'viem'
 import { publicClient } from './client'
+import { scanLogsChunked } from './scan'
 import { tailnetRegistry, tailnetRegistryDeployBlock } from './config'
 
 const labelRegisteredEvent = parseAbiItem(
@@ -20,13 +21,15 @@ const labelRegisteredEvent = parseAbiItem(
 // listDeviceLabels returns every label ever registered on the tailnet's
 // device subregistry, deduplicated (a label can be re-registered after its
 // prior registration expires — see resolveRelays()'s identical dedup for
-// why a duplicate log entry doesn't mean a duplicate device).
+// why a duplicate log entry doesn't mean a duplicate device). Chunked via
+// scanLogsChunked, not a single fromBlock-to-latest call — found live,
+// Sept 12 2026, the moment the registry's history grew past 10,000 blocks
+// and Infura started rejecting the single-call form outright.
 export async function listDeviceLabels(): Promise<string[]> {
-  const logs = await publicClient.getLogs({
+  const logs = await scanLogsChunked(publicClient, {
     address: tailnetRegistry(),
     event: labelRegisteredEvent,
     fromBlock: tailnetRegistryDeployBlock(),
-    toBlock: 'latest',
   })
   return [...new Set(logs.map((log) => log.args.label).filter((label): label is string => !!label))]
 }

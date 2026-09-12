@@ -14,6 +14,7 @@
 import { parseAbiItem } from 'viem'
 import { normalize } from 'viem/ens'
 import { publicClient } from './client'
+import { scanLogsChunked } from './scan'
 import { relayRegistry, relayRegistryDeployBlock, tailnetName } from './config'
 
 const labelRegisteredEvent = parseAbiItem(
@@ -52,11 +53,15 @@ export async function resolveRelays(): Promise<Relays> {
   const registry = relayRegistry()
   if (!registry) return { rendezvous: [], dataRelays: [] }
 
-  const logs = await publicClient.getLogs({
+  // Chunked via scanLogsChunked (see its doc comment), not a single
+  // fromBlock-to-latest call — Infura's free tier started rejecting that
+  // form outright once this registry's history grew past 10,000 blocks
+  // (found live, Sept 12 2026, the same day devices.ts hit the identical
+  // bug).
+  const logs = await scanLogsChunked(publicClient, {
     address: registry,
     event: labelRegisteredEvent,
     fromBlock: relayRegistryDeployBlock(),
-    toBlock: 'latest',
   })
 
   // A label can be re-registered (its prior registration expired, then
