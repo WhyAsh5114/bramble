@@ -41,7 +41,9 @@ if (existsSync(envPath)) {
 
 const labels = process.argv.slice(2)
 if (labels.length < 2) {
-  throw new Error('usage: bun run check-mesh-ip-collision.ts <label1> <label2> [label3 ...] — name every device actually in play for this take')
+  throw new Error(
+    'usage: bun run check-mesh-ip-collision.ts <label1> <label2> [label3 ...] — name every device actually in play for this take'
+  )
 }
 
 const hackathonSepolia = {
