@@ -79,4 +79,6 @@ for (const { label, meshIP } of meshIPs) {
 
 if (!collision) {
   console.log('\nno collisions — safe to proceed')
+} else {
+  process.exitCode = 1
 }

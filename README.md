@@ -7,7 +7,7 @@ The hackathon demo is one concrete access lifecycle: a thin health-check worker 
 ## Why the integrations matter
 
 - **ENSv2** is the authorization source. Permissioned registries, per-name resolvers, and Enhanced Access Control separate enrollment, rotation, revocation, ACL, and relay-registration rights.
-- **Ledger** gates two different things physically, on real hardware: enrolling a new device is signed directly by the device itself (a from-scratch `@ledgerhq/hw-app-eth` signer, since `wallet-cli send` doesn't support Sepolia), and the administrator's ACL-granting key lives encrypted under a Key Ring, decrypted headlessly per grant, never as plaintext. Full status, hardware findings, and Ledger DX feedback are documented in [ADR 0001](docs/adr/0001-ledger-ring-vs-send-split.md) and [Ledger DX feedback](docs/12_LEDGER_DX_FEEDBACK.md).
+- **Ledger** serves two distinct roles: an operator's device signs the four new-device enrollment transactions through `@ledgerhq/hw-app-eth` (since `wallet-cli send` doesn't support Sepolia), while a Key Ring encrypts the administrator's ACL-granting key at rest. The latter is decrypted briefly in the admin process per grant, without a per-grant device confirmation; the ACL write is software-signed. Full status, hardware findings, and Ledger DX feedback are documented in [ADR 0001](docs/adr/0001-ledger-ring-vs-send-split.md) and [Ledger DX feedback](docs/12_LEDGER_DX_FEEDBACK.md).
 - **Hedera** settles x402 payments through Blocky402 for relay access. Rendezvous uses a fixed session fee; data relays sell explicit byte allotments at a published price.
 
 ## Architecture
@@ -82,7 +82,7 @@ Copy secrets into an ignored `.env` file or the process environment. Never commi
 4. Trust the granter on the gateway with `pnpm --dir admincli set-acl-granters -- <gateway-label> <granter-label>`, then grant the service with `pnpm --dir admincli set-acl -- <worker-label> <gateway-label> <granter-label> web`. The identical agent command prints a private-service health result without restarting either node.
 5. Revoke the worker with `pnpm --dir admincli revoke -- <worker-label> true`. The gateway removes it on its next ENS poll and the task fails at the tunnel boundary.
 
-For the recorded demo, the ACL write should use the Ledger-backed path once Gate 3 is complete. Until then, describe the admin commands above as software-signed ENS writes.
+For the recorded demo, distinguish the two Ledger paths: enrollment transactions are hardware-signed, while `set-acl` decrypts the granter secret through Key Ring on the provisioned admin machine and submits a software-signed ENS write. Do not describe the ACL write as requiring a per-grant device confirmation.
 
 The paid relay proof is run separately with `brambled demo-data-relay`; it prints the Hedera settlement transaction IDs for differently sized sessions and for pre/post-failure relay selection. See [relay-sidecar's runbook](relay-sidecar/README.md).
 
@@ -98,7 +98,7 @@ The paid relay proof is run separately with `brambled demo-data-relay`; it print
 
 The [build plan](docs/05_BUILD_PLAN.md) links the adversarial tests, live Sepolia transactions, two-machine runs, physical Ledger findings, and Hedera settlement IDs. The measured already-connected revocation time was 3.7 seconds with a five-second poll interval and a responsive resolver.
 
-This is a hackathon prototype. STUN and automatic hole-punch failure detection are not implemented; relay use is selected explicitly for the demo topology. Mesh IPs are auto-assigned at enroll time and peer discovery is full-mesh-by-default when no `-peer` flags are given (`docs/adr/0009-mesh-ip-allocation.md`, `docs/adr/0010-full-mesh-peer-discovery.md`) — network-layer admission only, ACL still gates service access independently. The default public Sepolia RPC endpoint is a load-balanced pool with observed multi-thousand-block sync lag between backends; set `SEPOLIA_RPC_URL` to a dedicated endpoint for a live demo. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
+This is a hackathon prototype. STUN and automatic hole-punch failure detection are not implemented; relay use is selected explicitly for the demo topology. Mesh IPs are auto-assigned at enroll time and peer discovery is full-mesh-by-default when no `-peer` flags are given (`docs/adr/0009-mesh-ip-allocation.md`, `docs/adr/0010-full-mesh-peer-discovery.md`) — network-layer admission only, ACL still gates service access independently. The default public Sepolia RPC endpoint is a load-balanced pool with observed multi-thousand-block sync lag between backends; **export** `SEPOLIA_RPC_URL` to a dedicated endpoint before launching admin commands and nodes for a live demo. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
 
 ## Open source and AI usage
 
