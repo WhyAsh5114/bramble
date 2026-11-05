@@ -9,6 +9,10 @@ docs/
 scripts/gate0.3-eac-check/
 sidecar/test/fixtures/
 
+# Preserve vendored agent skills without reformatting their contents.
+.agents/skills/
+.claude/skills/
+
 # The workspace package formats itself via Turbo using dashboard/.gitignore,
 # which excludes its generated .next tree.
 dashboard/
