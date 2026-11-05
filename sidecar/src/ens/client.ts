@@ -1,6 +1,7 @@
 import { createPublicClient, http, keccak256, toHex } from 'viem'
 import { sepolia } from 'viem/chains'
 import { normalize } from 'viem/ens'
+import { torFetch } from '../tor'
 import { RPC_URL, UNIVERSAL_RESOLVER, registryAbi, tailnetName, tailnetRegistry } from './config'
 
 // viem ships a built-in Universal Resolver address for Sepolia that points at
@@ -15,7 +16,18 @@ const hackathonSepolia = {
   },
 }
 
-export const publicClient = createPublicClient({ chain: hackathonSepolia, transport: http(RPC_URL) })
+// Every ENS read goes through Tor under the 'ens' isolation key (handoff 5.1,
+// docs/adr/0013). torFetch rejects until Tor is ready instead of falling back
+// to a direct connection, and routes/tor.ts keeps data routes closed until
+// then. ccipRead is off because viem's default CCIP-Read request calls the
+// global fetch, which would send the node's IP to an off-chain gateway;
+// Bramble's names resolve on-chain through Permissioned Resolvers, so no
+// lookup is lost.
+export const publicClient = createPublicClient({
+  chain: hackathonSepolia,
+  transport: http(RPC_URL, { fetchFn: torFetch('ens'), timeout: 60_000 }),
+  ccipRead: false,
+})
 
 export interface DeviceRecord {
   fullname: string

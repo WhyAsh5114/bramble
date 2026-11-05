@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { stopTor } from '../src/tor'
+import { startDirectTor } from './helpers/fake-tor'
 import fixture from './fixtures/dev-tailnet.json'
 
 process.env.BRAMBLE_TAILNET_NAME = fixture.tailnetName
 process.env.BRAMBLE_TAILNET_REGISTRY = fixture.tailnetRegistry
 
 const { resolveDevice } = await import('../src/ens/client')
+
+// ENS reads go through torFetch, which needs a ready Tor client. These tests
+// check the live chain data, so Tor is stood in for by a pass-through.
+beforeAll(startDirectTor)
+afterAll(stopTor)
 
 describe('resolveDevice', () => {
   it('reads back the provisioned device subname from Sepolia, read-only', async () => {

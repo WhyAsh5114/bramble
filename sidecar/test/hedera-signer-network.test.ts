@@ -16,8 +16,10 @@ import { AccountBalanceQuery, AccountId, Client, PrivateKey, Transaction, Transf
 import { createClientHederaSigner } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
 import { payForDataRelaySession } from '../src/payments/datarelay'
+import { stopTor } from '../src/tor'
 import { payForRendezvousToken } from '../src/payments/client'
 import { HEDERA_USDC_ASSET_ID } from '../src/payments/config'
+import { startFakeTor, type TorCall } from './helpers/fake-tor'
 import { activeNetworkHandles, installNetworkGuard, type NetworkGuard } from './helpers/network-guard'
 
 const PAYER_ACCOUNT = '0.0.1001'
@@ -64,6 +66,13 @@ function expectSignedTransfer(signature: string, key: PrivateKey) {
   const transfers = (tx as TransferTransaction).tokenTransfers
   expect(transfers.get(HEDERA_USDC_ASSET_ID)?.get(PAYER_ACCOUNT)?.toString()).toBe(`-${AMOUNT}`)
   expect(transfers.get(HEDERA_USDC_ASSET_ID)?.get(PAY_TO)?.toString()).toBe(AMOUNT)
+}
+
+// Every request, including the paid retry, uses the 'pay' isolation key.
+function expectPayKey(calls: TorCall[]) {
+  const keys = calls.map((c) => c.isolationKey)
+  expect(keys[0]).toMatch(/^pay:/)
+  expect(new Set(keys).size).toBe(1)
 }
 
 describe('guard self-check (a guard that cannot fail proves nothing)', () => {
@@ -126,6 +135,7 @@ describe('@x402/hedera client signer stays inside the wrapped fetch', () => {
   })
   afterEach(() => {
     guard?.restore()
+    stopTor()
     process.env = { ...savedEnv }
   })
 
@@ -140,25 +150,36 @@ describe('@x402/hedera client signer stays inside the wrapped fetch', () => {
     expect(activeNetworkHandles()).toEqual(handlesBefore)
   })
 
-  it('payForRendezvousToken reaches the network only through fetch', async () => {
-    guard = installNetworkGuard(relayStub({ token: 'tok', expiresAt: 123 }))
+  // Since W9 the payment HTTP goes through torFetch('pay'), so the stub sits
+  // behind a fake Tor transport and the global fetch must stay untouched.
+  it("payForRendezvousToken reaches the network only through torFetch('pay')", async () => {
+    const tor = await startFakeTor(relayStub({ token: 'tok', expiresAt: 123 }))
+    guard = installNetworkGuard(async () => new Response('{}'))
     const result = await payForRendezvousToken('https://relay.example')
     expect(result).toMatchObject({ token: 'tok', expiresAt: 123 })
-    expect(guard.fetchCalls.map((r) => r.url)).toEqual([
+    expect(tor.calls.map((c) => c.url)).toEqual([
       'https://relay.example/rendezvous-token',
       'https://relay.example/rendezvous-token',
     ])
-    expectSignedTransfer(guard.fetchCalls[1].headers.get('PAYMENT-SIGNATURE')!, key)
+    expectPayKey(tor.calls)
+    expectSignedTransfer(tor.calls[1].init.headers!['payment-signature'], key)
+    expect(guard.fetchCalls).toEqual([])
     expect(guard.attempts).toEqual([])
     expect(activeNetworkHandles()).toEqual(handlesBefore)
   })
 
-  it('payForDataRelaySession reaches the network only through fetch', async () => {
-    guard = installNetworkGuard(relayStub({ sessionId: 's1', port: 4000, expiresAt: 456 }))
+  it("payForDataRelaySession reaches the network only through torFetch('pay')", async () => {
+    const tor = await startFakeTor(relayStub({ sessionId: 's1', port: 4000, expiresAt: 456 }))
+    guard = installNetworkGuard(async () => new Response('{}'))
     const result = await payForDataRelaySession('https://relay.example', 1024)
     expect(result).toMatchObject({ sessionId: 's1', port: 4000, expiresAt: 456 })
-    expect(guard.fetchCalls).toHaveLength(2)
-    expectSignedTransfer(guard.fetchCalls[1].headers.get('PAYMENT-SIGNATURE')!, key)
+    expect(tor.calls.map((c) => c.url)).toEqual([
+      'https://relay.example/data-relay-session?bytes=1024',
+      'https://relay.example/data-relay-session?bytes=1024',
+    ])
+    expectPayKey(tor.calls)
+    expectSignedTransfer(tor.calls[1].init.headers!['payment-signature'], key)
+    expect(guard.fetchCalls).toEqual([])
     expect(guard.attempts).toEqual([])
     expect(activeNetworkHandles()).toEqual(handlesBefore)
   })

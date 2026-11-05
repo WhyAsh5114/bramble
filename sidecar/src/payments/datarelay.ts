@@ -8,6 +8,7 @@
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from '@x402/fetch'
 import { createClientHederaSigner, PrivateKey } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
+import { torFetch } from '../tor'
 import { HEDERA_USDC_ASSET_ID, hederaClientAccountID, hederaClientPrivateKey, hederaMaxPaymentAtomic } from './config'
 
 export type DataRelaySessionResult = {
@@ -27,7 +28,7 @@ export async function payForDataRelaySession(sidecarUrl: string, bytes: number):
     { network: 'hedera:testnet' }
   )
 
-  const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
+  const fetchWithPayment = wrapFetchWithPaymentFromConfig(torFetch('pay'), {
     schemes: [{ network: 'hedera:testnet', client: new ExactHederaScheme(signer) }],
     spendControls: {
       allowedAssets: [

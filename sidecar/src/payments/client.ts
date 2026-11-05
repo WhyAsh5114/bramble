@@ -5,6 +5,7 @@
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from '@x402/fetch'
 import { createClientHederaSigner, PrivateKey } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
+import { torFetch } from '../tor'
 import { HEDERA_USDC_ASSET_ID, hederaClientAccountID, hederaClientPrivateKey, hederaMaxPaymentAtomic } from './config'
 
 export type RendezvousTokenResult = {
@@ -36,7 +37,9 @@ export async function payForRendezvousToken(sidecarUrl: string): Promise<Rendezv
     { network: 'hedera:testnet' }
   )
 
-  const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
+  // All payment HTTP goes through Tor under the 'pay' key. The signer does
+  // nothing on the network outside this fetch (docs/W9a_NETWORK_CALL_AUDIT.md).
+  const fetchWithPayment = wrapFetchWithPaymentFromConfig(torFetch('pay'), {
     schemes: [{ network: 'hedera:testnet', client: new ExactHederaScheme(signer) }],
     spendControls: {
       allowedAssets: [
