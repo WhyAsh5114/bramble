@@ -221,6 +221,73 @@ describe('startTor and getTorStatus', () => {
     expect(fakes).toHaveLength(2)
   })
 
+  it('waits for failed-client cleanup across shutdown and restart', async () => {
+    const fake = new FakeTor()
+    let releaseClose = () => {}
+    fake.closeGate = new Promise((resolve) => (releaseClose = resolve))
+    const first = startTor({ transport: () => fake, retryDelayMs: 0 }).catch(() => {})
+    await new Promise((r) => setTimeout(r, 0))
+    fake.failReady('guard unreachable')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fake.closed).toBe(true)
+
+    let stopped = false
+    const stopping = stopTor().then(() => (stopped = true))
+    const next = new FakeTor()
+    next.becomeReady()
+    let replacementCreated = false
+    const restarted = startTor({
+      transport: () => {
+        replacementCreated = true
+        return next
+      },
+      retryDelayMs: 0,
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 0))
+      expect(stopped).toBe(false)
+      expect(replacementCreated).toBe(false)
+    } finally {
+      releaseClose()
+      await Promise.all([first, stopping, restarted])
+    }
+    expect(getTorStatus().state).toBe('ready')
+  })
+
+  it('waits for a client still being created to close before shutdown and restart finish', async () => {
+    const fake = new FakeTor()
+    let releaseFactory!: (client: TorTransport) => void
+    let releaseClose = () => {}
+    fake.closeGate = new Promise((resolve) => (releaseClose = resolve))
+    const first = startTor({
+      transport: () => new Promise<TorTransport>((resolve) => (releaseFactory = resolve)),
+      retryDelayMs: 0,
+    })
+    let stopped = false
+    const stopping = stopTor().then(() => (stopped = true))
+    const next = new FakeTor()
+    next.becomeReady()
+    let replacementCreated = false
+    const restarted = startTor({
+      transport: () => {
+        replacementCreated = true
+        return next
+      },
+      retryDelayMs: 0,
+    })
+    releaseFactory(fake)
+    try {
+      await new Promise((r) => setTimeout(r, 0))
+      expect(fake.closed).toBe(true)
+      expect(stopped).toBe(false)
+      expect(replacementCreated).toBe(false)
+    } finally {
+      releaseClose()
+      await Promise.all([first, stopping, restarted])
+    }
+    expect(getTorStatus().state).toBe('ready')
+  })
+
   it('retries bootstrap in the background after retryDelayMs, with a new client', async () => {
     const fakes: FakeTor[] = []
     const factory = () => {

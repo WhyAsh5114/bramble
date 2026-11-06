@@ -64,6 +64,9 @@ export class TorNotReadyError extends Error {
 let transport: TorTransport | null = null
 let status: TorStatus = { state: 'starting' }
 let inFlight: Promise<void> | null = null
+let pendingCreation: Promise<void> | null = null
+let pendingClose: Promise<void> | null = null
+let stopping: Promise<void> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let options: StartTorOptions = {}
 let configured = false
@@ -137,15 +140,25 @@ async function attempt(): Promise<void> {
   const now = options.now ?? Date.now
   status = { state: 'starting', ...(status.lastError !== undefined && { lastError: status.lastError }) }
   try {
-    if (transport === null) {
-      const created = await (options.transport ?? createTorJsTransport)()
-      if (gen !== generation) {
-        void closeQuietly(created)
-        return
-      }
-      transport = created
+    if (stopping !== null) {
+      await stopping
+      if (gen !== generation) return
     }
-    await withTimeout(transport.ready(), options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS)
+    if (transport === null) {
+      const creating = Promise.resolve((options.transport ?? createTorJsTransport)()).then((created) => {
+        if (gen !== generation) return closeQuietly(created)
+        transport = created
+      })
+      pendingCreation = creating
+      try {
+        await creating
+      } finally {
+        if (pendingCreation === creating) pendingCreation = null
+      }
+      if (gen !== generation) return
+    }
+    // The creation promise installs the transport before it resolves.
+    await withTimeout(transport!.ready(), options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS)
     if (gen !== generation) return
     status = { state: 'ready', readyAt: now() }
   } catch (err) {
@@ -168,7 +181,12 @@ async function attempt(): Promise<void> {
     if (!(err instanceof BootstrapTimeoutError)) {
       const failed = transport
       transport = null
-      if (failed !== null) await closeQuietly(failed)
+      if (failed !== null) {
+        const closing = closeQuietly(failed)
+        pendingClose = closing
+        await closing
+        if (pendingClose === closing) pendingClose = null
+      }
       if (gen !== generation) return
     }
     status = { state: 'failed', lastError: messageOf(err) }
@@ -254,11 +272,23 @@ export function stopTor(): Promise<void> {
   if (retryTimer !== null) clearTimeout(retryTimer)
   retryTimer = null
   inFlight = null
-  const closing = transport === null ? Promise.resolve() : closeQuietly(transport)
+  // An attempt can already be closing a rejected client after clearing
+  // `transport`. Keep that cleanup visible to shutdown and later starts.
+  const closing = Promise.all([
+    stopping,
+    pendingClose,
+    // A late factory result closes itself after seeing the new generation.
+    pendingCreation?.catch(() => {}),
+    transport === null ? null : closeQuietly(transport),
+  ]).then(() => {})
+  const stopped = closing.finally(() => {
+    if (stopping === stopped) stopping = null
+  })
+  stopping = stopped
   transport = null
   status = { state: 'starting' }
   options = {}
   configured = false
   isolationKeys.clear()
-  return closing
+  return stopped
 }

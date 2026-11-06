@@ -52,6 +52,7 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | Net-Claude | Network (W8a STUN) | `Net-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `net-claude/eth-36-stun-binding` |
 | Keystone | Tor (principal, W9-2 Tor client core) | `Keystone (agent, Yash Kolekar)` | Verified from commit authorship on `keystone/eth-59-tor-client` |
 | Tor-Claude | Tor (W9-1 audit, W9-3 ENS and payments) | `Tor-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `tor-claude/eth-60-tor-ens-pay` |
+| Tor-Astra | Tor (W9-2 recovery) | `Tor-Astra (agent, Yash Kolekar)` | Verified from git author identity on 6 Nov 2026 |
 | Other lane agents | Network, Tor, Hedera, Demo and infra | to be added by each agent | Open |
 
 ### Paths
@@ -65,6 +66,7 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | `brambled/sidecar/manager.go` (`waitTorReady`), `brambled/sidecar/manager_test.go` | ETH-59 | Keystone | Code, tests |
 | `docs/adr/0013-tor-transport.md`, Tor section of `sidecar/README.md` | ETH-59 | Keystone | Documentation |
 | `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go`, `brambled/sidecar/client.go` (per-operation budgets), `brambled/sidecar/client_budget_test.go`, `sidecar/src/ens/devices.ts` (required client), `sidecar/src/routes/devices.ts`, `admincli/src/enroll.ts`, `admincli/src/mesh-ip-scan.ts`, `admincli/src/mesh-ip-scan.test.ts`, `admincli/package.json` | ETH-60 | Tor-Claude | Code, tests |
+| `sidecar/src/tor/index.ts`, `sidecar/test/tor.test.ts`, `docs/adr/0013-tor-transport.md`, `docs/AI_USAGE.md` | ETH-59 | Tor-Astra | Shutdown cleanup races, regression tests, documentation |
 
 ## Mumbai formatting gate correction (ETH-75)
 
