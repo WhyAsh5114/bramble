@@ -16,6 +16,7 @@ import { normalize } from 'viem/ens'
 import { publicClient } from './client'
 import { scanLogsChunked } from './scan'
 import { relayRegistry, relayRegistryDeployBlock, tailnetName } from './config'
+import { readSlowText } from './slow-text'
 
 const labelRegisteredEvent = parseAbiItem(
   'event LabelRegistered(uint256 indexed tokenId, bytes32 indexed labelHash, string label, address owner, uint64 expiry, address indexed sender)'
@@ -81,8 +82,8 @@ export async function resolveRelays(): Promise<Relays> {
     const fullname = normalize(`${label}.relays.${tailnetName()}`)
 
     const [address, sidecarUrl, pricePerByte] = await Promise.all([
-      publicClient.getEnsText({ name: fullname, key: 'rendezvous-address' }),
-      publicClient.getEnsText({ name: fullname, key: 'sidecar-url' }),
+      readSlowText(publicClient, fullname, 'rendezvous-address'),
+      readSlowText(publicClient, fullname, 'sidecar-url'),
       publicClient.getEnsText({ name: fullname, key: 'price-per-byte' }),
     ])
 

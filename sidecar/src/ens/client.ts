@@ -3,6 +3,7 @@ import { sepolia } from 'viem/chains'
 import { normalize } from 'viem/ens'
 import { torFetch } from '../tor'
 import { RPC_URL, UNIVERSAL_RESOLVER, registryAbi, tailnetName, tailnetRegistry } from './config'
+import { fastResolveEnabled, readDeviceFast } from './fast-resolve'
 
 // viem ships a built-in Universal Resolver address for Sepolia that points at
 // the production/beta ENSv2 deployment, not the hackathon one. Overwriting it
@@ -89,17 +90,28 @@ export async function resolveDevice(label: string, client: EnsClient = publicCli
   // Text records resolve across the whole naming hierarchy automatically via
   // the Universal Resolver — proven end to end by Gate 0.3 ("subname text
   // record round-trips through full hierarchy").
-  const pubkey = await client.getEnsText({ name: fullname, key: 'pubkey' })
-  const revokedText = await client.getEnsText({ name: fullname, key: 'revoked' })
-  const aclText = await client.getEnsText({ name: fullname, key: 'acl' })
-  const aclGrantersText = await client.getEnsText({ name: fullname, key: 'acl-granters' })
-  const meshIP = await client.getEnsText({ name: fullname, key: 'mesh-ip' })
+  const labelhash = BigInt(keccak256(toHex(label)))
+  const [pubkey, revokedText, aclText, aclGrantersText, meshIP, resolverAddressRaw, state] = fastResolveEnabled()
+    ? await readDeviceFast(label, fullname, client)
+    : ([
+        await client.getEnsText({ name: fullname, key: 'pubkey' }),
+        await client.getEnsText({ name: fullname, key: 'revoked' }),
+        await client.getEnsText({ name: fullname, key: 'acl' }),
+        await client.getEnsText({ name: fullname, key: 'acl-granters' }),
+        await client.getEnsText({ name: fullname, key: 'mesh-ip' }),
+        await client.getEnsResolver({ name: fullname }),
+        await client.readContract({
+          address: tailnetRegistry(),
+          abi: registryAbi,
+          functionName: 'getState',
+          args: [labelhash],
+        }),
+      ] as const)
   // getEnsResolver's own type says non-nullable, but an unset name returns
   // the zero address rather than throwing or returning null (same "falsy
   // check catches it" convention already used at every other
   // getEnsResolver call site in this repo, e.g. set-acl.ts) — normalize to
   // null here so the dashboard doesn't have to know that quirk too.
-  const resolverAddressRaw = await client.getEnsResolver({ name: fullname })
   const resolverAddress =
     resolverAddressRaw && resolverAddressRaw !== '0x0000000000000000000000000000000000000000'
       ? resolverAddressRaw
@@ -111,13 +123,7 @@ export async function resolveDevice(label: string, client: EnsClient = publicCli
   // walking the chain. getState() is proven (Gate 0.3) to accept a bare
   // labelhash of the name's own label, unlike ownerOf() which requires the
   // exact current (version-matched) token ID.
-  const labelhash = BigInt(keccak256(toHex(label)))
-  const [status, expiry, , tokenId] = await client.readContract({
-    address: tailnetRegistry(),
-    abi: registryAbi,
-    functionName: 'getState',
-    args: [labelhash],
-  })
+  const [status, expiry, , tokenId] = state
 
   return {
     fullname,
