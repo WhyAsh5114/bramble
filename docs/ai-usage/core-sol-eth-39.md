@@ -44,3 +44,10 @@ Both regression tests failed before their fixes and passed afterwards.
 
 The NAT lab role now accepts typed endpoint announcements through the production
 parser. The live namespace/Docker lab is Open; this run does not execute it.
+
+- `brambled/datarelay_endpoint_test.go`
+- `brambled/sponsored_relay_e2e_test.go`
+- `brambled/live_demo.go`
+
+Existing relay test fixtures and the live-demo adopter use the production
+announcement parser for typed relay candidates. The live demo remains Open.
