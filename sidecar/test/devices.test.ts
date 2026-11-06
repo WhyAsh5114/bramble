@@ -11,7 +11,9 @@
 //
 // It needs an RPC endpoint that still serves the registry's history from its
 // deploy block. The public default does not, as of 6 November 2026.
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { stopTor } from '../src/tor'
+import { startDirectTor } from './helpers/fake-tor'
 import fixture from './fixtures/dev-tailnet.json'
 import { fixtureClient, labelRegisteredLog } from './fixtures/registry-logs'
 
@@ -22,6 +24,7 @@ process.env.BRAMBLE_TAILNET_REGISTRY = fixture.tailnetRegistry
 process.env.BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK = DEPLOY_BLOCK.toString()
 
 const { listDeviceLabels } = await import('../src/ens/devices')
+const { publicClient } = await import('../src/ens/client')
 
 const registry = fixture.tailnetRegistry as `0x${string}`
 const otherRegistry = '0x00000000000000000000000000000000000dead0' as const
@@ -80,8 +83,13 @@ describe('listDeviceLabels (fixture RPC)', () => {
 })
 
 describe.runIf(process.env.BRAMBLE_LIVE_SEPOLIA === '1')('listDeviceLabels (live Sepolia, opt-in)', () => {
+  // The sidecar's client only works once Tor is up; direct Tor stands in so
+  // the live scan needs no onion circuit.
+  beforeAll(startDirectTor)
+  afterAll(stopTor)
+
   it('scans real registered labels on Sepolia, read-only', async () => {
-    const labels = await listDeviceLabels()
+    const labels = await listDeviceLabels(publicClient)
     // Not asserting a specific label or exact list — real, growing,
     // continuously-enrolled-into chain state (this dev tailnet gets fresh
     // enrollments regularly), and the public RPC endpoint this repo
