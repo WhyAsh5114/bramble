@@ -1,0 +1,263 @@
+# How to stand up the Bramble demo on cloud machines
+
+Goal: run the three cloud machines (gateway with `demo-service`, agent worker, relays) and the admin machine, so the demo beats run live and online (handoff section 4). This page is the runbook. For ports, files and variable names, see `REFERENCE.md`. For why the topology looks this way, see `TOPOLOGY.md`. For the two-NAT test, see `nat-lab/README.md`.
+
+## Evidence labels
+
+Every step ends with one label. A step is **Verified** only when someone ran it, and the note says where.
+
+| Label            | Meaning                                                         |
+| ---------------- | --------------------------------------------------------------- |
+| Verified         | Ran it and saw the result (the note names the machine and date) |
+| Read from source | Taken from code or docs, never run on these machines            |
+| Open             | Not run. Check it before you depend on it                       |
+
+**State on 6 Nov 2026.** No cloud machine exists yet, so no step has run on one. Everything marked Verified ran on the agent's development machine (Linux, no root, no cloud). Treat every cloud step as Open until you run it and change its label.
+
+## What a human must supply (checkpoint H3)
+
+Agents never look for credentials. Each item below blocks the steps that name it.
+
+| #   | Item                                                                                                                                    | Needed by |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| 1   | Three small Linux cloud machines (Ubuntu 24.04 or later, 2 vCPU and 2 GB RAM each) with SSH access and a public IPv4 address            | A1        |
+| 2   | The admin machine: Linux with systemd, the Ledger Key Ring file, outbound internet                                                      | C1        |
+| 3   | Cloud firewall rules from `REFERENCE.md`, applied by the cloud account owner                                                            | A1        |
+| 4   | Two DNS names pointing at the relays machine: one for the RPC proxy, one for the console (or a tunnel service that replaces them)       | A2, B5    |
+| 5   | The dedicated Sepolia endpoint URL. It goes to the relays machine (proxy) and the admin machine only                                    | B4, C1    |
+| 6   | Sepolia ETH on the operator key for gas, and the operator key `SEPOLIA_PRIVATE_KEY`                                                     | C1, D2    |
+| 7   | Hedera testnet payer accounts (account ID and key) for the gateway and the worker, funded with testnet USDC `0.0.429274` and associated | E1, F1    |
+| 8   | The Hedera testnet payee account ID for the relays (a public ID; no key is needed on the relays machine)                                | B1        |
+| 9   | The demo token `APPROVAL_DEMO_TOKEN`                                                                                                    | C1        |
+| 10  | A dedicated SSH key pair for the console tunnel (admin to relays), with the public half authorized on the relays machine                | C3        |
+| 11  | Claude Code authentication for the agent on the worker machine                                                                          | F4        |
+| 12  | Read access to the repository for the machines (public clone, or a deploy key)                                                          | A4        |
+| 13  | Which tailnet and relay registry to use (names and addresses; public values)                                                            | D1        |
+| 14  | Optional: a second STUN server (host and port) or a second public address on the relays machine, for the NAT type check                 | N         |
+
+## Part A: prepare every machine
+
+### A1. Provision the machines. Open
+
+Create the three cloud machines and apply the firewall rules from `REFERENCE.md`. Name them `gateway`, `worker` and `relays`. Do not give the worker or gateway more open ports than the table lists.
+
+### A2. Point DNS at the relays machine. Open
+
+Create two A records for the names in item 4, both with the relays machine's public IPv4 address. Check with `dig +short <name>`.
+
+### A3. Install the toolchain. Open
+
+On each machine, install what its role needs:
+
+- All roles: `git`, `curl`, `iproute2`, Node.js 24 or later, `pnpm` 10 (the repository pins it in `package.json`).
+- gateway, worker, relays: Go 1.27 or later (`go.mod` requires it) and Bun 1.3.14. The Tor spike used Bun 1.3.14 (handoff section 9), so pin that version: `curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"`, then link `bun` into `/usr/local/bin`.
+- gateway, worker: `nftables` and `python3` (`apt install nftables python3`). The NAT box and the STUN probe need them. `install.sh` checks for both.
+- relays: `caddy` (from the Caddy apt repository) and `coturn` (`apt install coturn`).
+- admin: Bun, and `ssh`.
+
+### A4. Check out the repository at a pinned commit. Open
+
+On each machine, as root:
+
+```sh
+git clone https://github.com/WhyAsh5114/bramble.git /opt/bramble
+cd /opt/bramble && git checkout <commit>
+```
+
+Use the same commit on every machine. Record the commit in the demo log. Deploy only a commit on `hackathon` that `pnpm verify` accepted.
+
+### A5. Run the installer. Open
+
+```sh
+sudo /opt/bramble/deploy/scripts/install.sh <gateway|worker|relays|admin>
+```
+
+The script creates the `bramble` user and `/etc/bramble`, installs dependencies, builds the Go binaries, copies the systemd units, and seeds an empty env file with mode `0600`. It starts nothing and writes no secret. Evidence: the script passes `bash -n`; the Go builds it runs (`go build` for `brambled`, `demo-service` and `relay`) are Verified on the development machine on 6 Nov 2026. The script itself has not run as root.
+
+## Part B: relays machine
+
+### B1. Fill in the relay env file. Open
+
+Edit `/etc/bramble/relay-relay1.env` (names in `REFERENCE.md`). Set `RELAY_PAYEE_ACCOUNT_ID` to the payee from item 8. Then run `deploy/scripts/check-env.sh relay`. For a second relay, copy the file to `relay-relay2.env` with ports `:9430`, `7901`, `7905`.
+
+### B2. Start the relay. Read from source
+
+```sh
+sudo systemctl enable --now bramble-relay@relay1
+deploy/scripts/smoke.sh relays
+```
+
+Evidence: on the development machine on 6 Nov 2026, `relay -addr :19421 -meter -data-relay -payee 0.0.1 -sidecar-dir ... -sidecar-port 17891 -internal-port 17895 -price-per-byte 1 -data-host 0.0.0.0` (the unit's flags, other ports, a dummy payee) started `relay-sidecar`, and `GET /health` returned `{"ok":true}`. The unit file passed `systemd-analyze verify` apart from the binary not being installed. The unit has not run under systemd.
+
+### B3. Tune the ephemeral UDP range. Open
+
+The data relay opens each paid session on an ephemeral UDP port (`relay/datarelay.go` binds port 0). Install `deploy/sysctl/90-bramble-relay.conf` into `/etc/sysctl.d/` and run `sudo sysctl --system`. The firewall rule for UDP 40000-40999 then covers every session.
+
+### B4. Start the logging RPC proxy. Open
+
+Follow `deploy/rpc-proxy/README.md` (added by ETH-44, PR #2). Use the dedicated Sepolia endpoint from item 5 in `/etc/bramble/rpc-proxy.env`. Running the proxy locally against a fake upstream is Verified there; the unit and Caddy are Open.
+
+### B5. Start Caddy. Open
+
+Install `deploy/caddy/Caddyfile` as `/etc/caddy/Caddyfile`, replace the two example names, and run `sudo systemctl reload caddy`. Check `curl -fsS https://<rpc-name>/healthz` returns `{"ok":true}`.
+
+### B6. Start STUN. Open
+
+```sh
+sudo install -m 0644 /opt/bramble/deploy/stun/turnserver.conf /etc/turnserver.conf
+sudo systemctl enable --now coturn
+```
+
+Set `listening-ip` and `external-ip` in the file to the machine's addresses first. The config is STUN-only (`stun-only`) and holds no credentials. Check from the gateway machine with any STUN client, or with the W8 discovery once ETH-36 merges. The nodes read the server from `BRAMBLE_STUN_SERVERS=<relays-ip>:3478`.
+
+### B7. Register the relay in ENS (admin machine). Open
+
+Writes a Sepolia transaction, so it needs the operator key from item 6:
+
+```sh
+cd /opt/bramble/admincli
+bun run src/register-relay.ts relay1 --rendezvous <relays-ip>:9420 --sidecar-url http://<relays-ip>:7891 --price-per-byte 1
+```
+
+The usage line comes from `admincli/src/register-relay.ts`. Nodes then discover the relay from `BRAMBLE_RELAY_REGISTRY` and need no `-rendezvous` flag. Relay records are the one place endpoints may appear on chain (`docs/05_BUILD_PLAN.md` Gate 1.4), because relays are not mesh members.
+
+## Part C: admin machine
+
+### C1. Fill in the admin env file. Open
+
+Edit `/etc/bramble/admin.env` (names in `REFERENCE.md`), then run `deploy/scripts/check-env.sh admin`. The admin tools read `SEPOLIA_RPC_URL` from the environment. Use the dedicated endpoint here, not the proxy, so beat 6's log shows only node traffic.
+
+### C2. Start the approval service. Open
+
+```sh
+sudo systemctl enable --now bramble-approval
+```
+
+The service binds to `127.0.0.1:3001` and its write routes need `Authorization: Bearer <APPROVAL_DEMO_TOKEN>` (`approval/README.md` on the ETH-29 branch). Until ETH-30 merges, grant and revoke return `503 signer_not_configured`. The `approval/` package is not on `hackathon` yet, so this unit cannot run today.
+
+### C3. Open the console tunnel. Open
+
+On the admin machine, as `bramble`, create the SSH key from item 10 and an SSH host alias `bramble-relays` in `~/.ssh/config` pointing at the relays machine. On the relays machine, authorize the public key for a restricted user, and keep `AllowTcpForwarding` limited to that key. Then:
+
+```sh
+sudo systemctl enable --now bramble-console-tunnel
+```
+
+The tunnel makes the admin machine's `127.0.0.1:3001` appear as `127.0.0.1:3001` on the relays machine, where Caddy serves it. Only loopback is forwarded.
+
+### C4. Check the public console URL. Open
+
+```sh
+curl -fsS https://<console-name>/api/requests
+```
+
+A read returns JSON. A write without the token must return an error status, not success: `curl -i -X POST https://<console-name>/api/requests`.
+
+## Part D: enroll the nodes
+
+### D1. Generate node keys on the nodes. Verified (script, development machine)
+
+On `gateway` and `worker`, after `install.sh` built `brambled`:
+
+```sh
+sudo deploy/scripts/gen-node-key.sh /etc/bramble/gateway.env   # on gateway
+sudo deploy/scripts/gen-node-key.sh /etc/bramble/worker.env    # on worker
+```
+
+The script writes the private key into the env file and prints only the public key. It refuses to overwrite an existing key. Evidence: run on the development machine on 6 Nov 2026 against a temporary env file: it wrote a key, kept mode `0600`, printed a 64-character public key, and refused a second run. Send the public key to the admin.
+
+### D2. Enroll the devices (admin machine). Open
+
+For each node, from the admin machine:
+
+```sh
+cd /opt/bramble/admincli && bun run src/enroll.ts <label> <public-key>
+```
+
+Usage line from `admincli/src/enroll.ts`. This writes Sepolia transactions and allocates the node's mesh IP. After ETH-28 merges, the approval service performs grants itself, but enrollment stays a command.
+
+### D3. Let the gateway trust the admin granter. Open
+
+```sh
+cd /opt/bramble/admincli && bun run src/set-acl-granters.ts <gateway-label> <granter-label>
+```
+
+Usage line from `admincli/src/set-acl-granters.ts`. The granter label is an already-enrolled identity whose key the admin machine holds.
+
+## Part E: gateway machine
+
+### E1. Fill in the gateway env file. Open
+
+Edit `/etc/bramble/gateway.env`. `SEPOLIA_RPC_URL` is the proxy URL (`https://<rpc-name>/`). Set `BRAMBLE_SERVICE_NAME` to the service the console shows. Set `BRAMBLE_STUN_SERVERS=<relays-ip>:3478` after ETH-36 merges. Then run `deploy/scripts/check-env.sh gateway`. The check rejects a `SEPOLIA_RPC_URL` that looks like it carries an API key. Verified on the development machine on 6 Nov 2026: it rejected an Alchemy-style URL and accepted `https://rpc.example.com/`.
+
+### E2. Check the TUN device. Open
+
+The node uses a real OS TUN (`brambled/README.md`, "Known gaps"). The unit runs as the `bramble` user with `CAP_NET_ADMIN` and `/dev/net/tun` allowed. Nobody has run `brambled` under these restrictions. If the node logs a permission error, add a drop-in that sets `User=root` and remove the `Ambient`, `CapabilityBound` and `DeviceAllow` lines. The September runs used `sudo` (Verified there, `brambled/README.md`).
+
+### E3. Start the gateway. Read from source
+
+```sh
+sudo systemctl enable --now bramble-demo-service bramble-gateway
+deploy/scripts/smoke.sh gateway
+```
+
+Evidence: `demo-service -port 19100` started and `GET /task` returned the JSON task on the development machine on 6 Nov 2026. `brambled serve` accepted every flag the unit passes (it stopped at the missing tailnet variables, as expected). The September runbook ran the same processes by hand on an EC2 machine (`brambled/README.md`, 8 to 10 Sept 2026). The units have not run.
+
+## Part F: worker machine
+
+### F1. Fill in the worker env file. Open
+
+Edit `/etc/bramble/worker.env`: `BRAMBLE_GATEWAY_LABEL` is the gateway's label, and `BRAMBLE_SERVICE_NAME` must match the gateway's. Run `deploy/scripts/check-env.sh worker`.
+
+### F2. Start the worker node. Read from source
+
+```sh
+sudo systemctl enable --now bramble-worker
+deploy/scripts/smoke.sh worker
+```
+
+Evidence as for E3. Every node on the tailnet must use the same `-gateway-port` (`brambled/README.md`). The units leave it at the default.
+
+### F3. Deny check. Open
+
+Before any grant, from the worker: `curl -sS http://127.0.0.1:8080/task`. In NAT-box mode (Part N) the forward lives inside the node's namespace, so run the call there: `sudo deploy/scripts/agent-in-box.sh curl -sS http://127.0.0.1:8080/task`. The call must fail (connection reset). The gateway log must show `denied for service`. This is demo beat 1. The September run showed this on two other machines (`brambled/README.md`, Gate 5.1).
+
+### F4. Prepare the agent user. Open
+
+Create a Unix user `agent` with no `sudo` and no read access to `/etc/bramble`. The agent calls only the forward on `127.0.0.1:8080`. The node's WireGuard key and Hedera payer key stay in `/etc/bramble/worker.env` (mode `0600`, owner `bramble`), so the agent never holds a backend credential. Install Claude Code for that user and authenticate it with item 11. The MCP server package (`agent-mcp/`, ETH-57) does not exist yet; its environment variable names are Open.
+
+**Launching the agent.** Without the NAT box, the agent runs as `agent` on the host and reaches the forward on the host's `127.0.0.1:8080`. With the NAT box, the node (and so the forward) sits in the `bramble-node` namespace, and a process on the host cannot reach it. Start the agent through the launcher, which enters the namespace as root and then drops to the `agent` user with no capabilities and `no_new_privs`:
+
+```sh
+sudo deploy/scripts/agent-in-box.sh claude
+```
+
+The launcher also gives the agent the namespace's resolver and NAT route, so Claude Code reaches its API through the same NAT. Open: the script passes `bash -n` and its `setpriv` flags parse (Verified, development machine, 6 Nov 2026); it has not run as root or in a namespace.
+
+## Part G: the access gate
+
+Run these in order after parts B to F. They are the gate "agent denied, then succeeds after approval, on the cloud nodes".
+
+1. Deny: F3. Open.
+2. Request and approve through the public console, or with the admin command: `cd /opt/bramble/admincli && bun run src/set-acl.ts <agent-label> <gateway-label> <granter-label> <service>`. Open.
+3. Succeed with no restart: `curl -sS http://127.0.0.1:8080/task` on the worker returns the JSON task. Open.
+4. Revoke: `bun run src/revoke-acl.ts <agent-label> <gateway-label> <granter-label> <service>` or the console button. The next call fails. Open.
+5. Record the measured time from the revoke transaction to the first failure. Open.
+
+## Part N: two NATs
+
+See `nat-lab/README.md`. Short form, on the gateway and worker machines:
+
+1. `sudo deploy/scripts/nat-box.sh up cone`. Open.
+2. Install the `nat-box.conf.example` drop-in on **every unit that talks to the node over loopback**. On the gateway that is both `bramble-demo-service` and `bramble-gateway`: the gateway dials `127.0.0.1:<DEMO_SERVICE_PORT>` inside its own namespace (`brambled/gateway/server.go`), so `demo-service` must run there too. On the worker it is `bramble-worker`. Restart the units. Open.
+3. Run the smoke script with `NETNS=bramble-node` so its loopback checks run inside the namespace. Open.
+4. Start the agent with `deploy/scripts/agent-in-box.sh` (step F4). Open.
+
+## Reset between runs
+
+- RPC proxy log: `sudo systemctl restart rpc-proxy` on the relays machine. The log lives in memory only. Open.
+- The chain-state reset (agent enrolled, no ACL) belongs to the reset script (ETH-70). Not written here.
+
+## Stop the machines
+
+When the demo ends, a human stops or deletes the cloud machines. Agents do not delete deployments.

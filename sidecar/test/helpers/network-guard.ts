@@ -113,23 +113,24 @@ export function installNetworkGuard(fetchStub: (request: Request) => Promise<Res
     // read-only on this runtime
   }
 
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = ((input: ConstructorParameters<typeof Request>[0], init?: RequestInit) => {
+  const networkGlobals = globalThis as unknown as { fetch: typeof fetch; WebSocket?: typeof WebSocket }
+  const originalFetch = networkGlobals.fetch
+  networkGlobals.fetch = ((input: ConstructorParameters<typeof Request>[0], init?: RequestInit) => {
     const request = new Request(input, init) as unknown as Request
     fetchCalls.push(request.clone() as unknown as Request)
     return fetchStub(request)
   }) as typeof fetch
   restores.push(() => {
-    globalThis.fetch = originalFetch
+    networkGlobals.fetch = originalFetch
   })
 
-  const originalWebSocket = globalThis.WebSocket
+  const originalWebSocket = networkGlobals.WebSocket
   if (originalWebSocket) {
-    globalThis.WebSocket = function (...args: unknown[]) {
+    networkGlobals.WebSocket = function (...args: unknown[]) {
       return block('WebSocket', args)
     } as unknown as typeof WebSocket
     restores.push(() => {
-      globalThis.WebSocket = originalWebSocket
+      networkGlobals.WebSocket = originalWebSocket
     })
   }
 

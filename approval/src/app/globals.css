@@ -1,0 +1,85 @@
+@import 'tailwindcss';
+
+/* Theme tokens and fonts match dashboard/src/app/globals.css. */
+:root {
+  color-scheme: light;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --primary: oklch(0.5 0.14 155);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --radius: 0.625rem;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  color: var(--foreground);
+  background: var(--background);
+}
+body {
+  margin: 0;
+}
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 1.25rem max(1.25rem, calc((100vw - 72rem) / 2));
+}
+main {
+  max-width: 72rem;
+  margin: auto;
+  padding: 2rem 1.25rem;
+}
+a {
+  color: var(--primary);
+  text-underline-offset: 3px;
+}
+h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+h2 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+p {
+  margin: 0.75rem 0;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+article {
+  margin-top: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+}
+dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+}
+dt {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+code {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.85rem;
+}
+ul {
+  list-style: none;
+  padding: 0;
+}
+li {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+[role='alert'] {
+  color: var(--destructive);
+  border-left: 3px solid;
+  padding-left: 0.75rem;
+}

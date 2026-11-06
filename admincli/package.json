@@ -14,7 +14,7 @@
     "setup-relay-registry": "bun run src/setup-relay-registry.ts",
     "register-relay": "bun run src/register-relay.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/mesh-ip.test.ts src/mesh-ip-scan.test.ts"
+    "test": "bun test src"
   },
   "dependencies": {
     "@ledgerhq/hw-app-eth": "7.8.17",

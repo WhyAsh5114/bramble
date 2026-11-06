@@ -7,6 +7,6 @@
     "lint": "go vet ./...",
     "format": "gofmt -w .",
     "format:check": "test -z \"$(gofmt -l .)\"",
-    "test": "go test ./..."
+    "test": "go test -tags nattest ./..."
   }
 }

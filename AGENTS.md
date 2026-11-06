@@ -19,6 +19,7 @@ Read, in order: `docs/14_MUMBAI_BUILD_BRIEF.md`, `docs/15_MUMBAI_HANDOFF.md`, `S
 - Never spend real money, write to a mainnet, publish somewhere new, or delete a branch, repo or deployment.
 - Never make a design decision that belongs to a human. Write the options in an ADR draft and request approval.
 - Never claim something works unless you ran it. Label findings Verified, Read from source or Open.
+- Exception to the credential rule above, for the Sepolia key only: pass `${SEPOLIA_PRIVATE_KEY:-$SEPOLIA_PK}` straight into a Sepolia signer (Codex hides names that contain KEY, so Codex agents see `SEPOLIA_PK`). Never inspect, print, log, echo or commit it. Use it on Sepolia only, with testnet funds only.
 
 ## Skills
 

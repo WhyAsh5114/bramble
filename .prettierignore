@@ -16,3 +16,6 @@ sidecar/test/fixtures/
 # The workspace package formats itself via Turbo using dashboard/.gitignore,
 # which excludes its generated .next tree.
 dashboard/
+
+# The approval package formats itself, excluding its generated Next.js tree.
+approval/

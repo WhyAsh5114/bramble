@@ -30,14 +30,12 @@
 // per call, from a wallet-cli Key Ring-encrypted file via
 // provision-granter-key.ts. Run that once first.
 //
+// This file is the CLI wrapper; the logic is lib.ts's grantAcl.
+//
 // To remove a specific grant instead of adding one, see revoke-acl.ts —
 // same usage shape, set-subtraction instead of set-union.
-import { createWalletClient, http, toHex } from 'viem'
-import { packetToBytes } from 'viem/ens'
-import { RPC_URL } from '../../sidecar/src/ens/config'
-import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
-import { resolverWriteAbi } from './roles'
-import { computeGrantDigests } from './acl-grant'
+import { grantAcl, parseServiceNames } from './lib'
+import { cliDeps, loadGranterKeyFromRing } from './lib-viem'
 
 async function main() {
   const [deviceLabel, gatewayLabel, granterLabel, servicesArg] = process.argv.slice(2)
@@ -46,53 +44,13 @@ async function main() {
       'usage: bun run set-acl.ts <device-label> <gateway-label> <granter-label> <comma,separated,service,names>'
     )
   }
-  const serviceNames = servicesArg
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-
-  const {
-    granterFullname,
-    gatewayFullname,
-    deviceFullname: fullname,
-    digests: newDigests,
-  } = await computeGrantDigests(deviceLabel, gatewayLabel, granterLabel, serviceNames)
-  console.log(`granter: ${granterFullname}`)
-  console.log(`gateway: ${gatewayFullname}`)
-  console.log(`device: ${fullname}`)
-  console.log(`services: ${serviceNames.join(', ') || '(none)'} -> digests: ${newDigests.join(',') || '(empty)'}`)
-
-  const account = accountFromEnv()
-  const wallet = createWalletClient({ account, chain: hackathonSepolia, transport: http(RPC_URL) })
-
-  const resolverAddress = await publicClient.getEnsResolver({ name: fullname })
-  if (!resolverAddress) throw new Error(`no resolver found for ${fullname}`)
-  const dnsName = toHex(packetToBytes(fullname))
-
-  // acl is a growing capability set, not a single overwritten value (unlike
-  // pubkey/revoked) — merge with whatever's already there instead of
-  // clobbering grants from other (gateway, granter) pairs.
-  const before = await publicClient.getEnsText({ name: fullname, key: 'acl' })
-  const existingDigests = (before ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-  const value = Array.from(new Set([...existingDigests, ...newDigests])).join(',')
-  console.log(`current acl digests for ${fullname}: ${before || '(unset)'}`)
-
-  const hash = await wallet.writeContract({
-    address: resolverAddress,
-    abi: resolverWriteAbi,
-    functionName: 'setText',
-    args: [dnsName, 'acl', value],
+  await grantAcl(cliDeps(), {
+    deviceLabel,
+    gatewayLabel,
+    granterLabel,
+    serviceNames: parseServiceNames(servicesArg),
+    loadGranterKey: loadGranterKeyFromRing,
   })
-  console.log(`   tx: ${hash}`)
-  const receipt = await publicClient.waitForTransactionReceipt({ hash })
-  if (receipt.status !== 'success') throw new Error('setText reverted on-chain')
-
-  const after = await publicClient.getEnsText({ name: fullname, key: 'acl' })
-  if (after !== value) throw new Error(`acl did not round-trip: got ${JSON.stringify(after)}`)
-  console.log(`done. ${fullname}'s acl digests are now ${after === '' ? '(empty)' : after}.`)
 }
 
 main().catch((err) => {

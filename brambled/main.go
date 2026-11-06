@@ -853,7 +853,7 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 			}
 			continue
 		}
-		endpoint, err := netip.ParseAddrPort(candidate)
+		endpoint, err := peerEndpointFromCandidate(candidate)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "data-relay: %s: peer published unparseable candidate %q, will retry\n", peerLabel, candidate)
 			continue
@@ -875,6 +875,24 @@ func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m *sidecar.Mana
 		fmt.Fprintf(os.Stderr, "data-relay: %s adopted new candidate %s\n", peerLabel, candidate)
 		current = candidate
 	}
+}
+
+// peerEndpointFromCandidate picks the endpoint to use from a peer's
+// published candidate: an "ep1:" announcement (docs/reference/endpoint-exchange.md)
+// or a legacy bare ip:port. The endpoint is a dial hint, never an admission
+// signal. Admission is not checked here: admission.Loop calls EndpointResolver
+// only for peers ENS currently admits (serve does not use Exchanger yet), and
+// the data-relay adopt watcher does not re-check admission.
+func peerEndpointFromCandidate(candidate string) (netip.AddrPort, error) {
+	announcement, err := rendezvous.ParseAnnouncement(candidate)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	best, ok := announcement.Best()
+	if !ok {
+		return netip.AddrPort{}, fmt.Errorf("announcement has no usable endpoint")
+	}
+	return best, nil
 }
 
 func runServe(args []string) error {
@@ -1132,9 +1150,9 @@ func runServe(args []string) error {
 			if candidate == "" {
 				return nil, nil // peer published no reachable address of its own
 			}
-			endpoint, err := netip.ParseAddrPort(candidate)
+			endpoint, err := peerEndpointFromCandidate(candidate)
 			if err != nil {
-				return nil, fmt.Errorf("peer %s published an unparseable candidate %q: %w", peerPubkey, candidate, err)
+				return nil, fmt.Errorf("peer %s published an unusable candidate %q: %w", peerPubkey, candidate, err)
 			}
 			// This node has no way to know peerPubkey's candidate is
 			// relay-routed rather than a real direct address — a relay
