@@ -14,6 +14,8 @@ export const WANTED = [
   'BRAMBLE_CHAIN_ID',
   'BRAMBLE_TAILNET_REGISTRY',
   'BRAMBLE_RELAY_REGISTRY',
+  'BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK',
+  'BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK',
   'BRAMBLE_PUBLIC_RPC_URL',
   'BRAMBLE_STUN_SERVERS',
   'BRAMBLE_RENDEZVOUS',
@@ -48,6 +50,11 @@ const address = (env, name) => {
 const chainId = (env) => {
   const v = need(env, 'BRAMBLE_CHAIN_ID')
   if (!/^[1-9]\d{0,15}$/.test(v)) throw new Error('BRAMBLE_CHAIN_ID is not a chain id')
+  return Number(v)
+}
+const deployBlock = (env, name) => {
+  const v = env[name]
+  if (!/^\d+$/.test(v) || !Number.isSafeInteger(Number(v))) throw new Error(`${name} is not a nonnegative safe integer`)
   return Number(v)
 }
 // Same rules as the approval service (approval/src/lib/validation.ts) and the launcher.
@@ -99,6 +106,10 @@ export function buildConfig(env, version) {
     registry: address(env, 'BRAMBLE_TAILNET_REGISTRY'),
   }
   if (env.BRAMBLE_RELAY_REGISTRY) config.relayRegistry = address(env, 'BRAMBLE_RELAY_REGISTRY')
+  if (env.BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK)
+    config.registryDeployBlock = deployBlock(env, 'BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK')
+  if (env.BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK)
+    config.relayDeployBlock = deployBlock(env, 'BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK')
   config.joinApi = publicUrl(join, 'joinApi').replace(/\/$/, '')
   if (rendezvous.length) config.rendezvous = rendezvous[0]
   const stun = list(env.BRAMBLE_STUN_SERVERS).map((v) => hostPort(v, 'stun'))

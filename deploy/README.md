@@ -272,7 +272,7 @@ Goal: `curl -fsSL https://<console-name>/install.sh | sh` works from any device.
 
 ### H1. Write the public env file. Open
 
-On the operator's machine (not on a cloud machine), copy `deploy/env/public.env.example` to a file outside the repository and fill in the public values: the two DNS names from item 4, the tailnet name, chain id and registry addresses from item 13, and the STUN, rendezvous and data-relay endpoints. The file holds no secret. The generator reads only the names in the template, so you can also pass a node env file.
+On the operator's machine (not on a cloud machine), copy `deploy/env/public.env.example` to a file outside the repository and fill in the public values: the two DNS names from item 4, the tailnet name, chain id, registry addresses and their deployment blocks from item 13, and the STUN, rendezvous and data-relay endpoints. The file holds no secret. The generator reads only the names in the template, so you can also pass a node env file.
 
 ### H2. Publish a release. Verified (cloud, 6 Nov 2026, with a stub bundle)
 
