@@ -72,7 +72,7 @@ func (c *Controller) Run(ctx context.Context) {
 			}
 		}()
 	}
-	var direct, relay, target netip.AddrPort
+	var direct, relay, target, retiredRelay netip.AddrPort
 	state := ""
 	emit := func(s string) {
 		if state != s {
@@ -101,6 +101,10 @@ func (c *Controller) Run(ctx context.Context) {
 		}
 		if relay.IsValid() {
 			if c.Node.SetPeerPath(c.Peer, relay) == nil {
+				lastReceive = time.Now()
+				if p, ok := c.peer(); ok {
+					lastRx = p.RxBytes
+				}
 				_ = c.Node.InitiateHandshake(c.Peer)
 				emit("relay")
 			}
@@ -128,8 +132,9 @@ func (c *Controller) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case a := <-hints:
+			previousRelay := relay
 			for _, ep := range a {
-				if ep.Kind == rendezvous.KindRelay {
+				if ep.Kind == rendezvous.KindRelay && ep.Addr != retiredRelay {
 					relay = ep.Addr
 				}
 			}
@@ -140,7 +145,7 @@ func (c *Controller) Run(ctx context.Context) {
 				}
 			}
 			direct, _ = candidates.Best()
-			if state == "unavailable" && relay.IsValid() {
+			if (state == "unavailable" || (state == "relay" && relay != previousRelay)) && relay.IsValid() {
 				fallback()
 			}
 		case <-tick.C:
@@ -168,8 +173,6 @@ func (c *Controller) Run(ctx context.Context) {
 					probeCtx, stop := context.WithTimeout(ctx, 150*time.Millisecond)
 					_ = c.Node.Punch(probeCtx, c.Peer, target)
 					stop()
-					// An old relay packet may roam the endpoint during a direct attempt.
-					_ = c.Node.SetPeerPath(c.Peer, target)
 				}
 			case "direct":
 				if p.RxBytes != lastRx && p.Endpoint == target.String() {
@@ -180,6 +183,21 @@ func (c *Controller) Run(ctx context.Context) {
 					fallback()
 				}
 			case "relay", "unavailable":
+				if state == "relay" {
+					if p.RxBytes != lastRx && p.Endpoint == relay.String() {
+						lastRx = p.RxBytes
+						lastReceive = now
+					}
+					grace := c.StallTimeout
+					if !p.Handshaked() {
+						grace += c.HandshakeTimeout
+					}
+					if now.Sub(lastReceive) >= grace {
+						retiredRelay = relay
+						relay = netip.AddrPort{}
+						fallback()
+					}
+				}
 				if state == "unavailable" && !now.Before(nextRelay) {
 					fallback()
 				}

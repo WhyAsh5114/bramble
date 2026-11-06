@@ -23,3 +23,15 @@ a removed peer. Cloud NAT behavior remains Open.
 - `brambled/statusapi/path_test.go`
 - `brambled/statusapi/server.go`
 - `brambled/wgnode/stun.go`
+
+- `brambled/main.go`
+- `brambled/traversal.go`
+- `brambled/traversal_test.go`
+- `README.md`
+- `brambled/README.md`
+- `docs/reference/endpoint-exchange.md`
+
+Verified: `go test . -run TestAdmissionTraversal -count=1 -v` uses metered
+rendezvous and a fresh relay port for each allocation. Two admitted nodes share
+one allocation, exchange encrypted traffic, and stop traversal on revocation.
+`go test -race -tags nattest ./traversal ./statusapi -count=2` passes.

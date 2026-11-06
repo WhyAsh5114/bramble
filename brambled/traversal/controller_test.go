@@ -283,3 +283,27 @@ func TestRevokedPeerCannotBeRecreatedByLatePathResult(t *testing.T) {
 		t.Fatalf("revoked peer returned: %v %v", peers, err)
 	}
 }
+
+func TestProbeReplyDoesNotCountAsAuthenticatedDirectPath(t *testing.T) {
+	stun := stunServer(t)
+	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
+	b := newPeer(t, nattest.FullCone, "127.0.0.3", "10.77.0.2", stun)
+	admit(t, a, b) // b can reply to probes, but does not admit a's WireGuard key.
+	relay := relayServer(t)
+	events := start(t, a, b, func(context.Context) (netip.AddrPort, error) { return relay, nil })
+	timer := time.NewTimer(12 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-events:
+			if state == "direct" {
+				t.Fatal("unauthenticated probe marked direct")
+			}
+			if state == "relay" {
+				return
+			}
+		case <-timer.C:
+			t.Fatal("did not fall back after unauthenticated probe replies")
+		}
+	}
+}

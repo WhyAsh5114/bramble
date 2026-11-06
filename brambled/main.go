@@ -9,9 +9,9 @@
 // just an in-process one — see brambled/wgnode) and rendezvous-relay
 // candidate exchange (`-rendezvous`, see brambled/rendezvous and ../relay),
 // so two nodes on different networks can find each other without a trusted
-// coordinator. STUN/hole-punching for the harder two-NAT case is still not
-// implemented — see docs/10_DAY0_GATES.md Gate 0.2's note on laptop-to-VPS
-// being the easier, currently-supported topology.
+// coordinator. With STUN enabled, admitted peers probe direct paths and
+// automatically fall back to a shared data-relay session. Real two-NAT
+// cloud verification remains Open.
 // Phase 2 Section A: EAC-gated enrollment/revocation/rotation (Gate 2.1) —
 // built in ../admincli, a separate package that writes to the registry
 // directly rather than through any node's sidecar (see
@@ -1033,7 +1033,7 @@ func runServe(args []string) error {
 	dataRelays := dataRelayFlag{}
 	fs.Var(dataRelays, "data-relay", "candidate data-plane relay: label=relay-sidecar-base-url (repeatable) — the pool -relay-peer picks from (docs/adr/0008)")
 	relayPeers := relayPeerFlag{}
-	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — an explicit substitute for hole-punch-failure detection, which this project doesn't implement (docs/adr/0008)")
+	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — forces relay routing even when STUN traversal is enabled (docs/adr/0008)")
 	relaySessionBytes := fs.Int64("relay-session-bytes", 10_000, "byte allotment to buy per data-relay session (docs/adr/0008) — size this to the transfer you're about to demo; running out mid-transfer needs a fresh session, not an automatic top-up. At the -price-per-byte default (1 atomic USDC/byte), the default here is 0.01 USDC per session — raise deliberately, since cost scales linearly with this")
 	sponsoredRelay := fs.Bool("sponsored-relay", false, "get rendezvous tokens and data-relay sessions from each relay's operator-sponsored routes instead of paying on Hedera — for a device with no Hedera key (docs/adr/0018). The relay must run -sponsor-enrolled; it checks -label is enrolled, grants a capped free session and sees this device's source IP")
 	sponsoredTokensPerHour := fs.Int("sponsored-tokens-per-hour", 30, "with -sponsored-relay: the relay's -sponsor-max-per-hour. brambled paces its rendezvous polling to stay a fifth under it, leaving the rest for connects and session renewals (docs/adr/0018)")
@@ -1231,6 +1231,36 @@ func runServe(args []string) error {
 	// only ever record what the admission loop and gateway already decided.
 	status := &statusapi.Server{PeerTable: node, EndpointSource: node, DataRelays: maps.Clone(dataRelays)}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	tracker := newPeerTracker(*ownLabel, prefix.Addr(), peers)
+	useTraversal := func(p admission.Peer) bool {
+		return len(discoveryServers) > 0 && p.Endpoint == nil && !relayPeers[p.Label]
+	}
+	paths := &peerTraversal{
+		ctx: ctx, node: node, own: ownPubkey, relaySet: nil, payer: payer, pool: dataRelays,
+		sessionBytes: *relaySessionBytes, policy: relayPurchasePolicy, exchangeTimeout: *ttl, pace: adoptPace,
+		eligible: func(label string) bool {
+			tracker.mu.Lock()
+			defer tracker.mu.Unlock()
+			p, ok := tracker.byLabel[label]
+			return ok && useTraversal(p)
+		},
+		local: func() rendezvous.Announcement {
+			var local rendezvous.Announcement
+			if ep, err := netip.ParseAddrPort(*myCandidate); err == nil {
+				local = append(local, rendezvous.Endpoint{Kind: rendezvous.KindStatic, Addr: ep})
+			}
+			if observed := node.EndpointStatus(); observed.State == "discovered" {
+				if ep, err := netip.ParseAddrPort(observed.Endpoint); err == nil {
+					local = append(local, rendezvous.Endpoint{Kind: rendezvous.KindSTUN, Addr: ep})
+				}
+			}
+			return local
+		},
+		onState: status.OnPathEvent,
+	}
+
 	loop := &admission.Loop{
 		Resolver: m,
 		Table:    node,
@@ -1255,6 +1285,7 @@ func runServe(args []string) error {
 				}
 			}
 			status.OnAdmissionEvent(e)
+			paths.Handle(e)
 		},
 	}
 
@@ -1263,6 +1294,7 @@ func runServe(args []string) error {
 	// therefore seen by the failover and adopt paths too, not only by the first connect.
 	pool := newRendezvousPool(rendezvousRelays, m.Relays, rendezvousDiscoveryRetry)
 	relaySet := rendezvousSource(pool.Get)
+	paths.relaySet = relaySet
 	if len(rendezvousRelays) > 0 || discoveryFailed {
 		backoff := newExchangeBackoff(*ttl, exchangeBackoffMax)
 		own, defaultCandidate := ownPubkey, *myCandidate
@@ -1311,6 +1343,9 @@ func runServe(args []string) error {
 			return &endpoint, nil
 		}
 		loop.EndpointResolver = func(p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
+			if useTraversal(p) {
+				return nil, nil
+			}
 			relays, err := pool.Get()
 			if err != nil {
 				return nil, err
@@ -1330,16 +1365,12 @@ func runServe(args []string) error {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	if len(discoveryServers) > 0 {
-		go node.RunSTUN(ctx, discoveryServers)
+		go node.RunSTUN(ctx, discoveryServers, status.OnEndpointEvent)
 	}
 
 	// tracker is the live tracked set the gateway maps tunnel addresses
 	// with. Rediscovery (below) adds to it; startup peers are in it now.
-	tracker := newPeerTracker(*ownLabel, prefix.Addr(), peers)
 
 	// Gate 4.3 failover (docs/adr/0008): one watcher per -relay-peer,
 	// started once ctx exists so Ctrl+C stops them cleanly. Each blocks
@@ -1362,7 +1393,7 @@ func runServe(args []string) error {
 	// ordinary idle connection).
 	adoptWatching := len(dataRelays) > 0 && (len(rendezvousRelays) > 0 || discoveryFailed)
 	startAdoptWatcher := func(p admission.Peer) {
-		if !adoptWatching || relayPeers[p.Label] {
+		if !adoptWatching || relayPeers[p.Label] || useTraversal(p) {
 			return
 		}
 		go func() {
