@@ -445,6 +445,18 @@ describe('torFetch', () => {
     expect(fake.calls).toHaveLength(2)
   })
 
+  it.each(['PAYMENT-SIGNATURE', 'X-PAYMENT'])('does not replay a signed payment with %s', async (header) => {
+    const fake = await readyFake()
+    const failure = torError({ code: 'CONNECTION' })
+    fake.outcomes = [failure, new Response('would replay')]
+    const request = new Request('https://relay.example/rendezvous-token', {
+      method: 'POST',
+      headers: { [header]: 'synthetic-signed-payment' },
+    })
+    await expect(torFetch('pay')(request)).rejects.toBe(failure)
+    expect(fake.calls).toHaveLength(1)
+  })
+
   it('does not retry a refusal from the destination, an abort, or an HTTP error status', async () => {
     const fake = await readyFake()
     fake.outcomes = [torError({ code: 'CONNECTION', torKind: 'RemoteConnectionRefused' })]

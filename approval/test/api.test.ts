@@ -220,10 +220,14 @@ test('signer failures preserve state, suppress adapter diagnostics and allow a s
   expect((await api.handle(request('/grants/agent-1/revoke', 'POST'))).status).toBe(200)
 })
 
-test('a signer failure is logged without the endpoint URL, and the API answer stays generic', async () => {
+test('signer failures never log adapter messages, short messages or error names', async () => {
   const chain = new MemoryChain()
+  const credential = randomUUID()
+  const diagnostic = new Error(`HTTP request failed. Authorization: Bearer ${credential}`)
+  diagnostic.name = credential
+  Object.assign(diagnostic, { shortMessage: `decrypt failed: ${credential}` })
   chain.grant = async () => {
-    throw new Error('HTTP request failed. URL: https://rpc.example/v3/SECRET-KEY Details: decrypt failed')
+    throw diagnostic
   }
   const api = createApprovalApi({ token: () => token, signer: chain, resolver: chain })
   const created = await (await api.handle(request('/requests', 'POST', input))).json()
@@ -231,11 +235,11 @@ test('a signer failure is logged without the endpoint URL, and the API answer st
   try {
     const failed = await api.handle(request(`/requests/${created.id}/approve`, 'POST'))
     expect(failed.status).toBe(502)
-    expect(await failed.text()).not.toContain('decrypt')
+    expect((await failed.text()).includes(credential)).toBe(false)
     const line = String(log.mock.calls[0]?.[0])
-    expect(line).toContain('signer grant failed')
-    expect(line).toContain('decrypt failed')
-    expect(line).not.toContain('SECRET-KEY')
+    // Compare a boolean so a regression cannot print the diagnostic in a test failure.
+    expect(line.includes(credential)).toBe(false)
+    expect(line).toBe('approval: signer grant failed; check signer configuration and upstream availability')
   } finally {
     log.mockRestore()
   }

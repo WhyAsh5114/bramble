@@ -3,6 +3,7 @@
 // proved end to end (Gate 0.4) — @x402/fetch's automatic 402 -> sign -> retry
 // loop over a real Hedera ECDSA signer.
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from '@x402/fetch'
+import { decodePaymentRequiredHeader } from '@x402/core/http'
 import { createClientHederaSigner, PrivateKey } from '@x402/hedera'
 import { ExactHederaScheme } from '@x402/hedera/exact/client'
 import { torFetch } from '../tor'
@@ -12,6 +13,37 @@ export type RendezvousTokenResult = {
   token: string
   expiresAt: number
   settlementTxId?: string
+}
+
+// Upstream messages and payloads can contain signed transactions or URLs.
+// Expose only reviewed reason codes, never arbitrary response text.
+const PAYMENT_FAILURE_CODES = new Set([
+  'insufficient_balance',
+  'pay_to_not_associated',
+  'verification_failed',
+  'transaction_failed',
+])
+
+function paymentFailureDetail(response: Response): string {
+  const settlement = response.headers.get('PAYMENT-RESPONSE')
+  const verification = response.headers.get('PAYMENT-REQUIRED')
+  if (settlement === null && verification === null) return ''
+  const phase = settlement !== null ? 'payment-response' : 'payment-required'
+  let reason: unknown
+  try {
+    const decoded: unknown =
+      settlement !== null ? decodePaymentResponseHeader(settlement) : decodePaymentRequiredHeader(verification!)
+    if (typeof decoded === 'object' && decoded !== null) {
+      reason =
+        settlement !== null
+          ? (decoded as { errorReason?: unknown }).errorReason
+          : (decoded as { error?: unknown }).error
+    }
+  } catch {
+    // Malformed metadata must not hide the HTTP status or leak decoder text.
+  }
+  const code = typeof reason === 'string' && PAYMENT_FAILURE_CODES.has(reason) ? reason : 'unknown'
+  return ` (${phase}: ${code})`
 }
 
 // payForRendezvousToken performs one real payment to sidecarUrl and returns
@@ -54,7 +86,9 @@ export async function payForRendezvousToken(sidecarUrl: string): Promise<Rendezv
 
   const response = await fetchWithPayment(`${sidecarUrl.replace(/\/$/, '')}/rendezvous-token`, { method: 'POST' })
   if (!response.ok) {
-    throw new Error(`relay-sidecar returned HTTP ${response.status} for /rendezvous-token`)
+    throw new Error(
+      `relay-sidecar returned HTTP ${response.status} for /rendezvous-token${paymentFailureDetail(response)}`
+    )
   }
   const body = (await response.json()) as { token: string; expiresAt: number }
 
