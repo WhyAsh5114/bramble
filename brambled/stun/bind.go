@@ -49,6 +49,9 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 		fns[i] = func(packets [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
 			n, err := receive(packets, sizes, eps)
 			for j := 0; j < n; j++ {
+				if sizes[j] > 0 && b.handlePunch(packets[j][:sizes[j]], eps[j]) {
+					sizes[j] = 0
+				}
 				if sizes[j] > 0 && isSTUN(packets[j][:sizes[j]]) {
 					b.handle(packets[j][:sizes[j]], eps[j])
 					sizes[j] = 0 // ReceiveFunc explicitly permits empty slots.
