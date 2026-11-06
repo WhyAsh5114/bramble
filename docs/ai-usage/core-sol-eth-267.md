@@ -8,3 +8,9 @@ Paths written:
 - `brambled/gateway/acl_parallel_test.go`
 - `brambled/sidecar/fast.go`
 - `docs/ai-usage/core-sol-eth-267.md`
+- `sidecar/src/ens/client.ts`
+- `sidecar/src/ens/fast-resolve.ts`
+- `sidecar/src/ens/slow-text.ts`
+- `sidecar/src/ens/relays.ts`
+- `sidecar/test/fast-resolve.test.ts`
+- `brambled/main.go`

@@ -272,6 +272,42 @@ func discoverAllPeers(m deviceLister, ownLabel string) ([]admission.Peer, error)
 	return peers, nil
 }
 
+// prewarmDeviceReads runs before the listeners start. Only the sidecar's
+// short-lived routing metadata cache survives these reads; authorization is
+// resolved again for admission and every CONNECT.
+func prewarmDeviceReads(resolver admission.Resolver, ownLabel string, peers []admission.Peer) {
+	labels := []string{ownLabel}
+	for _, peer := range peers {
+		labels = append(labels, peer.Label)
+	}
+	seen := map[string]bool{}
+	warm := func(labels []string) []string {
+		var wg sync.WaitGroup
+		var ownGranters []string
+		for _, label := range labels {
+			if seen[label] {
+				continue
+			}
+			seen[label] = true
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				record, err := resolver.ResolveDevice(label)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "resolver prewarm: %s unavailable; requests will retry\n", label)
+					return
+				}
+				if label == ownLabel {
+					ownGranters = record.ACLGranters
+				}
+			}()
+		}
+		wg.Wait()
+		return ownGranters
+	}
+	warm(warm(labels))
+}
+
 // resolveMeshIPPrefix reads label's mesh-ip text record and parses it in
 // exactly the format enroll.ts writes and -peer's explicit form already
 // accepts ("a.b.c.d/bits") — one parser, one format, on both sides of the
@@ -1192,6 +1228,9 @@ func runServe(args []string) error {
 		}
 		peers = discovered
 		fmt.Fprintf(os.Stderr, "no -peer flags given — auto-discovered %d other device(s) on the tailnet\n", len(peers))
+	}
+	if sidecar.FastResolveEnabled() {
+		prewarmDeviceReads(m, *ownLabel, peers)
 	}
 
 	// Fills in any -peer that gave a bare label (docs/adr/0009) from that
