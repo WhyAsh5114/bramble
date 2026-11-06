@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 )
@@ -38,14 +39,30 @@ type Resolver interface {
 // transiently-unresolvable granter shouldn't itself deny an otherwise-valid
 // request from a different, resolvable granter.
 func CheckACL(resolver Resolver, myPrivateKeyHex, myLabel, requesterLabel, serviceName string) (bool, error) {
-	me, err := resolver.ResolveDevice(myLabel)
+	fast := sidecar.FastResolveEnabled()
+	var me, requester *sidecar.DeviceRecord
+	var err, requesterErr error
+	if fast {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			requester, requesterErr = resolver.ResolveDevice(requesterLabel)
+		}()
+		me, err = resolver.ResolveDevice(myLabel)
+		wg.Wait()
+	} else {
+		me, err = resolver.ResolveDevice(myLabel)
+	}
 	if err != nil {
 		return false, fmt.Errorf("resolving own record (%s): %w", myLabel, err)
 	}
 
-	requester, err := resolver.ResolveDevice(requesterLabel)
-	if err != nil {
-		return false, fmt.Errorf("resolving requester record (%s): %w", requesterLabel, err)
+	if !fast {
+		requester, requesterErr = resolver.ResolveDevice(requesterLabel)
+	}
+	if requesterErr != nil {
+		return false, fmt.Errorf("resolving requester record (%s): %w", requesterLabel, requesterErr)
 	}
 	if len(requester.ACL) == 0 {
 		return false, nil
@@ -62,8 +79,28 @@ func CheckACL(resolver Resolver, myPrivateKeyHex, myLabel, requesterLabel, servi
 		requesterACL[digest] = struct{}{}
 	}
 
-	for _, granterLabel := range me.ACLGranters {
-		granter, err := resolver.ResolveDevice(granterLabel)
+	// Authorization records are always fresh. Only their scheduling changes.
+	type result struct {
+		record *sidecar.DeviceRecord
+		err    error
+	}
+	granters := make([]result, len(me.ACLGranters))
+	if fast {
+		var wg sync.WaitGroup
+		for i, label := range me.ACLGranters {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				granters[i].record, granters[i].err = resolver.ResolveDevice(label)
+			}()
+		}
+		wg.Wait()
+	}
+	for i, granterLabel := range me.ACLGranters {
+		granter, err := granters[i].record, granters[i].err
+		if !fast {
+			granter, err = resolver.ResolveDevice(granterLabel)
+		}
 		if err != nil || granter.Pubkey == nil || *granter.Pubkey == "" || granter.Revoked {
 			continue
 		}
