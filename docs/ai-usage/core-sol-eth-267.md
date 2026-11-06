@@ -17,3 +17,5 @@ Paths written:
 - `sidecar/src/ens/config.ts`
 - `docs/reference/fast-resolve.md`
 - `README.md`
+- `docs/explanation/resolver-provider-visibility.md`
+- `docs/how-to/measure-fast-resolve.md`
