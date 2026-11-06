@@ -32,9 +32,34 @@ test('builds the launcher schema with defaults derived from the host names', () 
   })
 })
 
+test('preserves registry deployment blocks for fresh device and relay discovery', () => {
+  const c = build(
+    `${base}\nBRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK=12074600\nBRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK=12074600`
+  )
+  assert.equal(c.registryDeployBlock, 12074600)
+  assert.equal(c.relayDeployBlock, 12074600)
+})
+
+test('rejects deployment blocks that cannot be represented as exact nonnegative integers', () => {
+  for (const name of ['BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK', 'BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK']) {
+    for (const value of ['-1', '1.5', 'abc', '1e7', '0x123', '9007199254740992']) {
+      assert.throws(() => build(`${base}\n${name}=${value}`), new RegExp(name))
+    }
+  }
+})
+
 test('omits optional fields that are not set', () => {
   const c = build(base.replace(/BRAMBLE_(RELAY_REGISTRY|DATA_RELAYS|STUN_SERVERS|RENDEZVOUS)=.*/g, ''))
-  for (const k of ['relayRegistry', 'dataRelays', 'stun', 'rendezvous', 'relayPeers', 'services'])
+  for (const k of [
+    'relayRegistry',
+    'dataRelays',
+    'stun',
+    'rendezvous',
+    'relayPeers',
+    'services',
+    'registryDeployBlock',
+    'relayDeployBlock',
+  ])
     assert.ok(!(k in c), k)
 })
 
