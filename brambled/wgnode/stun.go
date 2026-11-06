@@ -63,9 +63,12 @@ func (n *Node) DiscoverEndpoint(ctx context.Context, servers []string) (netip.Ad
 
 // RunSTUN refreshes the observation every 30 seconds after each discovery pass.
 // The caller cancels ctx before closing the node.
-func (n *Node) RunSTUN(ctx context.Context, servers []string) {
+func (n *Node) RunSTUN(ctx context.Context, servers []string, onStatus ...func(EndpointStatus)) {
 	for ctx.Err() == nil {
 		_, _ = n.DiscoverEndpoint(ctx, servers)
+		for _, notify := range onStatus {
+			notify(n.EndpointStatus())
+		}
 		timer := time.NewTimer(30 * time.Second)
 		select {
 		case <-ctx.Done():

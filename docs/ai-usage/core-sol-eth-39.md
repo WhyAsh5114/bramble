@@ -18,3 +18,8 @@ The rootless tests use real WireGuard, a loopback STUN responder, and simulated
 restricted-cone and symmetric NATs. They cover direct pings, automatic relay
 fallback, recovery after blocking the direct path, and rejected path updates for
 a removed peer. Cloud NAT behavior remains Open.
+
+- `brambled/statusapi/path.go`
+- `brambled/statusapi/path_test.go`
+- `brambled/statusapi/server.go`
+- `brambled/wgnode/stun.go`
