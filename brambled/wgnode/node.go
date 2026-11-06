@@ -232,6 +232,14 @@ func (n *Node) AddPeer(publicKeyHex string, allowedIP netip.Prefix, endpoint *ne
 	return n.dev.IpcSet(b.String())
 }
 
+// UpdatePeerEndpoint changes transport settings only if admission still has
+// this key in the peer table. WireGuard applies update_only atomically with
+// respect to RemovePeer, so a delayed relay operation cannot authorize a key.
+func (n *Node) UpdatePeerEndpoint(publicKeyHex string, endpoint netip.AddrPort, keepaliveSeconds int) error {
+	conf := fmt.Sprintf("public_key=%s\nupdate_only=true\nendpoint=%s\npersistent_keepalive_interval=%d\n", publicKeyHex, endpoint, keepaliveSeconds)
+	return n.dev.IpcSet(conf)
+}
+
 func (n *Node) RemovePeer(publicKeyHex string) error {
 	conf := fmt.Sprintf("public_key=%s\nremove=true\n", publicKeyHex)
 	return n.dev.IpcSet(conf)

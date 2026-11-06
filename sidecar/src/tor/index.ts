@@ -15,7 +15,8 @@
 // so the same request can keep failing for minutes. About 1 in 10 first
 // requests failed in the 5 Nov spike and succeeded under a new isolation
 // key. torFetch therefore retries a circuit failure once under a fresh key,
-// and keeps the fresh key for later calls with the same TorKey.
+// and keeps the fresh key for later calls with the same TorKey. Signed
+// payments are never replayed: a transport error can follow settlement.
 import { toTorRequest } from './request'
 import { createTorJsTransport, type TorTransport, type TorTransportFactory } from './transport'
 
@@ -241,7 +242,7 @@ export function getTorStatus(): TorStatus {
  * under `key`'s isolation key. It rejects with TorNotReadyError until
  * startTor() has finished, instead of waiting up to a minute for bootstrap
  * or falling back to a direct connection. A circuit failure is retried once
- * under a fresh isolation key.
+ * under a fresh isolation key unless the request carries a payment signature.
  */
 export function torFetch(key: TorKey): typeof fetch {
   const fetchViaTor = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -255,6 +256,9 @@ export function torFetch(key: TorKey): typeof fetch {
     } catch (err) {
       if (!isCircuitFailure(err) || torInit.signal?.aborted) throw err
       const retryKey = rotateIsolationKey(key, firstKey)
+      // The request may already have reached the facilitator. Rotate the
+      // circuit for later requests, but leave this payment's outcome unknown.
+      if ('payment-signature' in torInit.headers! || 'x-payment' in torInit.headers!) throw err
       return await client.fetch(url, { ...torInit, anonOptions: { isolationKey: retryKey } })
     }
   }

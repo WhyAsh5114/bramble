@@ -24,6 +24,12 @@ Run these commands as the admin user. Node.js, pnpm, Bun, OpenSSL and the
    Set `APPROVAL_GRANTER_LABEL` to the enrolled granter authorized by the
    gateway's `acl-granters` record.
 
+   For demo beats 1, 3 and 5, configure the two read-only activity sources as
+   described in [Activity source configuration](ACTIVITY-SOURCES.md) before
+   the coordinated restart. The request API can answer successfully while both
+   sources remain unconfigured. The console reverse tunnel carries browser
+   requests to approval; it does not connect approval to the gateway status API.
+
    For the software ring demo, set `BRAMBLE_RING_CLI` to the absolute path of
    `deploy/scripts/software-ring.sh` in the runtime clone. Set
    `BRAMBLE_SOFTWARE_RING_KEY_FILE` to `~/.config/bramble/software-ring.key`
@@ -63,5 +69,7 @@ Run these commands as the admin user. Node.js, pnpm, Bun, OpenSSL and the
 
    Submit a request through the public API with the existing bearer token,
    approve it, and revoke it. Record confirmation times and transaction hashes.
-   A `200` page load alone does not verify the signer. Never include the token,
-   private keys or authenticated RPC URLs in evidence or journal excerpts.
+   Run the read-only source check in [Activity source configuration](ACTIVITY-SOURCES.md)
+   as well. A `200` page load alone does not verify the signer or feed sources.
+   Never include the token, private keys or authenticated RPC URLs in evidence
+   or journal excerpts.

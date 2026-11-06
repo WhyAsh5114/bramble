@@ -15,7 +15,8 @@ pub="$(printf '%s\n' "$out" | sed -n 's/^public:  //p')"
 [ -n "$priv" ] && [ -n "$pub" ] || { echo "unexpected genkey output" >&2; exit 1; }
 tmp="$(mktemp "${file}.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-chmod --reference="$file" "$tmp"
+# Keep mktemp's mode 0600 before writing key material, even if the input
+# template is readable by other users. Never copy its permissions.
 K="$priv" awk '/^BRAMBLE_PRIVATE_KEY=/{print "BRAMBLE_PRIVATE_KEY=" ENVIRON["K"]; found=1; next} {print} END{if(!found) print "BRAMBLE_PRIVATE_KEY=" ENVIRON["K"]}' "$file" > "$tmp"
 mv "$tmp" "$file"
 trap - EXIT

@@ -32,3 +32,18 @@ Additional paths written:
 Open: real Sepolia smoke requires administrator configuration; this run lacks `APPROVAL_ENS_PARENT`.
 
 Verified on 6 November 2026: `pnpm verify` passes (approval: 90 tests, 516 assertions). Browser checks pass in desktop and mobile layouts (8 tests), including join visibility under 2 seconds with the in-memory chain. Browser command uses `PLAYWRIGHT_BROWSERS_PATH=/home/anonjr/.cache/ms-playwright BRAMBLE_TEST_UI_PORT=13181 BRAMBLE_TEST_API_PORT=13182 pnpm --filter @bramble/approval test:ui` because the normal dev port is occupied.
+
+## ETH-287: demo rehearsal harness
+
+Paths written:
+
+- `deploy/scripts/rehearse.py`
+- `deploy/REHEARSAL.md`
+- `docs/ai-usage/core-sol.md`
+
+Demo beats: 1 (denied), 2 (request and approve), 3 (healthy call, rendezvous payment,
+new HCS grant record), and 5 (revoke and measured denial).
+
+Verified: offline simulation and local fault checks. Open: ETH-244 owns execution
+against the existing shared cloud pair. This task does not start nodes or use the
+shared ACL during local verification.

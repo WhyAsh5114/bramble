@@ -119,6 +119,7 @@ func TestSponsoredRelay_RefusesUnenrolledLabel(t *testing.T) {
 // neither given any endpoint for the other, joined only through the real
 // relay binary with sponsored tokens and a sponsored session for the device.
 type sponsoredPair struct {
+	session             *dataRelaySession
 	device, cloud       *wgnode.Node
 	devicePub, cloudPub string
 	deviceIP, cloudIP   netip.Addr
@@ -168,8 +169,8 @@ func connectSponsoredPair(t *testing.T, sponsorBytes int64, handler http.Handler
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		p.deviceEndpoint, _, deviceErr = relayRoutedEndpoint(p.device, &sponsor.Payer{Label: "device1"}, p.pool, 10_000,
-			unrestrictedDataRelayPurchasePolicy, p.relays, p.devicePub, p.cloudPub, 20*time.Second)
+		p.deviceEndpoint, p.session, deviceErr = relayRoutedEndpoint(p.device, &sponsor.Payer{Label: "device1"}, p.pool, 10_000,
+			unrestrictedDataRelayPurchasePolicy, p.relays, p.devicePub, p.cloudPub, 20*time.Second, nil)
 	}()
 	go func() {
 		defer wg.Done()
@@ -293,12 +294,12 @@ func TestSponsoredRelay_RenewsSessionAtCapWithOneRelay(t *testing.T) {
 	devicePayer := &countingPayer{relayPayer: &sponsor.Payer{Label: "device1"}}
 	devicePayer.sessions.Store(1) // the session connectSponsoredPair took
 	state := newRelayState()
-	state.set("cloud1", p.cloudPub, "relay1")
+	state.set("cloud1", p.cloudPub, p.session)
 	pace, err := sponsor.PollLimiter(30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	go watchDataRelayFailover(ctx, p.device, devicePayer, state, "cloud1", netip.PrefixFrom(p.cloudIP, 32), p.pool, 10_000,
+	go watchDataRelayFailover(ctx, p.device, devicePayer, state, "cloud1", p.pool, 10_000,
 		unrestrictedDataRelayPurchasePolicy, staticRendezvous(p.relays), p.devicePub, 20*time.Second)
 	cloudPayer := &countingPayer{relayPayer: &sponsor.Payer{Label: "cloud1"}}
 	go watchDataRelayAdopt(ctx, p.cloud, cloudPayer, "device1", p.cloudPub, p.devicePub, "",

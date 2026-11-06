@@ -101,7 +101,7 @@ func TestNetlabRole(t *testing.T) {
 		payer := &sponsor.Payer{Label: label}
 		if role == "device" {
 			endpoint, _, err = relayRoutedEndpoint(node, payer, dataRelayFlag{"relay1": sc}, 10_000,
-				unrestrictedDataRelayPurchasePolicy, relays, ownPub, peerPub, 40*time.Second)
+				unrestrictedDataRelayPurchasePolicy, relays, ownPub, peerPub, 40*time.Second, nil)
 		} else {
 			var candidate string
 			candidate, _, err = exchangeAnyMetered(relays, payer, ownPub, peerPub, "", 40*time.Second)

@@ -215,7 +215,7 @@ func runDemoDataRelay(args []string) error {
 	// "worked" by accident against a stub that didn't do that — a live
 	// run against the real relay binary is what surfaced it.
 	var aliceEndpoint *netip.AddrPort
-	var aliceLabel string
+	var aliceSession *dataRelaySession
 	var aliceErr error
 	var bobEndpoint *netip.AddrPort
 	var bobErr error
@@ -223,7 +223,7 @@ func runDemoDataRelay(args []string) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		aliceEndpoint, aliceLabel, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, policy, relays, alicePub, bobPub, 15*time.Second)
+		aliceEndpoint, aliceSession, aliceErr = relayRoutedEndpoint(alice, aliceM, pool, *sessionBytes, policy, relays, alicePub, bobPub, 15*time.Second, nil)
 	}()
 	go func() {
 		defer wg.Done()
@@ -250,7 +250,7 @@ func runDemoDataRelay(args []string) error {
 	if bobErr != nil {
 		return fmt.Errorf("bob's candidate exchange: %w", bobErr)
 	}
-	fmt.Fprintf(os.Stderr, "alice picked %s (the cheaper quote); bob adopted it\n", aliceLabel)
+	fmt.Fprintf(os.Stderr, "alice picked %s (the cheaper quote); bob adopted it\n", aliceSession.relayLabel)
 
 	if err := alice.AddPeer(bobPub, bobIP, aliceEndpoint); err != nil {
 		return fmt.Errorf("alice.AddPeer: %w", err)
@@ -277,14 +277,14 @@ func runDemoDataRelay(args []string) error {
 	}()
 
 	if !pingUntilConnectedForDemo(alice, bobAddr, 15*time.Second) {
-		return fmt.Errorf("alice never reached bob through %s before the kill", aliceLabel)
+		return fmt.Errorf("alice never reached bob through %s before the kill", aliceSession.relayLabel)
 	}
 	fmt.Fprintln(os.Stderr, "real WireGuard handshake confirmed through the primary relay")
 
 	aliceState := newRelayState()
-	aliceState.set("bob", bobPub, aliceLabel)
+	aliceState.set("bob", bobPub, aliceSession)
 
-	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", bobIP, pool, *sessionBytes, policy, staticRendezvous(relays), alicePub, 15*time.Second)
+	go watchDataRelayFailover(ctx, alice, aliceM, aliceState, "bob", pool, *sessionBytes, policy, staticRendezvous(relays), alicePub, 15*time.Second)
 	go watchDataRelayAdopt(ctx, bob, bobM, "alice", bobPub, alicePub, "", aliceIP, staticRendezvous(relays), nil)
 
 	fmt.Fprintln(os.Stderr, ">>> kill the primary relay process now to trigger failover <<<")
