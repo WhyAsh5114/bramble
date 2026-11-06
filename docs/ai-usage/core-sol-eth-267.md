@@ -14,3 +14,6 @@ Paths written:
 - `sidecar/src/ens/relays.ts`
 - `sidecar/test/fast-resolve.test.ts`
 - `brambled/main.go`
+- `sidecar/src/ens/config.ts`
+- `docs/reference/fast-resolve.md`
+- `README.md`
