@@ -5,6 +5,7 @@ import { devicesRoute } from './routes/devices'
 import { paymentsRoute } from './routes/payments'
 import { relaysRoute } from './routes/relays'
 import { requireTorReady, torStatusRoute } from './routes/tor'
+import { withoutIdleTimeout } from './serve'
 import { getTorStatus, startTor } from './tor'
 
 const app = new Hono()
@@ -41,7 +42,7 @@ export default {
   // process, never other hosts. Bun's default bind (all interfaces) would
   // otherwise expose the read endpoint to the network for no reason.
   hostname: '127.0.0.1',
-  fetch: app.fetch,
+  fetch: withoutIdleTimeout(app.fetch),
 }
 
 console.log(`bramble sidecar listening on 127.0.0.1:${SIDECAR_PORT}`)
