@@ -26,7 +26,7 @@ Live against the real Sepolia dev tailnet, Sept 12 2026:
 - Devices with a real, revoked-status `mesh-ip` record (four disposable test devices left over from ADR 0009's own live verification, revoked as part of this session's cleanup) correctly appeared in the tracked table but as `"authorized": false` — proving the revoked-device path works identically whether the peer came from `-peer` or auto-discovery.
 - Devices with **no** `mesh-ip` record at all (`device1`, `device2`, `ledger-granter-test`, `ledger-signed-demo`, `laptop-demo`) did not appear in the tracked table and did not abort startup — the `skipUnresolvable` path worked as designed.
 - `go test ./brambled/...` — new unit tests for `discoverAllPeers` (self-exclusion, bare-peer output, propagated list errors, empty-tailnet case) and `resolvePeerMeshIPs`'s two new skip-vs-error tests (unresolvable peer, colliding peer), both confirming an auto-discovered failure is logged and dropped rather than fatal.
-- `sidecar/test/devices.test.ts` — a real, live `listDeviceLabels()` call against Sepolia, asserting non-empty and deduplicated output (see the RPC caveat below for why it doesn't pin a specific label).
+- `sidecar/test/devices.test.ts` — originally a real, live `listDeviceLabels()` call against Sepolia, asserting non-empty and deduplicated output (see the RPC caveat below for why it doesn't pin a specific label). Since 6 November 2026 (ETH-86), the default suite runs against a fixture-backed RPC client instead, because public Sepolia nodes prune the registry's old logs (error 4444). The live call is opt-in with `BRAMBLE_LIVE_SEPOLIA=1`.
 
 ## A real reliability gap this surfaced, not introduced
 

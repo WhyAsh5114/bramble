@@ -886,6 +886,7 @@ func runServe(args []string) error {
 	var forwards forwardFlag
 	fs.Var(&forwards, "forward", "local port-forward to a peer's gateway service: local-port=gateway-label:service (repeatable) — lets an unmodified local client (psql, curl, ...) reach an ACL'd mesh service with no CONNECT knowledge of its own (docs/adr/0006-gateway-connect-protocol.md)")
 	localPrefix := fs.String("local-addr", "", "this node's address and mesh subnet (CIDR); omit to resolve it from -label's own on-chain mesh-ip record instead (docs/adr/0009) — explicit value always wins")
+	stunServers := fs.String("stun-servers", os.Getenv("BRAMBLE_STUN_SERVERS"), "comma-separated STUN host:port servers; empty disables public endpoint discovery")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
 	maxStale := fs.Duration("max-stale", 2*time.Minute, "remove a peer if resolving it keeps failing for this long (sidecar/RPC down) instead of leaving it admitted indefinitely; defaults to a bounded 2 minutes rather than unbounded fail-open — pass 0 explicitly to disable this and fail open forever (see admission package doc)")
@@ -1043,7 +1044,14 @@ func runServe(args []string) error {
 		return fmt.Errorf("-relay-peer requires at least one data relay, from -data-relay or discovery")
 	}
 
+	var discoveryServers []string
+	for _, server := range strings.Split(*stunServers, ",") {
+		if server = strings.TrimSpace(server); server != "" {
+			discoveryServers = append(discoveryServers, server)
+		}
+	}
 	node, err := wgnode.New(wgnode.Config{
+		EnableSTUN:    len(discoveryServers) > 0,
 		PrivateKeyHex: *privateKeyHex,
 		ListenPort:    uint16(*listenPort),
 		LocalAddress:  prefix.Addr(),
@@ -1068,7 +1076,7 @@ func runServe(args []string) error {
 	// dashboard's source for everything ENS/Hedera state alone can't show.
 	// It has no write path of its own: OnAdmissionEvent/OnGatewayDecision
 	// only ever record what the admission loop and gateway already decided.
-	status := &statusapi.Server{PeerTable: node}
+	status := &statusapi.Server{PeerTable: node, EndpointSource: node}
 
 	loop := &admission.Loop{
 		Resolver: m,
@@ -1147,6 +1155,10 @@ func runServe(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if len(discoveryServers) > 0 {
+		go node.RunSTUN(ctx, discoveryServers)
+	}
 
 	peerLabels := make(map[netip.Addr]string, len(peers))
 	for _, p := range peers {

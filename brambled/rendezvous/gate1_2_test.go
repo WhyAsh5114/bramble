@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -121,9 +122,15 @@ func TestGate1_2_MaliciousRelayCannotAdmitPeer(t *testing.T) {
 	aliceAddr := netip.MustParseAddr("10.97.0.1")
 	bobAddr := netip.MustParseAddr("10.97.0.2") // never actually stood up — bob is never involved once the relay lies
 	attackerAddr := netip.MustParseAddr("10.97.0.3")
-	const attackerCandidate = "127.0.0.1:61931"
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	alicePort := testport.FreeUDP(t)
+	attackerPort := testport.FreeUDP(t)
 
-	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 61930, LocalAddress: aliceAddr, Netstack: true})
+	aliceCandidate := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), alicePort).String()
+	attackerCandidate := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), attackerPort).String()
+
+	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: alicePort, LocalAddress: aliceAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting alice: %v", err)
 	}
@@ -131,7 +138,7 @@ func TestGate1_2_MaliciousRelayCannotAdmitPeer(t *testing.T) {
 
 	// The attacker: a real, live, responsive WireGuard node — not a stub —
 	// standing at the address the hostile relay will substitute for Bob's.
-	attacker, err := wgnode.New(wgnode.Config{PrivateKeyHex: attackerPriv, ListenPort: 61931, LocalAddress: attackerAddr, Netstack: true})
+	attacker, err := wgnode.New(wgnode.Config{PrivateKeyHex: attackerPriv, ListenPort: attackerPort, LocalAddress: attackerAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting attacker: %v", err)
 	}
@@ -141,7 +148,7 @@ func TestGate1_2_MaliciousRelayCannotAdmitPeer(t *testing.T) {
 
 	// Alice runs the real client exchange, asking for bob's candidate. The
 	// hostile relay hands her the attacker's address instead.
-	learnedCandidate, err := Exchange(relayAddr, alicePub, bobPub, "127.0.0.1:61930", "", 5*time.Second)
+	learnedCandidate, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, "", 5*time.Second)
 	if err != nil {
 		t.Fatalf("alice's candidate exchange failed: %v", err)
 	}

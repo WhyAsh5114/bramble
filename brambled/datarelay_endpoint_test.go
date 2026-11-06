@@ -85,6 +85,23 @@ func startTestRendezvousRelay(t *testing.T, requiredTokenPrefix string) (addr st
 				self := &fakePeer{enc: json.NewEncoder(conn)}
 				dec := json.NewDecoder(conn)
 				var pubkey string
+				// Deregister on disconnect, as relay/main.go's handle does.
+				// Without this, an offer to a peer whose Exchange call has
+				// already ended is "forwarded" to the dead connection and
+				// acked, so the sender stops retrying and the peer never
+				// sees it. The real relay replies "not registered" instead,
+				// and the sender retries until the peer's next Exchange
+				// registers (found 6 November 2026, ETH-86).
+				defer func() {
+					if pubkey == "" {
+						return
+					}
+					mu.Lock()
+					if peers[pubkey] == self {
+						delete(peers, pubkey)
+					}
+					mu.Unlock()
+				}()
 				for {
 					var m msg
 					if err := dec.Decode(&m); err != nil {
@@ -250,12 +267,15 @@ func TestRelayRoutedEndpoint_BothSidesReachEachOtherThroughDataRelay(t *testing.
 	aliceAddr := netip.MustParseAddr("10.99.0.1")
 	bobAddr := netip.MustParseAddr("10.99.0.2")
 
-	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 61950, LocalAddress: aliceAddr, Netstack: true})
+	// ListenPort 0: the kernel picks a free port. Every endpoint here is a
+	// relay address, so the test never needs its own port number, and a fixed
+	// port collides when several `go test` processes share a host.
+	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 0, LocalAddress: aliceAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting alice: %v", err)
 	}
 	defer alice.Close()
-	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 61951, LocalAddress: bobAddr, Netstack: true})
+	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 0, LocalAddress: bobAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting bob: %v", err)
 	}
@@ -555,12 +575,15 @@ func TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls(t *testing.T) 
 	aliceIP := netip.PrefixFrom(aliceAddr, 32)
 	bobIP := netip.PrefixFrom(bobAddr, 32)
 
-	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 61960, LocalAddress: aliceAddr, Netstack: true})
+	// ListenPort 0: the kernel picks a free port. Every endpoint here is a
+	// relay address, so the test never needs its own port number, and a fixed
+	// port collides when several `go test` processes share a host.
+	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 0, LocalAddress: aliceAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting alice: %v", err)
 	}
 	defer alice.Close()
-	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 61961, LocalAddress: bobAddr, Netstack: true})
+	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 0, LocalAddress: bobAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting bob: %v", err)
 	}

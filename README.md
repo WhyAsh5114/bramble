@@ -4,6 +4,45 @@ Bramble gives devices and automated workers private network access without makin
 
 The hackathon demo is one concrete access lifecycle: a thin health-check worker reaches an internal HTTP task API through a Bramble forward, an ungranted request is denied, a human-approved on-chain ACL expansion makes the identical request succeed without a restart, and revoking the worker removes it from the gateway's WireGuard peer table.
 
+## Pre-existing vs new
+
+The Mumbai continuity entry separates work that existed before the hackathon from work built during it.
+
+- **Baseline:** commit `28e2a8f`, tagged `pre-mumbai`. Everything in this repository at that commit is pre-existing.
+- **New work:** every commit after `28e2a8f`. List it with `git log pre-mumbai..HEAD`.
+- **Not new work:** polish, bug fixes and documentation of pre-existing behavior.
+
+### Pre-existing at `pre-mumbai`
+
+The sections below this one, from "Why the integrations matter" to "Open source and AI usage", describe the pre-existing system, except where they link to a row in the next table. The pre-existing system includes `brambled/`, `sidecar/`, `relay/`, `relay-sidecar/`, `admincli/` and `dashboard/`.
+
+### New since `pre-mumbai`
+
+This table is the index of new work. Each agent adds or updates its row in the same pull request as the work. A status other than `planned` needs a link to the pull request or commit that backs it.
+
+| Workstream | New work                                                                                                   | Status  |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | ------- |
+| W1         | Approval service and web UI: request queue, approve, deny, revoke                                          | planned |
+| W2         | Agent protagonist: MCP server that lets a coding agent request private access and call the private service | planned |
+| W3         | Agent payments in the flow: spend, cap and HashScan link per agent                                         | planned |
+| W4         | Live activity feed in the approval UI                                                                      | planned |
+| W5         | Single-command launcher, reset script and public deployment                                                | planned |
+| W8         | STUN endpoint discovery, hole punching and automatic relay fallback                                        | planned |
+| W9         | Control plane over Tor: sidecar ENS reads and payment requests                                             | planned |
+| W10        | One new Hedera service on testnet, with a HashScan link in the console                                     | planned |
+| W11        | Demo infrastructure: cloud nodes, logging RPC proxy, public console, preflight                             | planned |
+
+W6 (this documentation) is a deliverable and not a feature. W7 (Ledger approval signing) is out of scope.
+
+## CROPS
+
+Bramble targets the Ethereum Foundation's CROPS properties: censorship resistance, open source, privacy and security. To be completed by W9. The lines below are placeholders and make no claim yet, except the licence.
+
+- **C (censorship resistance):** to be completed by W9.
+- **O (open source):** to be completed by W9. Bramble is MIT-licensed today.
+- **P (privacy):** to be completed by W9. State what the RPC provider, relays and STUN servers each learn.
+- **S (security):** to be completed by W9. State how node, payer and enrollment keys are held.
+
 ## Why the integrations matter
 
 - **ENSv2** is the authorization source. Permissioned registries, per-name resolvers, and Enhanced Access Control separate enrollment, rotation, revocation, ACL, and relay-registration rights.
@@ -98,8 +137,16 @@ The paid relay proof is run separately with `brambled demo-data-relay`; it print
 
 The [build plan](docs/05_BUILD_PLAN.md) links the adversarial tests, live Sepolia transactions, two-machine runs, physical Ledger findings, and Hedera settlement IDs. The measured already-connected revocation time was 3.7 seconds with a five-second poll interval and a responsive resolver.
 
-This is a hackathon prototype. STUN and automatic hole-punch failure detection are not implemented; relay use is selected explicitly for the demo topology. Mesh IPs are auto-assigned at enroll time and peer discovery is full-mesh-by-default when no `-peer` flags are given (`docs/adr/0009-mesh-ip-allocation.md`, `docs/adr/0010-full-mesh-peer-discovery.md`) — network-layer admission only, ACL still gates service access independently. The default public Sepolia RPC endpoint is a load-balanced pool with observed multi-thousand-block sync lag between backends; **export** `SEPOLIA_RPC_URL` to a dedicated endpoint before launching admin commands and nodes for a live demo. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
+This is a hackathon prototype. STUN endpoint discovery is available through `-stun-servers` or `BRAMBLE_STUN_SERVERS`; `GET /endpoint` on the node status API reports the observation. Automatic hole-punch failure detection is not implemented; relay use is selected explicitly for the demo topology. Mesh IPs are auto-assigned at enroll time and peer discovery is full-mesh-by-default when no `-peer` flags are given (`docs/adr/0009-mesh-ip-allocation.md`, `docs/adr/0010-full-mesh-peer-discovery.md`) — network-layer admission only, ACL still gates service access independently. The default public Sepolia RPC endpoint is a load-balanced pool with observed multi-thousand-block sync lag between backends; **export** `SEPOLIA_RPC_URL` to a dedicated endpoint before launching admin commands and nodes for a live demo. Relay sessions use first-two-source UDP learning, do not handle NAT remapping, and expire after five minutes. A node key is an ordinary software key and can be copied while authorized. The payer is likewise a software key. ENS/RPC availability, administrator authority, host security, and relay availability remain dependencies.
 
 ## Open source and AI usage
 
 Licensed under the MIT License. Third-party libraries and starter code retain their own licenses. AI assistance and the human-directed design trail are disclosed in [AI usage](docs/AI_USAGE.md).
+
+## CROPS privacy (P)
+
+**P — Read from source:** configured STUN servers learn the asking node's public
+UDP address and port. STUN shares the WireGuard socket and cannot use Tor.
+Discovery stays in memory and does not publish topology to ENS. Relay operators
+can also see peer IP addresses. STUN discovery alone does not prove a direct
+path works across a NAT. See [STUN reference](brambled/README.md#stun-endpoint-discovery).

@@ -28,6 +28,43 @@ Per-track attribution and involvement narrative for the submission dashboard is 
 - `sidecar/src/tor/`, `sidecar/src/routes/tor.ts`, `sidecar/scripts/tor-smoke.ts`, `sidecar/test/tor*.test.ts`, the Tor wiring in `sidecar/src/index.ts`, `brambled/sidecar/manager.go` (`waitTorReady`) and its tests, `docs/adr/0013-tor-transport.md`: written by the Keystone agent (Claude Opus 5.5, ETH-59), committing as the account in the commit author field.
 - `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, the Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go`: ENS reads and x402 payments over Tor (ETH-60), written by Tor-Claude (Claude Sonnet 5.5).
 
+## Mumbai W8a: STUN endpoint discovery
+
+Net-Astra (OpenAI Codex) implemented and tested `brambled/stun/message.go`,
+`brambled/stun/bind.go`, `brambled/stun/bind_test.go`, `brambled/wgnode/node.go`,
+`brambled/wgnode/stun.go`, `brambled/main.go`, `brambled/statusapi/server.go`, and
+`brambled/statusapi/stun_test.go`. Documentation changes cover `README.md`,
+`brambled/README.md`, `docs/AI_USAGE.md`, and `docs/eth-36-stun-spec.md`.
+Commits use `Net-Astra (agent, Jay Kerkar)` with
+`133675904+jaykerkar0405@users.noreply.github.com` and the Paperclip co-author.
+The human-authored W8 task and Mumbai handoff set the scope and invariants.
+
+Net-Claude (Anthropic Claude) took over W8a after Net-Astra reached a provider limit. It reviewed and committed the opt-in bind wrapper in `brambled/stun/bind.go`, `brambled/stun/bind_test.go`, `brambled/wgnode/node.go`, `brambled/wgnode/stun.go`, `brambled/main.go`, `brambled/statusapi/stun_test.go`, `brambled/README.md` and `docs/eth-36-stun-spec.md`, and ran the checks. After review (ETH-89) it replaced the shared-endpoint `ClearSrc` call with a fresh endpoint per send and wrote `docs/adr/0017-stun-bind-wrapper-source-selection.md`.
+Net-Claude commits as `Net-Claude (agent, Chaitanya Kelkar)` with `chaitanyakelkar07@gmail.com` and the Paperclip co-author.
+
+## Mumbai agent-written paths
+
+Baseline: commit `28e2a8f`, tag `pre-mumbai`. Agents wrote the paths below after that commit. Each agent adds a row in the same pull request as the work. List paths, not prose. Humans approve every ADR and merge to `main`.
+
+### Accounts
+
+Each agent commits under the git identity shown here. Confirm yours with `git config user.name` before your first commit.
+
+| Agent | Lane | Commit author name | Status |
+| --- | --- | --- | --- |
+| Core-Claude | Core and console | `Core-Claude (agent, Jay Kerkar)` | Verified from `GIT_AUTHOR_NAME` on 6 Nov 2026 |
+| Core-Sol | Core and console (cross-family reviewer) | to be added by Core-Sol | Open |
+| Net-Claude | Network (W8a STUN) | `Net-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `net-claude/eth-36-stun-binding` |
+| Other lane agents | Network, Tor, Hedera, Demo and infra | to be added by each agent | Open |
+
+### Paths
+
+| Path | Ticket | Agent | Kind |
+| --- | --- | --- | --- |
+| `README.md` ("Pre-existing vs new", "CROPS" skeleton) | ETH-27 | Core-Claude | Documentation |
+| `docs/AI_USAGE.md` (this section) | ETH-27 | Core-Claude | Documentation |
+| `brambled/stun/`, `brambled/wgnode/stun.go`, `brambled/statusapi/stun_test.go`, `docs/eth-36-stun-spec.md`, `docs/adr/0017-stun-bind-wrapper-source-selection.md` | ETH-36 | Net-Astra, Net-Claude | Code, tests, documentation |
+
 ## Mumbai formatting gate correction (ETH-75)
 
 On 6 November 2026 India Standard Time (IST), Astra (OpenAI Codex) updated exactly `.prettierignore` and `docs/AI_USAGE.md` on a branch from `hackathon` commit `3bec957e435283617d44499f13c83eaabf884edc`. The commit account is `Astra (agent, Yash Kolekar) <153986822+whyash-paperclip@users.noreply.github.com>`.
@@ -37,3 +74,37 @@ On 6 November 2026 India Standard Time (IST), Astra (OpenAI Codex) updated exact
 - **Verified:** `pnpm format:check` passes, and `git diff --exit-code hackathon -- .agents/skills .claude/skills` confirms both skill trees are unchanged.
 - **Verified:** With Node.js 24.15.0, Bun 1.4.0 and Go 1.27.3, `pnpm verify` passes formatting, endpoint and local-state checks, typechecking, linting and builds. Its test stage fails in `sidecar/test/devices.test.ts`: the public Sepolia remote procedure call (RPC) endpoint returns code 4444, `pruned history unavailable`, for `eth_getLogs`. The same test fails with the original `.prettierignore`, independently of this correction.
 - **Open:** A complete `pnpm verify` pass requires a Sepolia RPC endpoint that serves the fixture registry's historical logs. Push and pull request creation remain gated on that pass, followed by Core-Claude cross-family approval.
+
+## Hermetic verification after pruned RPC history and relay failover flake (ETH-86)
+
+On 6 November 2026 IST, Keystone (Claude Code, Claude Opus 5.5) wrote the change on branch `keystone/eth-86-verify-gate`, stacked on the ETH-75 branch `astra/eth-75-format-gate` (`84bce16`), which is based on `hackathon` `3bec957`. Paths written:
+
+- `brambled/internal/testport/testport.go` (new)
+- `brambled/rendezvous/client.go`
+- `brambled/rendezvous/client_test.go`
+- `brambled/datarelay_endpoint_test.go`
+- `brambled/admission/gate1_3_test.go`
+- `brambled/gateway/forward_test.go`
+- `brambled/gateway/server_test.go`
+- `brambled/gateway/realservice_manual_test.go`
+- `brambled/rendezvous/gate1_2_test.go`
+- `brambled/rendezvous/integration_test.go`
+- `brambled/wgnode/node_test.go`
+- `sidecar/src/ens/devices.ts`
+- `sidecar/test/devices.test.ts`
+- `sidecar/test/fixtures/registry-logs.ts` (new)
+- `docs/adr/0010-full-mesh-peer-discovery.md`
+- `docs/AI_USAGE.md`
+
+Findings and changes:
+
+- **Verified:** Public Sepolia (`ethereum-sepolia-rpc.publicnode.com`) answers `eth_getLogs` over the tailnet registry's history with error 4444, `pruned history unavailable`. A human decided the project uses no dedicated archive RPC. `sidecar/test/devices.test.ts` now injects a fixture-backed RPC client, built with viem's encoders from the exact `LabelRegistered` ABI, into `listDeviceLabels`. The test asserts the exact deduplicated label list, contiguous `eth_getLogs` windows of at most 9,000 blocks, the registry address and event topic, and that a 4444 error rejects. The live scan still exists and runs only with `BRAMBLE_LIVE_SEPOLIA=1`.
+- **Verified:** The fixture tests fail when the logic breaks. Four deliberate mutations each made at least one test fail: removing deduplication, widening the window to 10,000 blocks, stopping the page loop one window early, and scanning the wrong registry address.
+- **Read from source:** `listDeviceLabels` feeds mesh-ip allocation in `admincli/src/enroll.ts`. It keeps failing hard on 4444 rather than skipping with a warning, because a partial label list could hand out a mesh-ip another device already holds.
+- **Verified:** Brambled tests bound fixed UDP ports such as 61960. Other agents' `go test` processes on the same host held those ports, and the failover test failed with `bind: address already in use`. WireGuard nodes in tests now use `ListenPort: 0` where every endpoint is a relay address, and `testport.FreeUDP` elsewhere. Two full `go test ./...` runs in parallel no longer collide.
+- **Verified:** `TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls` also failed about 1 run in 5 with free ports, after about 25.85 seconds, with `alice and bob failed to reconnect through the backup relay after failover`. A traced failing run showed two causes:
+  1. The test's fake rendezvous relay never deregistered closed connections, unlike `relay/main.go`. It forwarded and acked alice's new candidate to a connection bob had just closed. The fake now deregisters on disconnect.
+  2. `rendezvous.Exchange` resent its own offer only on a one-second tick. When the peer's offer arrived in the last second before the deadline, the call timed out and dropped the peer's candidate, which the relay had already acked. `Exchange` now resends at once when the peer's offer arrives. `TestExchangeResendsOfferAsSoonAsPeerArrives` failed 3 of 3 runs before the fix and passes after it.
+- **Verified:** With both changes, the failover test passed 20 of 20 runs, in 4 parallel processes. With only the fake relay fixed, it failed 4 of 15.
+- **Open:** `Exchange` still loses the peer's candidate if the peer's offer arrives within one relay round trip of the deadline. The window is now one round trip instead of up to one second.
+- **Open:** `sidecar/test/device.test.ts` still reads current Sepolia state live. Current state is not pruned, so it passes today, but it is not hermetic.

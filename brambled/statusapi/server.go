@@ -110,6 +110,8 @@ func (c *admissionCache) snapshot() map[string]admission.Event {
 // PeerTable is set.
 type Server struct {
 	PeerTable PeerTable
+	// EndpointSource supplies the node's in-memory STUN observation.
+	EndpointSource interface{ EndpointStatus() wgnode.EndpointStatus }
 
 	admission admissionCache
 	activity  activityBuffer
@@ -275,9 +277,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Handler returns the mux mounting /peers, /activity, /ping.
+// Handler returns the mux mounting /peers, /activity, /ping, /endpoint.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /endpoint", func(w http.ResponseWriter, _ *http.Request) {
+		state := wgnode.EndpointStatus{State: "disabled"}
+		if s.EndpointSource != nil {
+			state = s.EndpointSource.EndpointStatus()
+		}
+		writeJSON(w, state)
+	})
 	mux.HandleFunc("/peers", s.handlePeers)
 	mux.HandleFunc("/activity", s.handleActivity)
 	mux.HandleFunc("/ping", s.handlePing)

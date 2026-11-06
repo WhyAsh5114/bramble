@@ -4,6 +4,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 )
 
 // pingUntil retries Ping every second until it succeeds or deadline elapses.
@@ -43,19 +45,24 @@ func TestGate1_1_PeerRejectsUnregisteredKey(t *testing.T) {
 	underTestAddr := netip.MustParseAddr("10.99.0.1")
 	peerAddr := netip.MustParseAddr("10.99.0.2")
 
-	underTest, err := New(Config{PrivateKeyHex: underTestPriv, ListenPort: 51920, LocalAddress: underTestAddr, Netstack: true})
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	underTestPort := testport.FreeUDP(t)
+	peerPort := testport.FreeUDP(t)
+
+	underTest, err := New(Config{PrivateKeyHex: underTestPriv, ListenPort: underTestPort, LocalAddress: underTestAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting node under test: %v", err)
 	}
 	defer underTest.Close()
 
-	peer, err := New(Config{PrivateKeyHex: peerPriv, ListenPort: 51921, LocalAddress: peerAddr, Netstack: true})
+	peer, err := New(Config{PrivateKeyHex: peerPriv, ListenPort: peerPort, LocalAddress: peerAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting peer node: %v", err)
 	}
 	defer peer.Close()
 
-	underTestEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 51920)
+	underTestEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), underTestPort)
 	// The peer always knows who it's trying to reach; that's not what's under
 	// test. What's under test is whether the node under test will complete a
 	// handshake with a key it was never told about.
@@ -84,7 +91,7 @@ func TestGate1_1_PeerRejectsUnregisteredKey(t *testing.T) {
 	})
 
 	t.Run("registering the key allows the handshake", func(t *testing.T) {
-		peerEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 51921)
+		peerEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), peerPort)
 		if err := underTest.AddPeer(peerPub, netip.MustParsePrefix("10.99.0.2/32"), &peerEndpoint); err != nil {
 			t.Fatalf("registering peer on node under test: %v", err)
 		}

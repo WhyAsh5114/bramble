@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -50,16 +51,21 @@ func TestRelayMediatedHandshake(t *testing.T) {
 
 	aliceAddr := netip.MustParseAddr("10.98.0.1")
 	bobAddr := netip.MustParseAddr("10.98.0.2")
-	const aliceCandidate = "127.0.0.1:61920"
-	const bobCandidate = "127.0.0.1:61921"
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	alicePort := testport.FreeUDP(t)
+	bobPort := testport.FreeUDP(t)
 
-	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: 61920, LocalAddress: aliceAddr, Netstack: true})
+	aliceCandidate := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), alicePort).String()
+	bobCandidate := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), bobPort).String()
+
+	alice, err := wgnode.New(wgnode.Config{PrivateKeyHex: alicePriv, ListenPort: alicePort, LocalAddress: aliceAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting alice: %v", err)
 	}
 	defer alice.Close()
 
-	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: 61921, LocalAddress: bobAddr, Netstack: true})
+	bob, err := wgnode.New(wgnode.Config{PrivateKeyHex: bobPriv, ListenPort: bobPort, LocalAddress: bobAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting bob: %v", err)
 	}

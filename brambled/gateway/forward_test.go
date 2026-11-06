@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -82,23 +83,28 @@ func TestForwarder_PlainClientProxiedThroughACL(t *testing.T) {
 	deviceAddr := netip.MustParseAddr("10.102.0.1")
 	gwAddr := netip.MustParseAddr("10.102.0.2")
 
-	device, err := wgnode.New(wgnode.Config{PrivateKeyHex: devicePriv, ListenPort: 62960, LocalAddress: deviceAddr, Netstack: true})
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	devicePort := testport.FreeUDP(t)
+	gwPort := testport.FreeUDP(t)
+
+	device, err := wgnode.New(wgnode.Config{PrivateKeyHex: devicePriv, ListenPort: devicePort, LocalAddress: deviceAddr, Netstack: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer device.Close()
 
-	gw, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwPriv, ListenPort: 62961, LocalAddress: gwAddr, Netstack: true})
+	gw, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwPriv, ListenPort: gwPort, LocalAddress: gwAddr, Netstack: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer gw.Close()
 
-	gwEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 62961)
+	gwEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), gwPort)
 	if err := device.AddPeer(gwPub, netip.PrefixFrom(gwAddr, 32), &gwEp); err != nil {
 		t.Fatal(err)
 	}
-	deviceEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 62960)
+	deviceEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), devicePort)
 	if err := gw.AddPeer(devicePub, netip.PrefixFrom(deviceAddr, 32), &deviceEp); err != nil {
 		t.Fatal(err)
 	}

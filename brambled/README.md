@@ -525,3 +525,50 @@ network problem, not a config mismatch.
   flaky was a real gap, not just a documented one). Pass `-max-stale 0`
   explicitly to restore unbounded fail-open. See `admission/loop.go`'s
   package comment for the full reasoning.
+
+## STUN endpoint discovery
+
+`serve -stun-servers stun.example.org:3478,stun-backup.example.org:3478`
+enables RFC 5389 binding requests on the UDP socket WireGuard uses.
+`BRAMBLE_STUN_SERVERS` supplies the same comma-separated list when the flag is
+absent. The flag overrides the environment; an empty list disables discovery.
+Replace the example hostnames with servers you operate or trust to observe your
+public address. IPv6 literals use `[address]:port`.
+
+Discovery starts in the background and refreshes 30 seconds after each pass.
+The client tries servers in order, retransmits lost requests, and stops at the
+first successful observation. Each DNS lookup is bounded to 5 seconds and each
+resolved server address to 40 seconds. Discovery failure does not stop the node.
+
+`GET http://127.0.0.1:7899/endpoint` reports the in-memory state:
+
+```json
+{
+  "state": "discovered",
+  "endpoint": "198.51.100.4:54321",
+  "server": "stun.example.org:3478",
+  "observedAt": "2026-11-06T00:00:00Z"
+}
+```
+
+The example is illustrative. Other states are `disabled`, `discovering`, and
+`unavailable`. A new pass or failed discovery clears the old endpoint.
+`unavailable` includes a generic `error`; `observedAt` appears only on success.
+The existing `-status-bind` and `-status-port` options control this API.
+
+**Verified, rootless fake-server test:** `go test ./statusapi -run
+TestSTUNEndpointRootless -v` discovers the socket address, reads it through the
+status handler, and completes a WireGuard handshake and ICMP exchange through
+that bind. `go test ./stun` covers retransmission, transaction/source matching,
+malformed responses, IPv4/IPv6 address decoding, fallback, cancellation, and
+bind close. **Open:** observations through real public STUN services and NATs.
+
+The STUN server learns the node's public IP and UDP port. STUN cannot use Tor.
+An observed mapping does not prove reachability from a peer. This feature does
+not exchange candidates, change peer admission, publish to ENS, select relay
+fallback, or replace the existing `-my-candidate` option.
+
+With STUN enabled, outbound packets use the kernel's current route instead of
+WireGuard's cached local source/interface. This avoids stale source reuse because
+the wrapped bind cannot use wireguard-go's Linux route-change listener. Disabled
+nodes retain the default bind. Real multihomed route changes remain **Open**.

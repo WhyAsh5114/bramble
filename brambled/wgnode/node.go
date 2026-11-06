@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/stun"
+
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -78,9 +80,11 @@ func PublicKeyFromPrivateHex(privateHex string) (string, error) {
 }
 
 type Node struct {
-	dev  *device.Device
-	tnet *netstack.Net
-	cfg  Config
+	dev       *device.Device
+	tnet      *netstack.Net
+	cfg       Config
+	stunBind  *stun.Bind
+	discovery discoveryState
 	// interfaceName is non-empty only for a real OS TUN node — used to add
 	// and remove per-peer routes in AddPeer/RemovePeer. Empty in netstack
 	// mode, where there's no OS route table to touch.
@@ -88,6 +92,8 @@ type Node struct {
 }
 
 type Config struct {
+	// EnableSTUN shares the WireGuard bind with endpoint discovery.
+	EnableSTUN bool
 	// PrivateKeyHex is the node's own WireGuard private key, hex-encoded.
 	PrivateKeyHex string
 	// ListenPort is the UDP port this node's outer transport binds to.
@@ -109,6 +115,12 @@ type Config struct {
 }
 
 func New(cfg Config) (*Node, error) {
+	bind := conn.NewDefaultBind()
+	var stunBind *stun.Bind
+	if cfg.EnableSTUN {
+		stunBind = stun.NewBind(bind)
+		bind = stunBind
+	}
 	var dev *device.Device
 	var tnet *netstack.Net
 	var interfaceName string
@@ -119,7 +131,7 @@ func New(cfg Config) (*Node, error) {
 			return nil, fmt.Errorf("creating virtual TUN: %w", err)
 		}
 		tnet = n
-		dev = device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
+		dev = device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelSilent, ""))
 	} else {
 		name := cfg.InterfaceName
 		if name == "" {
@@ -138,7 +150,7 @@ func New(cfg Config) (*Node, error) {
 			return nil, fmt.Errorf("configuring interface %q: %w", realName, err)
 		}
 		interfaceName = realName
-		dev = device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
+		dev = device.NewDevice(tunDev, bind, device.NewLogger(device.LogLevelSilent, ""))
 	}
 
 	conf := fmt.Sprintf("private_key=%s\nlisten_port=%d\n", cfg.PrivateKeyHex, cfg.ListenPort)
@@ -152,7 +164,7 @@ func New(cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("bringing device up: %w", err)
 	}
 
-	return &Node{dev: dev, tnet: tnet, cfg: cfg, interfaceName: interfaceName}, nil
+	return &Node{dev: dev, tnet: tnet, cfg: cfg, interfaceName: interfaceName, stunBind: stunBind}, nil
 }
 
 func defaultInterfaceName() string {

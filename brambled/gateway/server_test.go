@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -109,19 +110,25 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 	gwAAddr := netip.MustParseAddr("10.100.0.2")
 	gwBAddr := netip.MustParseAddr("10.100.0.3")
 
-	device, err := wgnode.New(wgnode.Config{PrivateKeyHex: devicePriv, ListenPort: 62950, LocalAddress: deviceAddr, Netstack: true})
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	devicePort := testport.FreeUDP(t)
+	gwAPort := testport.FreeUDP(t)
+	gwBPort := testport.FreeUDP(t)
+
+	device, err := wgnode.New(wgnode.Config{PrivateKeyHex: devicePriv, ListenPort: devicePort, LocalAddress: deviceAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting device: %v", err)
 	}
 	defer device.Close()
 
-	gwA, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwAPriv, ListenPort: 62951, LocalAddress: gwAAddr, Netstack: true})
+	gwA, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwAPriv, ListenPort: gwAPort, LocalAddress: gwAAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting gatewayA: %v", err)
 	}
 	defer gwA.Close()
 
-	gwB, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwBPriv, ListenPort: 62952, LocalAddress: gwBAddr, Netstack: true})
+	gwB, err := wgnode.New(wgnode.Config{PrivateKeyHex: gwBPriv, ListenPort: gwBPort, LocalAddress: gwBAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting gatewayB: %v", err)
 	}
@@ -136,10 +143,10 @@ func TestGate2_3_AgentCannotReachOutsideACL(t *testing.T) {
 			t.Fatalf("AddPeer: %v", err)
 		}
 	}
-	mustAddPeer(device, gwAPub, gwAAddr, 62951)
-	mustAddPeer(device, gwBPub, gwBAddr, 62952)
-	mustAddPeer(gwA, devicePub, deviceAddr, 62950)
-	mustAddPeer(gwB, devicePub, deviceAddr, 62950)
+	mustAddPeer(device, gwAPub, gwAAddr, gwAPort)
+	mustAddPeer(device, gwBPub, gwBAddr, gwBPort)
+	mustAddPeer(gwA, devicePub, deviceAddr, devicePort)
+	mustAddPeer(gwB, devicePub, deviceAddr, devicePort)
 
 	if !pingUntilConnected(t, device, gwAAddr, 8*time.Second) {
 		t.Fatal("device never completed a handshake with gatewayA")

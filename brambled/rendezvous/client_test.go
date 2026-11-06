@@ -158,3 +158,79 @@ func TestExchangeTimesOutIfPeerNeverArrives(t *testing.T) {
 		t.Fatal("expected a timeout error when the peer never registers")
 	}
 }
+
+// TestExchangeResendsOfferAsSoonAsPeerArrives covers a peer that registers
+// late in this side's window. Its offer proves it is registered, so this
+// side must resend its own unacked offer at once, not on the next one-second
+// retry tick. Waiting for the tick lost the peer's candidate whenever it
+// arrived in the last second before the deadline: the relay had already
+// acked the peer's offer, so the peer never resent it, and this side's next
+// Exchange never saw it. That stranded the adopting side in
+// TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls (found
+// 6 November 2026, ETH-86).
+//
+// The relay here is scripted, not the fake above: it rejects this side's
+// offers until it has delivered the peer's offer, 1.3s in, and acks every
+// offer after that. With a 2s timeout, the 1s tick fires before the peer
+// arrives and the 2s tick fires after the deadline, so only an immediate
+// resend can succeed.
+func TestExchangeResendsOfferAsSoonAsPeerArrives(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		accepted := time.Now()
+		var encMu sync.Mutex
+		enc := json.NewEncoder(conn)
+		send := func(m message) {
+			encMu.Lock()
+			defer encMu.Unlock()
+			_ = enc.Encode(m)
+		}
+
+		var peerArrived sync.Mutex
+		arrived := false
+		go func() {
+			time.Sleep(time.Until(accepted.Add(1300 * time.Millisecond)))
+			peerArrived.Lock()
+			arrived = true
+			peerArrived.Unlock()
+			send(message{Type: "offer", From: "peer", Candidate: "10.0.0.2:51820"})
+		}()
+
+		dec := json.NewDecoder(conn)
+		for {
+			var m message
+			if err := dec.Decode(&m); err != nil {
+				return
+			}
+			if m.Type != "offer" {
+				continue
+			}
+			peerArrived.Lock()
+			ok := arrived
+			peerArrived.Unlock()
+			if ok {
+				send(message{Type: "ack"})
+			} else {
+				send(message{Type: "error", Message: "peer not registered"})
+			}
+		}
+	}()
+
+	got, err := Exchange(ln.Addr().String(), "own", "peer", "10.0.0.1:51820", "", 2*time.Second)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if got != "10.0.0.2:51820" {
+		t.Fatalf("got candidate %q, want 10.0.0.2:51820", got)
+	}
+}

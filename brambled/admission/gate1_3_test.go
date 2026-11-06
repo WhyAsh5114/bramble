@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -50,13 +51,18 @@ func TestGate1_3_RevocationDropsAlreadyConnectedPeer(t *testing.T) {
 	underTestAddr := netip.MustParseAddr("10.96.0.1")
 	peerAddr := netip.MustParseAddr("10.96.0.2")
 
-	underTest, err := wgnode.New(wgnode.Config{PrivateKeyHex: underTestPriv, ListenPort: 61940, LocalAddress: underTestAddr, Netstack: true})
+	// Free ports, not fixed ones: fixed ports collide when several `go test`
+	// processes share a host (see brambled/internal/testport).
+	underTestPort := testport.FreeUDP(t)
+	peerPort := testport.FreeUDP(t)
+
+	underTest, err := wgnode.New(wgnode.Config{PrivateKeyHex: underTestPriv, ListenPort: underTestPort, LocalAddress: underTestAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting node under test: %v", err)
 	}
 	defer underTest.Close()
 
-	peer, err := wgnode.New(wgnode.Config{PrivateKeyHex: peerPriv, ListenPort: 61941, LocalAddress: peerAddr, Netstack: true})
+	peer, err := wgnode.New(wgnode.Config{PrivateKeyHex: peerPriv, ListenPort: peerPort, LocalAddress: peerAddr, Netstack: true})
 	if err != nil {
 		t.Fatalf("starting peer node: %v", err)
 	}
@@ -64,7 +70,7 @@ func TestGate1_3_RevocationDropsAlreadyConnectedPeer(t *testing.T) {
 
 	// The peer side is static config, not under test — it just needs to be
 	// reachable so the under-test side can complete a real handshake.
-	underTestEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 61940)
+	underTestEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), underTestPort)
 	if err := peer.AddPeer(underTestPub, netip.PrefixFrom(underTestAddr, 32), &underTestEndpoint); err != nil {
 		t.Fatalf("configuring peer's view of the node under test: %v", err)
 	}
@@ -74,7 +80,7 @@ func TestGate1_3_RevocationDropsAlreadyConnectedPeer(t *testing.T) {
 	resolver := fakeResolver{
 		"peer": {Fullname: "peer.acme.eth", Pubkey: strPtr(peerPub), Status: 2, Expiry: itoa(future)},
 	}
-	peerEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 61941)
+	peerEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), peerPort)
 	loop := &Loop{
 		Resolver: resolver,
 		Table:    underTest,

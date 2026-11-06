@@ -104,6 +104,14 @@ func Exchange(addr, ownPubkey, peerPubkey, myCandidate, token string, timeout ti
 			switch ev.kind {
 			case "offer":
 				haveOffer, peerCandidate = true, ev.candidate
+				// The peer's offer proves it is registered now, so resend
+				// ours at once rather than on the next retry tick. Waiting
+				// for the tick loses the peer's candidate when its offer
+				// lands in the last second before the deadline: the relay
+				// has already acked the peer, so it never resends (ETH-86).
+				if !ownOfferAcked {
+					_ = sendOffer()
+				}
 			case "ack":
 				ownOfferAcked = true
 			case "err":
