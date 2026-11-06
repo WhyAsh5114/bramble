@@ -2,8 +2,8 @@ import { createPublicClient, http, keccak256, toHex } from 'viem'
 import { sepolia } from 'viem/chains'
 import { normalize } from 'viem/ens'
 import { torFetch } from '../tor'
-import { RPC_URL, UNIVERSAL_RESOLVER, registryAbi, tailnetName, tailnetRegistry } from './config'
-import { fastResolveEnabled, readDeviceFast } from './fast-resolve'
+import { RPC_URL, UNIVERSAL_RESOLVER, registryAbi, tailnetName, tailnetRegistry, fastResolveEnabled } from './config'
+import { readDeviceFast } from './fast-resolve'
 
 // viem ships a built-in Universal Resolver address for Sepolia that points at
 // the production/beta ENSv2 deployment, not the hackathon one. Overwriting it

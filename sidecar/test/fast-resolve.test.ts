@@ -21,7 +21,7 @@ const abi = parseAbi([
 const resolver = '0x0000000000000000000000000000000000001234'
 const zeroHash = `0x${'00'.repeat(32)}` as Hex
 
-async function rpc() {
+async function rpc(latencyMs = 0) {
   const state = {
     text: {
       pubkey: fixture.expectedPubkey,
@@ -32,6 +32,7 @@ async function rpc() {
     } as Record<string, string>,
     expiry: 4_000_000_000n,
     failMulticall: false,
+    failAll: false,
   }
   function answer(data: Hex): Hex {
     const call = decodeFunctionData({ abi, data })
@@ -64,8 +65,10 @@ async function rpc() {
     }
   }
   const tor = await startFakeTor(async (_url, init) => {
+    if (latencyMs) await new Promise((resolve) => setTimeout(resolve, latencyMs))
     const body = JSON.parse(new TextDecoder().decode(init.body as Uint8Array))
     try {
+      if (state.failAll) throw new Error('RPC unavailable')
       const result = answer(body.params[0].data)
       return Response.json({ jsonrpc: '2.0', id: body.id, result })
     } catch {
@@ -158,4 +161,37 @@ describe('flagged device resolution', () => {
     const otherNode = createEnsClient(torFetch('ens'))
     expect((await resolveDevice('worker', otherNode)).meshIP).toBe('10.77.0.9/24')
   })
+
+  it('rejects when fresh authorization is unavailable even with a warm routing cache', async () => {
+    vi.stubEnv('BRAMBLE_FAST_RESOLVE', '1')
+    const { client, state } = await rpc()
+    await resolveDevice('worker', client)
+    state.failAll = true
+    await expect(resolveDevice('worker', client)).rejects.toThrow()
+  })
+
+  it.skipIf(process.env.BRAMBLE_RESOLVE_BENCH !== '1')(
+    'reports warm fixture timings (50 ms per RPC; not cloud acceptance)',
+    async () => {
+      for (const flag of ['', '1']) {
+        vi.stubEnv('BRAMBLE_FAST_RESOLVE', flag)
+        const { client, tor } = await rpc(50)
+        await resolveDevice('worker', client)
+        for (let sample = 1; sample <= 2; sample++) {
+          const beforeCalls = tor.calls.length
+          const start = performance.now()
+          expect((await resolveDevice('worker', client)).acl).toEqual(['grant'])
+          console.info(
+            JSON.stringify({
+              flag: flag || 'off',
+              sample,
+              ms: +(performance.now() - start).toFixed(1),
+              rpcCalls: tor.calls.length - beforeCalls,
+            })
+          )
+        }
+        stopTor()
+      }
+    }
+  )
 })

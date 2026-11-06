@@ -17,10 +17,6 @@ const resolverAbi = parseAbi([
   'function text(bytes32 node, string key) view returns (string)',
 ])
 
-export function fastResolveEnabled(): boolean {
-  return process.env.BRAMBLE_FAST_RESOLVE === '1'
-}
-
 export async function readDeviceFast(label: string, fullname: string, client: EnsClient) {
   const labelhash = BigInt(keccak256(toHex(label)))
   const meshIP = cachedSlowText(client, fullname, 'mesh-ip')

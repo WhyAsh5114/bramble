@@ -52,6 +52,10 @@ export const RPC_URL = process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-
 
 export const SIDECAR_PORT = Number(process.env.BRAMBLE_SIDECAR_PORT || 7890)
 
+export function fastResolveEnabled(): boolean {
+  return process.env.BRAMBLE_FAST_RESOLVE === '1'
+}
+
 // A node's sidecar belongs to exactly one tailnet, and must know which
 // subregistry contract governs it — this is bootstrap config, not a record
 // schema decision (Phase 2 still owns record schema / wildcard-resolution

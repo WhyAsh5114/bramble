@@ -1,6 +1,5 @@
 import type { EnsClient } from './client'
-import { tailnetRegistry } from './config'
-import { fastResolveEnabled } from './fast-resolve'
+import { tailnetRegistry, fastResolveEnabled } from './config'
 
 // Only routing metadata belongs here. In particular, pubkey stays fresh:
 // clearing it is another revocation mechanism (ADR 0004).

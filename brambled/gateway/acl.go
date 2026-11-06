@@ -84,21 +84,24 @@ func CheckACL(resolver Resolver, myPrivateKeyHex, myLabel, requesterLabel, servi
 		record *sidecar.DeviceRecord
 		err    error
 	}
-	granters := make([]result, len(me.ACLGranters))
+	granters := make(chan result, len(me.ACLGranters))
 	if fast {
-		var wg sync.WaitGroup
-		for i, label := range me.ACLGranters {
-			wg.Add(1)
+		for _, label := range me.ACLGranters {
 			go func() {
-				defer wg.Done()
-				granters[i].record, granters[i].err = resolver.ResolveDevice(label)
+				record, err := resolver.ResolveDevice(label)
+				// Buffered so a later result can finish after a valid grant
+				// has already allowed the request.
+				granters <- result{record: record, err: err}
 			}()
 		}
-		wg.Wait()
 	}
-	for i, granterLabel := range me.ACLGranters {
-		granter, err := granters[i].record, granters[i].err
-		if !fast {
+	for _, granterLabel := range me.ACLGranters {
+		var granter *sidecar.DeviceRecord
+		var err error
+		if fast {
+			completed := <-granters
+			granter, err = completed.record, completed.err
+		} else {
 			granter, err = resolver.ResolveDevice(granterLabel)
 		}
 		if err != nil || granter.Pubkey == nil || *granter.Pubkey == "" || granter.Revoked {
