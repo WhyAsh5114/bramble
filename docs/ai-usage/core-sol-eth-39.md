@@ -35,3 +35,12 @@ Verified: `go test . -run TestAdmissionTraversal -count=1 -v` uses metered
 rendezvous and a fresh relay port for each allocation. Two admitted nodes share
 one allocation, exchange encrypted traffic, and stop traversal on revocation.
 `go test -race -tags nattest ./traversal ./statusapi -count=2` passes.
+
+Review fixes: preserve the relay receive clock across failed direct retries;
+identify forced-relay announcements without misreporting them as direct.
+Both regression tests failed before their fixes and passed afterwards.
+
+- `brambled/netlab_role_test.go`
+
+The NAT lab role now accepts typed endpoint announcements through the production
+parser. The live namespace/Docker lab is Open; this run does not execute it.

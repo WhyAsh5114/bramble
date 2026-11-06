@@ -88,6 +88,9 @@ func (c *Controller) Run(ctx context.Context) {
 	var nextProbe, nextRelay time.Time
 	lastRx := int64(-1)
 	lastReceive := time.Now()
+	var activeRelay netip.AddrPort
+	var relayLastReceive time.Time
+	var relayLastRx int64
 	fallback := func() {
 		if !relay.IsValid() && c.Relay != nil && !time.Now().Before(nextRelay) {
 			nextRelay = time.Now().Add(c.RetryInterval)
@@ -101,9 +104,14 @@ func (c *Controller) Run(ctx context.Context) {
 		}
 		if relay.IsValid() {
 			if c.Node.SetPeerPath(c.Peer, relay) == nil {
-				lastReceive = time.Now()
+				if activeRelay != relay {
+					activeRelay = relay
+					relayLastReceive = time.Now()
+				}
+				// Discard bytes received during the direct attempt. Only
+				// subsequent receives on this relay refresh its stall clock.
 				if p, ok := c.peer(); ok {
-					lastRx = p.RxBytes
+					relayLastRx = p.RxBytes
 				}
 				_ = c.Node.InitiateHandshake(c.Peer)
 				emit("relay")
@@ -184,15 +192,15 @@ func (c *Controller) Run(ctx context.Context) {
 				}
 			case "relay", "unavailable":
 				if state == "relay" {
-					if p.RxBytes != lastRx && p.Endpoint == relay.String() {
-						lastRx = p.RxBytes
-						lastReceive = now
+					if p.RxBytes != relayLastRx && p.Endpoint == relay.String() {
+						relayLastRx = p.RxBytes
+						relayLastReceive = now
 					}
 					grace := c.StallTimeout
 					if !p.Handshaked() {
 						grace += c.HandshakeTimeout
 					}
-					if now.Sub(lastReceive) >= grace {
+					if now.Sub(relayLastReceive) >= grace {
 						retiredRelay = relay
 						relay = netip.AddrPort{}
 						fallback()

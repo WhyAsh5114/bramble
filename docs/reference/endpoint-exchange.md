@@ -42,6 +42,8 @@ ep1:srflx=203.0.113.7:41000,host=192.168.1.5:51820
 
 A candidate with no `ep1:` prefix is a bare `ip:port`. The receiver decodes it as one `static` endpoint. The empty string means the peer published no address.
 
+Explicit relay routing publishes `ep1:relay=<address>,static=<address>`. A W8d receiver keeps the first known entry (`relay`) and drops the duplicate. An earlier `ep1:` parser skips the unknown relay kind and keeps the static entry, preserving connectivity.
+
 ## Limits
 
 | Limit                       | Value |

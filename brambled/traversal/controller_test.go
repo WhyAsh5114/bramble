@@ -307,3 +307,31 @@ func TestProbeReplyDoesNotCountAsAuthenticatedDirectPath(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedDirectRetriesDoNotPostponeStalledRelayRenewal(t *testing.T) {
+	stun := stunServer(t)
+	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
+	b := newPeer(t, nattest.FullCone, "127.0.0.3", "10.77.0.2", stun)
+	admit(t, a, b) // UDP probes work, but b refuses a's WireGuard handshake.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-done })
+	allocations := make(chan struct{}, 20)
+	c := traversal.Controller{Node: a.node, Peer: b.pub,
+		Learn: func(context.Context) (rendezvous.Announcement, error) {
+			return rendezvous.Announcement{{Kind: rendezvous.KindSTUN, Addr: b.endpoint}}, nil
+		},
+		Relay:            func(context.Context) (netip.AddrPort, error) { allocations <- struct{}{}; return relayServer(t), nil },
+		HandshakeTimeout: 300 * time.Millisecond, RetryInterval: 100 * time.Millisecond, StallTimeout: 2 * time.Second,
+	}
+	go func() { defer close(done); c.Run(ctx) }()
+	timer := time.NewTimer(6 * time.Second)
+	defer timer.Stop()
+	for range 2 {
+		select {
+		case <-allocations:
+		case <-timer.C:
+			t.Fatal("failed direct retries postponed stalled relay renewal")
+		}
+	}
+}

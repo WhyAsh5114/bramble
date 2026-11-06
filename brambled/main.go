@@ -585,7 +585,11 @@ func relayRoutedEndpoint(node keepaliveSetter, m relayPayer, pool dataRelayFlag,
 	if u := hashscanTestnetTxURL(session.settlementTxID); u != "" {
 		fmt.Fprintf(os.Stderr, "  %s\n", u)
 	}
-	if _, _, err := exchangeAnyMetered(relays, m, own, peerPubkey, session.candidate, ttl); err != nil {
+	// New peers retain the relay kind. Pre-W8d ep1 parsers skip the unknown
+	// relay entry, then accept the duplicate static address for compatibility.
+	// New parsers keep the first known occurrence and discard the duplicate.
+	candidate := "ep1:relay=" + session.candidate + ",static=" + session.candidate
+	if _, _, err := exchangeAnyMetered(relays, m, own, peerPubkey, candidate, ttl); err != nil {
 		return nil, "", err
 	}
 	return &relayEndpoint, session.relayLabel, nil
