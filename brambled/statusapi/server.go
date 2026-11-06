@@ -146,6 +146,7 @@ type Server struct {
 
 	admission admissionCache
 	activity  activityBuffer
+	paths     pathCache
 }
 
 // OnAdmissionEvent is meant to be assigned directly to admission.Loop.OnEvent.
@@ -190,7 +191,9 @@ type PeerStatus struct {
 	LastHandshakeUnixNs int64    `json:"lastHandshakeUnixNs"`
 	RxBytes             int64    `json:"rxBytes"`
 	// Endpoint is the peer's current WireGuard UDP endpoint, if known.
-	Endpoint string `json:"endpoint,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Path           string `json:"path"`
+	TraversalState string `json:"traversalState,omitempty"`
 }
 
 func (s *Server) wgPeersByPubkey() (map[string]wgnode.PeerInfo, error) {
@@ -218,13 +221,16 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 	admitted := s.admission.snapshot()
 	out := make([]PeerStatus, 0, len(admitted))
 	for label, ev := range admitted {
-		ps := PeerStatus{Label: label, PublicKeyHex: ev.PublicKey, Authorized: ev.Authorized}
+		ps := PeerStatus{Label: label, PublicKeyHex: ev.PublicKey, Authorized: ev.Authorized, Path: "unknown"}
 		if wp, ok := byPubkey[ev.PublicKey]; ok {
 			ps.AllowedIPs = wp.AllowedIPs
 			ps.Handshaked = wp.Handshaked()
 			ps.LastHandshakeUnixNs = wp.LastHandshakeUnixNs
 			ps.RxBytes = wp.RxBytes
 			ps.Endpoint = wp.Endpoint
+			if ev.Authorized {
+				ps.Path, ps.TraversalState = s.path(label, ev.PublicKey)
+			}
 		}
 		out = append(out, ps)
 	}

@@ -178,7 +178,7 @@ func connectSponsoredPair(t *testing.T, sponsorBytes int64, handler http.Handler
 			cloudErr = err
 			return
 		}
-		addr, err := netip.ParseAddrPort(candidate)
+		addr, err := peerEndpointFromCandidate(candidate)
 		if err != nil {
 			cloudErr = err
 			return

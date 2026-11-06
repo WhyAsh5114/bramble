@@ -26,6 +26,8 @@ const (
 	KindSTUN EndpointKind = "srflx"
 	// KindHost is a local interface address, useful only on a shared LAN.
 	KindHost EndpointKind = "host"
+	// KindRelay identifies a shared data-relay session.
+	KindRelay EndpointKind = "relay"
 )
 
 const (
@@ -52,7 +54,7 @@ type Announcement []Endpoint
 
 // kindPreference orders endpoints for callers that can try only one:
 // operator intent first, then STUN, then LAN-only addresses.
-var kindPreference = []EndpointKind{KindStatic, KindSTUN, KindHost}
+var kindPreference = []EndpointKind{KindStatic, KindSTUN, KindHost, KindRelay}
 
 func knownKind(k EndpointKind) bool {
 	for _, known := range kindPreference {

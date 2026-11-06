@@ -492,14 +492,10 @@ network problem, not a config mismatch.
   follows `wg-quick`'s own macOS/Linux convention: address assignment plus,
   on macOS, an explicit whole-local-subnet route — Linux's `ip addr add`
   creates its own kernel route automatically, no separate step needed).
-- **STUN and hole punching aren't implemented.** The rendezvous relay
-  carries candidate exchange, but there's no NAT traversal for the harder
-  two-NAT case — only the laptop-to-VPS topology (VPS has a public IP,
-  needs no traversal on its side) is currently supported end to end.
-  `10_DAY0_GATES.md` Gate 0.2's own note explicitly separates this easier
-  case from the harder one. Multi-relay failover is still deferred until this
-  exists — Gate 1.2's hostile-relay test itself doesn't need it (see
-  `docs/05_BUILD_PLAN.md` Gate 1.2, ✅ verified).
+- **Real two-NAT traversal remains Open.** With STUN enabled, rootless
+  tests exercise direct WireGuard paths through simulated restricted-cone
+  NATs, automatic relay fallback for symmetric or blocked paths, and direct
+  recovery after unblocking. These tests do not prove public-cloud NAT behavior.
 - **Authorization ignores the registry's `status` field**, using only
   `pubkey != nil && expiry > now`. `status`'s enum meaning isn't documented
   anywhere verified (our one fixture reads back `2`) — see
@@ -583,9 +579,43 @@ malformed responses, IPv4/IPv6 address decoding, fallback, cancellation, and
 bind close. **Open:** observations through real public STUN services and NATs.
 
 The STUN server learns the node's public IP and UDP port. STUN cannot use Tor.
-An observed mapping does not prove reachability from a peer. This feature does
-not exchange candidates, change peer admission, publish to ENS, select relay
-fallback, or replace the existing `-my-candidate` option.
+An observed mapping does not prove reachability from a peer. With STUN enabled,
+`serve` exchanges its current observation through rendezvous for admitted peers
+without static endpoints. It sends UDP probes on the shared WireGuard socket,
+then requires a fresh authenticated WireGuard handshake and received traffic
+before reporting a direct path. No endpoint is written to ENS.
+
+The initial handshake timeout is 8 seconds. Failure selects a data relay from
+`-data-relay` or ENS relay discovery, subject to the existing price and session
+cost limits. The node with the lower WireGuard public key buys one session and
+announces its address as `relay`; both ends use that same socket. The existing
+payer supplies either paid or operator-sponsored sessions. A stalled relay
+session triggers renewal. No available relay means `unavailable`, with retries.
+
+Direct paths use a 1-second persistent keepalive and a 15-second received-traffic
+stall timeout. A direct stall selects the relay. While relayed, UDP probes run
+in the background every 3 seconds without changing the WireGuard endpoint.
+A successful probe starts a bounded handshake attempt on the direct candidate;
+a probe reply alone never establishes a direct path. An unsuccessful attempt
+returns to the relay. The controller currently tries the preferred direct
+candidate (`static`, then `srflx`, then `host`), not every announced address.
+
+`-peer` endpoints stay static. `-relay-peer` and `-relay-first` preserve explicit
+relay routing. To use automatic traversal, configure STUN on both nodes, keep
+rendezvous and a data-relay pool available, and omit those forced-routing options.
+`-my-candidate` can still supply an additional direct candidate.
+
+`GET /peers` includes `path` (`direct`, `relayed`, or `unknown`) and
+`traversalState` (`probing`, `direct`, `relay`, or `unavailable`) for automatic
+traversal. `GET /activity` includes `path` transitions and `stun` observations.
+Revocation cancels traversal; late results cannot recreate a removed peer.
+
+**Verified, rootless integration tests on 6 November 2026:**
+`go test -tags nattest ./traversal` covers cone-NAT direct pings, symmetric-NAT
+fallback, blocked-path fallback and recovery, and removed-peer rejection.
+`go test . -run TestAdmissionTraversal` exercises metered rendezvous, one elected
+relay buyer, a shared relay tunnel, and cancellation on revocation.
+**Open:** real two-NAT cloud verification. Live cloud nodes are operator-owned.
 
 With STUN enabled, outbound packets use the kernel's current route instead of
 WireGuard's cached local source/interface. This avoids stale source reuse because
