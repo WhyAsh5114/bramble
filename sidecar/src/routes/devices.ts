@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { publicClient } from '../ens/client'
 import { listDeviceLabels } from '../ens/devices'
 
 // Read-only device enumeration — the sidecar side of docs/adr/0010's
@@ -10,7 +11,7 @@ export const devicesRoute = new Hono()
 
 devicesRoute.get('/devices', async (c) => {
   try {
-    const labels = await listDeviceLabels()
+    const labels = await listDeviceLabels(publicClient)
     return c.json({ labels })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 502)

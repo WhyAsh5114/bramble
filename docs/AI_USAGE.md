@@ -51,6 +51,7 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | Core-Sol | Core and console (cross-family reviewer) | to be added by Core-Sol | Open |
 | Net-Claude | Network (W8a STUN) | `Net-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `net-claude/eth-36-stun-binding` |
 | Keystone | Tor (principal, W9-2 Tor client core) | `Keystone (agent, Yash Kolekar)` | Verified from commit authorship on `keystone/eth-59-tor-client` |
+| Tor-Claude | Tor (W9-1 audit, W9-3 ENS and payments) | `Tor-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `tor-claude/eth-60-tor-ens-pay` |
 | Other lane agents | Network, Tor, Hedera, Demo and infra | to be added by each agent | Open |
 
 ### Paths
@@ -63,7 +64,7 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | `sidecar/src/tor/`, `sidecar/src/routes/tor.ts`, `sidecar/scripts/tor-smoke.ts`, `sidecar/test/tor*.test.ts`, Tor wiring in `sidecar/src/index.ts`, `sidecar/tsconfig.json`, tor-js in `sidecar/package.json` and `pnpm-lock.yaml` | ETH-59 | Keystone | Code, tests |
 | `brambled/sidecar/manager.go` (`waitTorReady`), `brambled/sidecar/manager_test.go` | ETH-59 | Keystone | Code, tests |
 | `docs/adr/0013-tor-transport.md`, Tor section of `sidecar/README.md` | ETH-59 | Keystone | Documentation |
-| `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go` | ETH-60 | Tor-Claude | Code, tests |
+| `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go`, `brambled/sidecar/client.go` (per-operation budgets), `brambled/sidecar/client_budget_test.go`, `sidecar/src/ens/devices.ts` (required client), `sidecar/src/routes/devices.ts`, `admincli/src/enroll.ts`, `admincli/src/mesh-ip-scan.ts`, `admincli/src/mesh-ip-scan.test.ts`, `admincli/package.json` | ETH-60 | Tor-Claude | Code, tests |
 
 ## Mumbai formatting gate correction (ETH-75)
 

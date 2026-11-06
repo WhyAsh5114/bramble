@@ -43,7 +43,7 @@ import { accountFromEnv, hackathonSepolia, publicClient } from './setup'
 import { registryWriteAbi, resolverWriteAbi } from './roles'
 import { connectLedgerAccount } from './ledger-eth-sign'
 import { allocateMeshIP } from './mesh-ip'
-import { listDeviceLabels } from '../../sidecar/src/ens/devices'
+import { usedMeshIPs } from './mesh-ip-scan'
 
 const verifiableFactoryAbi = parseAbi([
   'function deployProxy(address implementation, uint256 salt, bytes data) returns (address proxy)',
@@ -133,11 +133,7 @@ async function main() {
     if (readBack !== pubkey) throw new Error(`pubkey did not round-trip: got ${JSON.stringify(readBack)}`)
 
     console.log('\n[4/4] Allocating mesh-ip...')
-    const otherLabels = (await listDeviceLabels()).filter((l) => l !== deviceLabel)
-    const usedMeshIPs = await Promise.all(
-      otherLabels.map((l) => publicClient.getEnsText({ name: normalize(`${l}.${tailnetName()}`), key: 'mesh-ip' }))
-    )
-    const meshIP = allocateMeshIP(usedMeshIPs)
+    const meshIP = allocateMeshIP(await usedMeshIPs(publicClient, deviceLabel))
     await writeAndWait('setText(mesh-ip)', {
       address: resolverAddress,
       abi: resolverWriteAbi,

@@ -2,6 +2,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,16 +54,69 @@ type RendezvousTokenResponse struct {
 	SettlementTxID string `json:"settlementTxId,omitempty"`
 }
 
-// sidecarHTTPClient bounds how long any call to the local sidecar can block
-// — payment calls (RendezvousToken, DataRelaySession) run inside tight
-// retry loops (watchDataRelayFailover, watchDataRelayAdopt), and
-// ResolveDevice runs inside admission's sequential per-peer sync pass
-// (admission/loop.go's SyncOnce), so one hung request would otherwise
-// stall either indefinitely — http.Get/http.Post's use of
-// http.DefaultClient has no timeout at all. Every call in this file is a
-// loopback call to the local sidecar process, so a single shared timeout is
-// appropriate for all of them.
-var sidecarHTTPClient = &http.Client{Timeout: 8 * time.Second}
+// Every call here is a loopback call to the local sidecar, but the sidecar
+// then sends its ENS reads and x402 payments through Tor (ADR 0013), where
+// the handoff measured 21 s for a first request and 4-5 s for later ones.
+// The sidecar allows 60 s per ENS RPC and a device resolve makes seven reads
+// in a row, so a flat 8 s client timeout would abandon valid answers. Each
+// call therefore gets a budget for the whole operation, still bounded so one
+// hung request cannot stall the retry loops that call these
+// (watchDataRelayFailover, watchDataRelayAdopt) or admission's sequential
+// per-peer SyncOnce pass; http.DefaultClient has no timeout at all.
+var (
+	// ensReadBudget covers ResolveDevice (7 sequential reads x 60 s = 7 min)
+	// and the chunked log scans behind Relays and ListDevices.
+	ensReadBudget = 8 * time.Minute
+	// paymentBudget covers an x402 purchase: the unpaid request, the signed
+	// retry and the Hedera settlement, all through Tor.
+	paymentBudget = 5 * time.Minute
+)
+
+var sidecarHTTPClient = &http.Client{}
+
+// cancelOnClose releases the request's deadline once the caller has read and
+// closed the body, so the budget spans the body read as well as the headers.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
+func doWithin(req *http.Request, cancel context.CancelFunc) (*http.Response, error) {
+	resp, err := sidecarHTTPClient.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+func getWithin(url string, budget time.Duration) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return doWithin(req, cancel)
+}
+
+func postJSONWithin(url string, body []byte, budget time.Duration) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return doWithin(req, cancel)
+}
 
 // RendezvousToken asks the local sidecar to pay sidecarURL — a specific
 // relay's own payment sidecar — for and return one rendezvous token, for a
@@ -87,7 +141,7 @@ func (m *Manager) RendezvousToken(sidecarURL string) (*RendezvousTokenResponse, 
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/rendezvous-token", m.Port)
-	resp, err := sidecarHTTPClient.Post(url, "application/json", bytes.NewReader(reqBody))
+	resp, err := postJSONWithin(url, reqBody, paymentBudget)
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -137,7 +191,7 @@ func (m *Manager) DataRelaySession(sidecarURL string, sessionBytes int64) (*Data
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/data-relay-session", m.Port)
-	resp, err := sidecarHTTPClient.Post(url, "application/json", bytes.NewReader(reqBody))
+	resp, err := postJSONWithin(url, reqBody, paymentBudget)
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -164,7 +218,7 @@ func (m *Manager) DataRelaySession(sidecarURL string, sessionBytes int64) (*Data
 // dotted name — the sidecar already knows which tailnet it belongs to.
 func (m *Manager) ResolveDevice(label string) (*DeviceRecord, error) {
 	url := fmt.Sprintf("http://localhost:%d/device/%s", m.Port, label)
-	resp, err := sidecarHTTPClient.Get(url)
+	resp, err := getWithin(url, ensReadBudget)
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -217,7 +271,7 @@ type RelaysResponse struct {
 // itself does.
 func (m *Manager) Relays() (*RelaysResponse, error) {
 	url := fmt.Sprintf("http://localhost:%d/relays", m.Port)
-	resp, err := sidecarHTTPClient.Get(url)
+	resp, err := getWithin(url, ensReadBudget)
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}
@@ -249,7 +303,7 @@ func (m *Manager) Relays() (*RelaysResponse, error) {
 // self).
 func (m *Manager) ListDevices() ([]string, error) {
 	url := fmt.Sprintf("http://localhost:%d/devices", m.Port)
-	resp, err := sidecarHTTPClient.Get(url)
+	resp, err := getWithin(url, ensReadBudget)
 	if err != nil {
 		return nil, fmt.Errorf("calling sidecar: %w", err)
 	}

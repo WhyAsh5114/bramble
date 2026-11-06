@@ -10,7 +10,6 @@
 // listDeviceLabels today is admincli's enroll.ts, deciding which mesh-ip
 // addresses are already taken before writing a new one.
 import { parseAbiItem, type PublicClient } from 'viem'
-import { publicClient } from './client'
 import { scanLogsChunked } from './scan'
 import { tailnetRegistry, tailnetRegistryDeployBlock } from './config'
 
@@ -26,13 +25,16 @@ const labelRegisteredEvent = parseAbiItem(
 // Sept 12 2026, the moment the registry's history grew past 10,000 blocks
 // and Infura started rejecting the single-call form outright.
 //
-// client defaults to the sidecar's own Sepolia client. Tests inject a
-// fixture-backed client instead (sidecar/test/devices.test.ts), because
-// public Sepolia nodes prune old logs (RPC error 4444). An RPC error
+// client is required, with no default. The sidecar route passes its Tor-only
+// client; admincli's enroll.ts passes the administrator's direct client,
+// because the CLI never starts Tor. A default here would pull the sidecar's
+// client into the CLI and break enrollment with "starting Tor". Tests inject
+// a fixture-backed client (sidecar/test/devices.test.ts), because public
+// Sepolia nodes prune old logs (RPC error 4444). An RPC error
 // propagates rather than returning a partial list: enroll.ts allocates a
 // mesh-ip from this list, so a missing label could hand out an address that
 // is already taken.
-export async function listDeviceLabels(client: PublicClient = publicClient): Promise<string[]> {
+export async function listDeviceLabels(client: PublicClient): Promise<string[]> {
   const logs = await scanLogsChunked(client, {
     address: tailnetRegistry(),
     event: labelRegisteredEvent,

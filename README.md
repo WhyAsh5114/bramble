@@ -20,17 +20,17 @@ The sections below this one, from "Why the integrations matter" to "Open source 
 
 This table is the index of new work. Each agent adds or updates its row in the same pull request as the work. A status other than `planned` needs a link to the pull request or commit that backs it.
 
-| Workstream | New work                                                                                                   | Status  |
-| ---------- | ---------------------------------------------------------------------------------------------------------- | ------- |
-| W1         | Approval service and web UI: request queue, approve, deny, revoke                                          | planned |
-| W2         | Agent protagonist: MCP server that lets a coding agent request private access and call the private service | planned |
-| W3         | Agent payments in the flow: spend, cap and HashScan link per agent                                         | planned |
-| W4         | Live activity feed in the approval UI                                                                      | planned |
-| W5         | Single-command launcher, reset script and public deployment                                                | planned |
-| W8         | STUN endpoint discovery, hole punching and automatic relay fallback                                        | planned |
-| W9         | Control plane over Tor: sidecar ENS reads and payment requests                                             | planned |
-| W10        | One new Hedera service on testnet, with a HashScan link in the console                                     | planned |
-| W11        | Demo infrastructure: cloud nodes, logging RPC proxy, public console, preflight                             | planned |
+| Workstream | New work                                                                                                   | Status                                                                                                                     |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| W1         | Approval service and web UI: request queue, approve, deny, revoke                                          | planned                                                                                                                    |
+| W2         | Agent protagonist: MCP server that lets a coding agent request private access and call the private service | planned                                                                                                                    |
+| W3         | Agent payments in the flow: spend, cap and HashScan link per agent                                         | planned                                                                                                                    |
+| W4         | Live activity feed in the approval UI                                                                      | planned                                                                                                                    |
+| W5         | Single-command launcher, reset script and public deployment                                                | planned                                                                                                                    |
+| W8         | STUN endpoint discovery, hole punching and automatic relay fallback                                        | planned                                                                                                                    |
+| W9         | Control plane over Tor: sidecar ENS reads and payment requests                                             | partial, [PR #17](https://github.com/WhyAsh5114/bramble/pull/17): ENS and payment fetches routed; live Tor-exit check Open |
+| W10        | One new Hedera service on testnet, with a HashScan link in the console                                     | planned                                                                                                                    |
+| W11        | Demo infrastructure: cloud nodes, logging RPC proxy, public console, preflight                             | planned                                                                                                                    |
 
 W6 (this documentation) is a deliverable and not a feature. W7 (Ledger approval signing) is out of scope.
 
