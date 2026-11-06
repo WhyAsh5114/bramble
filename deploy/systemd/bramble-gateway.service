@@ -1,0 +1,36 @@
+[Unit]
+Description=Bramble node, gateway role (offers the demo service to granted peers)
+After=network-online.target bramble-demo-service.service
+Wants=network-online.target bramble-demo-service.service
+
+[Service]
+User=bramble
+Environment=BRAMBLE_SIDECAR_DIR=/opt/bramble/sidecar
+Environment=BRAMBLE_SIDECAR_PORT=7890
+Environment=BRAMBLE_LISTEN_PORT=51820
+Environment=BRAMBLE_TTL=5s
+Environment=HEDERA_MAX_PAYMENT_ATOMIC=100000
+Environment=DEMO_SERVICE_PORT=9100
+# Values in the env file override the defaults above.
+EnvironmentFile=/etc/bramble/gateway.env
+WorkingDirectory=/opt/bramble/brambled
+ExecStart=/opt/bramble/brambled/bin/brambled serve \
+  -label ${BRAMBLE_NODE_LABEL} \
+  -service ${BRAMBLE_SERVICE_NAME}=${DEMO_SERVICE_PORT} \
+  -listen-port ${BRAMBLE_LISTEN_PORT} \
+  -ttl ${BRAMBLE_TTL} \
+  $BRAMBLE_EXTRA_ARGS
+Restart=on-failure
+RestartSec=3
+# Real OS TUN needs CAP_NET_ADMIN and /dev/net/tun. Open: not yet run under
+# these restrictions; see deploy/README.md step "Check the TUN device".
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+DeviceAllow=/dev/net/tun rw
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

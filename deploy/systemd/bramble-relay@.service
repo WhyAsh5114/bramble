@@ -1,0 +1,33 @@
+[Unit]
+Description=Bramble metered relay (rendezvous + data relay), instance %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bramble
+Environment=RELAY_ADDR=:9420
+Environment=RELAY_SIDECAR_PORT=7891
+Environment=RELAY_INTERNAL_PORT=7895
+Environment=RELAY_PRICE_PER_BYTE=1
+Environment=RELAY_DATA_HOST=0.0.0.0
+# Values in the env file override the defaults above.
+EnvironmentFile=/etc/bramble/relay-%i.env
+WorkingDirectory=/opt/bramble/relay
+ExecStart=/opt/bramble/relay/bin/relay \
+  -addr ${RELAY_ADDR} \
+  -meter -data-relay \
+  -payee ${RELAY_PAYEE_ACCOUNT_ID} \
+  -sidecar-dir /opt/bramble/relay-sidecar \
+  -sidecar-port ${RELAY_SIDECAR_PORT} \
+  -internal-port ${RELAY_INTERNAL_PORT} \
+  -price-per-byte ${RELAY_PRICE_PER_BYTE} \
+  -data-host ${RELAY_DATA_HOST}
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

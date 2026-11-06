@@ -1,0 +1,13 @@
+# Relay machine. Replace the two names with the DNS names a human points at this machine.
+# Caddy obtains TLS certificates itself. It needs inbound TCP 80 and 443.
+
+# Logging RPC proxy (rpc-proxy on 127.0.0.1:8545). Same block as deploy/rpc-proxy/Caddyfile.
+rpc.example.com {
+	reverse_proxy 127.0.0.1:8545
+}
+
+# Public approval console. The admin machine's loopback :3001 arrives here through
+# the reverse SSH tunnel (bramble-console-tunnel.service). Writes need the demo token.
+console.example.com {
+	reverse_proxy 127.0.0.1:3001
+}
