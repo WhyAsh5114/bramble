@@ -77,7 +77,14 @@ in-memory storage) and bootstraps it at startup. Design and measurements:
 - `GET /tor/status` returns `{ state, readyAt?, lastError?, message }`, where
   `state` is `starting`, `ready` or `failed`. It always answers 200.
 - Until `state` is `ready`, every route except `/health` and `/tor/status`
-  answers 503 `{ "error": "starting Tor" }` with `Retry-After: 5`.
+  answers 503 `{ "error", "tor" }` with `Retry-After: 5`. `error` is
+  `"starting Tor"` while starting and `"Tor failed to start: <lastError>"`
+  after a failed attempt; `tor` is the same status object `/tor/status`
+  returns, without `message`.
+- Each bootstrap attempt has 180 s; after a failed one the next starts 30 s
+  later. A bootstrap error replaces the client, once the old one's relay
+  sockets are closed. A timeout keeps it, and the next attempt waits on the
+  same bootstrap. `brambled` waits up to 7 minutes for `ready` at startup.
 - `torFetch('ens')` and `torFetch('pay')` return a `fetch` that sends requests
   through Tor, each purpose on its own circuit. A circuit failure is retried
   once under a fresh isolation key.

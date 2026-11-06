@@ -59,10 +59,11 @@ type Config struct {
 	TorReadyTimeout time.Duration
 }
 
-// DefaultTorReadyTimeout covers one failed bootstrap attempt plus a retry:
-// the sidecar gives each attempt 180 s and retries after 30 s. Tor was ready
-// after 51 s under Bun with no snapshot (5 Nov 2026 spike).
-const DefaultTorReadyTimeout = 5 * time.Minute
+// DefaultTorReadyTimeout covers a first bootstrap attempt that runs to its
+// full deadline and a second, complete attempt: the sidecar gives each
+// attempt 180 s and starts the next 30 s after a failure, so 390 s in all.
+// Tor was ready after 51 s under Bun with no snapshot (5 Nov 2026 spike).
+const DefaultTorReadyTimeout = 7 * time.Minute
 
 // torStatusResponse mirrors sidecar/src/routes/tor.ts's /tor/status payload.
 type torStatusResponse struct {

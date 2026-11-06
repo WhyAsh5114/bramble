@@ -38,7 +38,7 @@ export interface StartTorOptions {
   transport?: TorTransportFactory
   /** Bootstrap deadline per attempt. Default 180 s (spike: ready after 51 s). */
   readyTimeoutMs?: number
-  /** Wait before re-bootstrapping after a failed attempt. Default 30 s. 0 disables. */
+  /** Wait before the next attempt after a failed one. Default 30 s. 0 disables. */
   retryDelayMs?: number
   /** Clock, for tests. */
   now?: () => number
@@ -66,6 +66,7 @@ let status: TorStatus = { state: 'starting' }
 let inFlight: Promise<void> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let options: StartTorOptions = {}
+let configured = false
 // Bumped by stopTor() so an attempt that settles after a stop cannot
 // overwrite the reset state.
 let generation = 0
@@ -109,11 +110,26 @@ export function isCircuitFailure(err: unknown): boolean {
   return e.code === 'CONNECTION' || e.retryable === true
 }
 
+// The attempt's deadline passed while bootstrap was still in progress.
+class BootstrapTimeoutError extends Error {}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Tor not ready after ${Math.round(ms / 1000)} s`)), ms)
+    const timer = setTimeout(
+      () => reject(new BootstrapTimeoutError(`Tor not ready after ${Math.round(ms / 1000)} s`)),
+      ms
+    )
     p.then(resolve, reject).finally(() => clearTimeout(timer))
   })
+}
+
+// Closing is cleanup: its own failure must not replace the error being reported.
+async function closeQuietly(t: TorTransport): Promise<void> {
+  try {
+    await t.close()
+  } catch {
+    // Nothing to recover; the client is discarded either way.
+  }
 }
 
 async function attempt(): Promise<void> {
@@ -124,7 +140,7 @@ async function attempt(): Promise<void> {
     if (transport === null) {
       const created = await (options.transport ?? createTorJsTransport)()
       if (gen !== generation) {
-        created.close()
+        void closeQuietly(created)
         return
       }
       transport = created
@@ -134,6 +150,27 @@ async function attempt(): Promise<void> {
     status = { state: 'ready', readyAt: now() }
   } catch (err) {
     if (gen !== generation) return
+    // A bootstrap that failed discards its client, so the next attempt
+    // bootstraps a new one. tor-js 0.4.4 starts bootstrap in the TorClient
+    // constructor and caches that promise: once it rejects, every later
+    // ready() on the same client rejects with the same error, so reusing it
+    // could never recover. The attempt settles only once that client's relay
+    // sockets are closed. Until then it stays in flight, so a concurrent
+    // startTor() gets this attempt and no retry is scheduled: two clients
+    // never run at once.
+    //
+    // A timeout keeps the client, and the next attempt waits on the same
+    // bootstrap. A pending bootstrap is not stuck: Arti keeps retrying relays
+    // with backoff. tor-js cannot cancel it either, so a replacement would
+    // leave the old bootstrap retrying in the WASM, one more per timeout
+    // (Verified 6 Nov 2026: a closed client's bootstrap kept trying 2 to 3
+    // relay dials per second for the two minutes measured).
+    if (!(err instanceof BootstrapTimeoutError)) {
+      const failed = transport
+      transport = null
+      if (failed !== null) await closeQuietly(failed)
+      if (gen !== generation) return
+    }
     status = { state: 'failed', lastError: messageOf(err) }
     scheduleRetry()
     throw err
@@ -153,12 +190,17 @@ function scheduleRetry(): void {
 /**
  * Bootstraps the sidecar's single Tor client. Resolves when it is ready and
  * rejects if this attempt fails; a failed attempt schedules another after
- * `retryDelayMs`. Calling it again while starting returns the same promise;
+ * `retryDelayMs`. After a bootstrap error the next attempt uses a new client;
+ * after a timeout it keeps waiting on the same one. Calling it again while
+ * starting returns the same promise;
  * calling it when ready resolves at once. Options apply from the first call
  * until stopTor().
  */
 export function startTor(opts?: StartTorOptions): Promise<void> {
-  if (opts !== undefined && transport === null && inFlight === null) options = opts
+  if (!configured) {
+    options = opts ?? {}
+    configured = true
+  }
   if (status.state === 'ready') return Promise.resolve()
   if (inFlight !== null) return inFlight
   if (retryTimer !== null) {
@@ -202,15 +244,21 @@ export function torFetch(key: TorKey): typeof fetch {
   return fetchViaTor as typeof fetch
 }
 
-/** Closes the client and resets all state. Used on shutdown and between tests. */
-export function stopTor(): void {
+/**
+ * Closes the client and resets all state. Used on shutdown and between tests.
+ * The state resets at once; the returned promise resolves when the client's
+ * relay sockets are closed.
+ */
+export function stopTor(): Promise<void> {
   generation++
   if (retryTimer !== null) clearTimeout(retryTimer)
   retryTimer = null
   inFlight = null
-  transport?.close()
+  const closing = transport === null ? Promise.resolve() : closeQuietly(transport)
   transport = null
   status = { state: 'starting' }
   options = {}
+  configured = false
   isolationKeys.clear()
+  return closing
 }

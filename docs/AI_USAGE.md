@@ -23,11 +23,6 @@ The team directed the architecture and scope, operated the physical Ledger and l
 
 Per-track attribution and involvement narrative for the submission dashboard is written separately by the team, not duplicated here.
 
-## Mumbai build: agent-written paths
-
-- `sidecar/src/tor/`, `sidecar/src/routes/tor.ts`, `sidecar/scripts/tor-smoke.ts`, `sidecar/test/tor*.test.ts`, the Tor wiring in `sidecar/src/index.ts`, `brambled/sidecar/manager.go` (`waitTorReady`) and its tests, `docs/adr/0013-tor-transport.md`: written by the Keystone agent (Claude Opus 5.5, ETH-59), committing as the account in the commit author field.
-- `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, the Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go`: ENS reads and x402 payments over Tor (ETH-60), written by Tor-Claude (Claude Sonnet 5.5).
-
 ## Mumbai W8a: STUN endpoint discovery
 
 Net-Astra (OpenAI Codex) implemented and tested `brambled/stun/message.go`,
@@ -55,6 +50,7 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | Core-Claude | Core and console | `Core-Claude (agent, Jay Kerkar)` | Verified from `GIT_AUTHOR_NAME` on 6 Nov 2026 |
 | Core-Sol | Core and console (cross-family reviewer) | to be added by Core-Sol | Open |
 | Net-Claude | Network (W8a STUN) | `Net-Claude (agent, Chaitanya Kelkar)` | Verified from commit authorship on `net-claude/eth-36-stun-binding` |
+| Keystone | Tor (principal, W9-2 Tor client core) | `Keystone (agent, Yash Kolekar)` | Verified from commit authorship on `keystone/eth-59-tor-client` |
 | Other lane agents | Network, Tor, Hedera, Demo and infra | to be added by each agent | Open |
 
 ### Paths
@@ -64,6 +60,10 @@ Each agent commits under the git identity shown here. Confirm yours with `git co
 | `README.md` ("Pre-existing vs new", "CROPS" skeleton) | ETH-27 | Core-Claude | Documentation |
 | `docs/AI_USAGE.md` (this section) | ETH-27 | Core-Claude | Documentation |
 | `brambled/stun/`, `brambled/wgnode/stun.go`, `brambled/statusapi/stun_test.go`, `docs/eth-36-stun-spec.md`, `docs/adr/0017-stun-bind-wrapper-source-selection.md` | ETH-36 | Net-Astra, Net-Claude | Code, tests, documentation |
+| `sidecar/src/tor/`, `sidecar/src/routes/tor.ts`, `sidecar/scripts/tor-smoke.ts`, `sidecar/test/tor*.test.ts`, Tor wiring in `sidecar/src/index.ts`, `sidecar/tsconfig.json`, tor-js in `sidecar/package.json` and `pnpm-lock.yaml` | ETH-59 | Keystone | Code, tests |
+| `brambled/sidecar/manager.go` (`waitTorReady`), `brambled/sidecar/manager_test.go` | ETH-59 | Keystone | Code, tests |
+| `docs/adr/0013-tor-transport.md`, Tor section of `sidecar/README.md` | ETH-59 | Keystone | Documentation |
+| `sidecar/src/ens/client.ts`, `sidecar/src/payments/client.ts`, `sidecar/src/payments/datarelay.ts`, `sidecar/test/ens-tor.test.ts`, `sidecar/test/helpers/fake-tor.ts`, Tor wiring in `sidecar/test/device.test.ts` and `sidecar/test/hedera-signer-network.test.ts`, `brambled/admission/tor_startup_test.go` | ETH-60 | Tor-Claude | Code, tests |
 
 ## Mumbai formatting gate correction (ETH-75)
 
