@@ -91,8 +91,9 @@ export function createApprovalApi(options: ApiOptions) {
       try {
         const path = new URL(request.url).pathname.replace(/\/$/, '')
         const openJoin = path === '/api/joins' && request.method === 'POST'
+        const openAccess = path === '/api/joins/access' && request.method === 'POST'
         if (
-          (!openJoin && request.method === 'POST') ||
+          (!openJoin && !openAccess && request.method === 'POST') ||
           (request.method === 'GET' && (path === '/api/joins' || path === '/api/members' || path === '/api/network'))
         ) {
           const token = options.token()
@@ -139,6 +140,23 @@ export function createApprovalApi(options: ApiOptions) {
           )
             throw new ApiError(400, 'invalid_node', 'A known node identifier is required.')
           return json(await network.ping(body.id))
+        }
+        if (openAccess) {
+          // Open like a join: a member device asks for a service, and it only
+          // creates a pending card that the operator must still approve.
+          joins.limit()
+          const input = await readInput(request)
+          await joins.requireMember(input.agentLabel)
+          const open = service
+            .list()
+            .find(
+              (item) =>
+                item.agentLabel === input.agentLabel &&
+                item.service === input.service &&
+                item.status !== 'denied' &&
+                item.status !== 'revoked'
+            )
+          return json(open ?? service.create(input), open ? 200 : 201)
         }
         if (openJoin) {
           joins.limit()

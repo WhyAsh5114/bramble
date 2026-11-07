@@ -3,62 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { JoinActivity, Members, PendingJoins, type JoinAction, type JoinRow } from '@bramble/join-ui'
 import { readJson } from '../lib/console-api'
-import { useConsole } from './console/console-context'
 import { Button } from './ui/button'
-
-const DEMO_GATEWAY = 'mumbai-gateway'
-const DEMO_SERVICE = 'task'
-
-/** Lets the operator open an access request for a device they just approved. */
-function RequestAccess({ token, rows }: { token: string; rows: JoinRow[] }) {
-  const { requests } = useConsole()
-  const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const open = new Set(
-    (requests ?? []).filter((item) => item.status !== 'denied' && item.status !== 'revoked').map((item) => item.agentLabel)
-  )
-  const ready = rows.filter((row) => row.status === 'approved' && !open.has(row.label))
-  if (ready.length === 0) return null
-  async function request(label: string) {
-    setBusy(label)
-    setError(null)
-    try {
-      await readJson('/api/requests', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          agentLabel: label,
-          gatewayLabel: DEMO_GATEWAY,
-          service: DEMO_SERVICE,
-          note: 'Requested from the console',
-        }),
-      })
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'The access request failed.')
-    } finally {
-      setBusy(null)
-    }
-  }
-  return (
-    <section aria-label="Approved devices" className="mb-4">
-      {error && (
-        <p role="alert" className="notice negative mb-4">
-          {error}
-        </p>
-      )}
-      {ready.map((row) => (
-        <p key={row.id} className="flex items-center justify-between gap-4">
-          <span className="min-w-0">
-            <strong>{row.label}</strong> is on the tailnet with no service access.
-          </span>
-          <Button disabled={busy !== null} onClick={() => void request(row.label)}>
-            {busy === row.label ? 'Requesting…' : `Request ${DEMO_SERVICE} access`}
-          </Button>
-        </p>
-      ))}
-    </section>
-  )
-}
 
 export function JoinConsole({ token, view }: { token: string; view: 'pending' | 'members' }) {
   const [joins, setJoins] = useState<JoinRow[]>([])
@@ -106,7 +51,7 @@ export function JoinConsole({ token, view }: { token: string; view: 'pending' | 
       }
     }
     void poll('joins')
-    void poll('members')
+    if (view === 'members') void poll('members')
     return () => {
       controller.abort()
       clearTimeout(joinTimer)
@@ -160,12 +105,6 @@ export function JoinConsole({ token, view }: { token: string; view: 'pending' | 
             </p>
           )
         )}
-        <RequestAccess
-          token={token}
-          rows={[...joins, ...members.filter((member) => !joins.some((join) => join.label === member.label))].filter(
-            (row) => row.label !== 'relays' && !row.label.startsWith('mumbai-')
-          )}
-        />
       </>
     )
   return (

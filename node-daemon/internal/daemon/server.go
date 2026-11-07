@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.handleJoin)
 	mux.HandleFunc("POST /api/leave", s.handleLeave)
 	mux.HandleFunc("POST /api/test", s.handleTest)
+	mux.HandleFunc("POST /api/request-access", s.handleRequestAccess)
 	mux.HandleFunc("/api/admin/", s.handleAdmin)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, &ErrorInfo{Message: "No such API route.", NextStep: "Update Bramble."})
@@ -158,6 +159,22 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLeave(w http.ResponseWriter, _ *http.Request) {
 	s.Daemon.Leave()
+	writeJSON(w, http.StatusOK, s.Daemon.State())
+}
+
+func (s *Server) handleRequestAccess(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Peer    string `json:"peer"`
+		Service string `json:"service"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.Daemon.RequestAccess(r.Context(), body.Peer, body.Service); err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, s.Daemon.State())
 }
 

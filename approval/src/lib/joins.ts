@@ -131,6 +131,15 @@ export class JoinService {
     return this.get(id)
   }
 
+  /** Throws unless label is a current, unrevoked member on chain. */
+  async requireMember(label: string) {
+    const facts = await this.requireChain().members()
+    const member = facts.find((item) => item.label === label)
+    if (!member || member.revoked || member.expiry <= this.clock.now() / 1000) {
+      throw new ApiError(403, 'not_a_member', 'Only an approved device can request access.')
+    }
+  }
+
   async members(): Promise<JoinRecord[]> {
     const chain = this.requireChain()
     try {

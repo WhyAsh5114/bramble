@@ -97,6 +97,10 @@ export const setupDevice = (name: string) => post('/api/setup', { name })
 export const joinNetwork = (tailnet: string) => post('/api/join', { tailnet })
 export const leaveNetwork = () => post('/api/leave')
 
+export async function requestAccess(peer: string, service: string): Promise<void> {
+  await post('/api/request-access', { peer, service }, TEST_TIMEOUT_MS)
+}
+
 export async function testConnection(peer?: string): Promise<TestResult> {
   return parseTestResult(await post('/api/test', peer ? { peer } : {}, TEST_TIMEOUT_MS))
 }

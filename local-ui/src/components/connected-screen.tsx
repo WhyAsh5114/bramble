@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { Button } from '@approval/components/ui/button'
-import { ApiFailure, leaveNetwork, testConnection } from '../lib/api'
+import { ApiFailure, leaveNetwork, requestAccess, testConnection } from '../lib/api'
 import type { BrambleState, Peer } from '../lib/contract'
 import { describeTest, pathCopy, relativeTime } from '../lib/format'
 import { CopyValue, Fact, Fingerprint, Notice, PageHeading } from './bits'
@@ -20,6 +20,31 @@ function PathBadge({ path }: { path: Peer['path'] }) {
       <span className="status-dot" aria-hidden="true" />
       {label}
     </span>
+  )
+}
+
+/** Asks the owner for one service. The owner still has to approve it. */
+export function RequestAccessButton({ peer, service }: { peer: string; service: string }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'failed'>('idle')
+  async function send() {
+    setState('busy')
+    try {
+      await requestAccess(peer, service)
+      setState('sent')
+    } catch {
+      setState('failed')
+    }
+  }
+  return (
+    <Button disabled={state === 'busy' || state === 'sent'} onClick={() => void send()}>
+      {state === 'busy'
+        ? 'Requesting…'
+        : state === 'sent'
+          ? 'Requested'
+          : state === 'failed'
+            ? 'Try again'
+            : 'Request access'}
+    </Button>
   )
 }
 
@@ -121,6 +146,7 @@ export function ConnectedScreen({ state, refresh }: { state: BrambleState; refre
                   <strong className="mono wrap">{link.service}</strong>
                   <span className="muted mono">on {link.peer}</span>
                 </div>
+                <RequestAccessButton peer={link.peer} service={link.service} />
                 <a className="open-link" href={link.url} target="_blank" rel="noopener noreferrer">
                   Open {link.service}
                 </a>

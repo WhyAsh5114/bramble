@@ -560,6 +560,29 @@ func testTarget(cfg *NodeConfig, own, peer, service string) (Service, bool) {
 }
 
 // Test fetches a tailnet service through the mesh via its loopback forward.
+// RequestAccess asks the operator for one configured service.
+func (d *Daemon) RequestAccess(ctx context.Context, peer, service string) error {
+	d.mu.Lock()
+	own, phase := d.m.Name(), d.m.Base()
+	d.mu.Unlock()
+	if phase != PhaseConnected && phase != PhaseApproved {
+		return &ErrorInfo{Message: "This device is not approved yet.", NextStep: "Wait for the owner to approve it, then try again."}
+	}
+	cfg, err := d.config(ctx, true)
+	if err != nil {
+		return err
+	}
+	for _, s := range cfg.Services {
+		if s.Peer == peer && s.Service == service {
+			if err := (&JoinClient{BaseURL: cfg.JoinAPI}).RequestAccess(ctx, own, peer, service); err != nil {
+				return &ErrorInfo{Message: "The access request did not go through.", NextStep: "Check your connection, then try again."}
+			}
+			return nil
+		}
+	}
+	return &ErrorInfo{Message: "This network does not offer that service.", NextStep: "Reload this page and try again."}
+}
+
 func (d *Daemon) Test(ctx context.Context, peer, service string, get func(ctx context.Context, url string) (int, error)) TestResult {
 	d.mu.Lock()
 	node, cfg, own, phase := d.node, d.cfg, d.m.Name(), d.m.Base()

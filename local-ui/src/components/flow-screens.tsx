@@ -6,6 +6,7 @@ import { ApiFailure, joinNetwork, leaveNetwork, setupDevice } from '../lib/api'
 import type { BrambleState } from '../lib/contract'
 import { checkDeviceName, checkNetworkName } from '../lib/format'
 import { Fact, Fingerprint, Notice, PageHeading } from './bits'
+import { RequestAccessButton } from './connected-screen'
 
 /** Runs one write call, then asks the page to re-read state so the next screen shows at once. */
 function useAction(refresh: () => Promise<void>) {
@@ -199,6 +200,15 @@ export function ApprovedScreen({ state }: { state: BrambleState }) {
           )}
         </p>
       </section>
+      {state.services.map((link) => (
+        <section key={`${link.peer}/${link.service}`} className="panel" aria-label={`Access to ${link.service}`}>
+          <p>
+            Ask the owner for access to <strong className="mono">{link.service}</strong> on{' '}
+            <span className="mono">{link.peer}</span>.
+          </p>
+          <RequestAccessButton peer={link.peer} service={link.service} />
+        </section>
+      ))}
     </>
   )
 }

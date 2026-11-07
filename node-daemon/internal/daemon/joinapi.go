@@ -83,6 +83,24 @@ func (c *JoinClient) Request(ctx context.Context, label, pubkeyHex, tailnet stri
 	return &j, nil
 }
 
+// RequestAccess sends POST /api/joins/access: this device asks the operator
+// for a service. It creates a pending request; it grants nothing.
+func (c *JoinClient) RequestAccess(ctx context.Context, label, gateway, service string) error {
+	body, _ := json.Marshal(map[string]string{
+		"agentLabel":   label,
+		"gatewayLabel": gateway,
+		"service":      service,
+		"note":         "Requested from " + label,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/joins/access", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.do(req, &out)
+}
+
 // Get sends GET /api/joins/:id.
 func (c *JoinClient) Get(ctx context.Context, id string) (*Join, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/joins/"+url.PathEscape(id), nil)
