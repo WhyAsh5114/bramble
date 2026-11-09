@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Gate 1.4 (docs/05_BUILD_PLAN.md): "No endpoints on device or agent
+// Gate 1.4 (docs/archive/hackathon/05_BUILD_PLAN.md): "No endpoints on device or agent
 // subnames." The gate's own suggested test is "grep the codebase" — this is
 // that grep, automated and wired into `pnpm verify` so a future write path
 // can't silently violate it. Relay subnames are the one namespace allowed to
@@ -19,7 +19,7 @@
 // to do with ENS. A value passed via a variable (not a literal) can't be
 // caught by grep — that's a known limit of this check, not a gap to silently
 // paper over; the gate's own manual-read requirement covers what static
-// analysis can't (see docs/05_BUILD_PLAN.md Gate 1.4).
+// analysis can't (see docs/archive/hackathon/05_BUILD_PLAN.md Gate 1.4).
 //
 // No dependencies, not a workspace package — same "small standalone script"
 // treatment as scripts/gate0.3-eac-check, except this one runs on every push

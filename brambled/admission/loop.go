@@ -7,12 +7,12 @@
 //
 // Authorization rule: pubkey is set AND expiry is in the future. The
 // registry's `status` field is read but deliberately not used — its enum
-// meaning isn't documented anywhere verified yet (see docs/11_SOURCE_NOTES.md).
+// meaning isn't documented anywhere verified yet (see docs/archive/hackathon/11_SOURCE_NOTES.md).
 // Revocation may turn out to need status once that's confirmed; using only
 // expiry for now is a known, flagged gap, not a guess dressed up as one.
 //
 // Four revocation/change shapes exist and all four must actually mutate a
-// live peer, not just refuse future handshakes (docs/05_BUILD_PLAN.md Gate
+// live peer, not just refuse future handshakes (docs/archive/hackathon/05_BUILD_PLAN.md Gate
 // 1.3): expiry lapsing (the record still reports a pubkey, just past
 // expiry), a cleared pubkey text record (the record reports none at all),
 // key rotation (the record reports a *different* pubkey than before, while
@@ -251,7 +251,7 @@ func (l *Loop) SyncOnce() {
 			// record reports none at all, so without remembering the last
 			// pubkey this label was authorized under, a peer that revokes by
 			// clearing its own record could never be found again to remove
-			// from the live peer table — see docs/05_BUILD_PLAN.md Gate 1.3,
+			// from the live peer table — see docs/archive/hackathon/05_BUILD_PLAN.md Gate 1.3,
 			// TestGate1_3_RevocationDropsAlreadyConnectedPeer.
 			// The record can change its pubkey and become unauthorized in
 			// the same polling interval. In that case pubkey is the new,

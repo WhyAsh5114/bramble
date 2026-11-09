@@ -45,7 +45,7 @@ as its environment requirement. No credential value is read or recorded here.
 ## Verification after prerequisite integration
 
 **Verified (6 November 2026 IST):** merged `origin/hackathon` at `4a8cfc8`
-without rebasing. Kept both sides of the `docs/AI_USAGE.md` conflict.
+without rebasing. Kept both sides of the `docs/archive/hackathon/AI_USAGE.md` conflict.
 The branch then passes `pnpm verify`, including endpoint and local-state
 checks and all tagged brambled tests. Unchanged workspace packages use Turbo's
 shared cache. `pnpm test:access-flow` passes separately. A new

@@ -136,7 +136,7 @@ tailnet it belongs to; this isn't discovered automatically).
 
 ## Gate 0.2 runbook — two peers, two networks, no trusted coordinator
 
-`docs/10_DAY0_GATES.md` Gate 0.2 requires a real laptop-to-VPS (or hotspot)
+`docs/archive/hackathon/10_DAY0_GATES.md` Gate 0.2 requires a real laptop-to-VPS (or hotspot)
 run: candidate exchange through a dumb relay, real `ping` + one TCP
 connection across the tunnel, from two genuinely different networks. This
 can't be executed from this environment (no VPS, no second physical network
@@ -192,7 +192,7 @@ on the VPS too, since it already has a reachable address.
    ```
    Both `brambled serve` logs should show `admission: <label>: authorized`
    for the other side.
-6. Record the result in `docs/10_DAY0_GATES.md` — pass/fail, which
+6. Record the result in `docs/archive/hackathon/10_DAY0_GATES.md` — pass/fail, which
    topology, and the date — only once actually run this way. A CI-only or
    same-machine run does not count (see "Known gaps").
 
@@ -268,7 +268,7 @@ Full design and buffering-correctness fix behind `Forwarder`:
 
 ## Gate 2.2 runbook — nothing hard-coded in the demo path
 
-`docs/05_BUILD_PLAN.md` Gate 2.2 requires that the mesh reassemble purely
+`docs/archive/hackathon/05_BUILD_PLAN.md` Gate 2.2 requires that the mesh reassemble purely
 from chain state, with no local cache to go stale. Two complementary
 artifacts back this claim:
 
@@ -365,7 +365,7 @@ except what's on chain.
 
 ## Gate 1.3 runbook — measuring real revocation latency
 
-`docs/05_BUILD_PLAN.md` Gate 1.3 requires the actual measured time from
+`docs/archive/hackathon/05_BUILD_PLAN.md` Gate 1.3 requires the actual measured time from
 revocation transaction confirmation to connection drop, published in this
 README, for the harder and more attack-relevant case: a peer that's
 **already connected**, not one that hasn't dialed in yet. The mechanism is
@@ -411,12 +411,12 @@ serve` stderr for its `admission: device2: not authorized` line. The
    bun run set-pubkey.ts device2 <pubkey set-pubkey.ts printed in step 3>
    ```
 6. Record the measured number, the `-ttl` used, and the date in
-   `docs/05_BUILD_PLAN.md`'s Gate 1.3 entry — only once actually run this
+   `docs/archive/hackathon/05_BUILD_PLAN.md`'s Gate 1.3 entry — only once actually run this
    way, same standard as Gate 0.2.
 
 ## Gate 5.1 runbook — the agent path, live, two real machines
 
-`docs/05_BUILD_PLAN.md` Hard Gate 5.1 requires a real two-machine run with a
+`docs/archive/hackathon/05_BUILD_PLAN.md` Hard Gate 5.1 requires a real two-machine run with a
 real ENS write, not just `pnpm test:access-flow`'s in-memory-resolver
 version. **Run Sept 10, 2026 — pass.** Laptop: this machine, `-netstack`,
 agent identity `agent-1`. VPS: `Bramble` (`13.207.155.93`, real OS TUN),

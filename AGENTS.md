@@ -1,39 +1,31 @@
 # Agent operating rules
 
-Read `docs/18_AGENT_DIGEST.md` and `STYLE.md` first. Open `docs/15_MUMBAI_HANDOFF.md` or `docs/14_MUMBAI_BUILD_BRIEF.md` only for the section your ticket names, and read just that section. The handoff wins on conflicts.
+Read `README.md` and `docs/adr/0019-user-driven-tailnets.md` first. Follow `STYLE.md` for prose. The hackathon
+material in `docs/archive/hackathon/` is history, not instructions.
 
 ## Always
 
-- Work in your own git worktree and branch. Never edit another agent's worktree.
-- Create worktrees under `/home/anonjr/bramble-work/wt/<branch>`, never under `/tmp`. `/tmp` is a small memory-backed volume that fills up. Your environment already sets `TMPDIR` and the shared pnpm store. When your PR is merged, remove the worktree with `git worktree remove <path>`.
-- Commit small and often with conventional-commit messages. Never force-push. Never rewrite history.
-- Run `pnpm verify` before every push. Run `pnpm test:access-flow` when you change `brambled/` or `sidecar/`.
-- Respect the invariants in section 3 of the handoff. `pnpm check:no-endpoints` and `pnpm check:no-local-state` must stay green.
-- Trace every task to a demo beat (handoff section 4). If it serves no beat, stop and ask.
-- Open a PR against `main`. A reviewer from the other model family approves it. Only a human merges to `main`.
-- Record the paths you wrote in your own file `docs/ai-usage/<your-agent-name>.md`. Do not edit `docs/AI_USAGE.md`: every agent editing it caused repeated merge conflicts.
-- Limit review rounds to two. After the second round, stop and ask Atlas to decide. Atlas decides small questions itself.
-- Read the shared status file `/home/anonjr/bramble-work/status/usage.txt` instead of running any usage tool. Do not start work that will plainly outlast your subscription's remaining window.
-- Follow `STYLE.md`.
+- Work on a branch and open a pull request against `main`, unless the maintainer tells you otherwise.
+- Commit small, with conventional-commit messages.
+- Run `pnpm verify` and `cd brambled && go test ./...` before pushing. Keep `check:no-endpoints` and
+  `check:no-local-state` green; the registry cache (`brambled/registry/cache.go`) is the one allowed local state.
+- Test UI changes in a real browser against a running `bramble up`, in light and dark themes.
+- Say what you verified and how. Label findings Verified, Read from source or Open.
 
 ## Never
 
-- Never read, search for, print, log or commit credentials, private keys or authenticated RPC URLs. If a secret is missing, mark the task blocked and say which one.
-- Never spend real money, write to a mainnet, publish somewhere new, or delete a branch, repo or deployment.
-- Never make a design decision that belongs to a human. Write the options in an ADR draft and request approval.
-- Never claim something works unless you ran it. Label findings Verified, Read from source or Open.
-- Exception to the credential rule above, for the Sepolia key only: pass `${SEPOLIA_PRIVATE_KEY:-$SEPOLIA_PK}` straight into a Sepolia signer (Codex hides names that contain KEY, so Codex agents see `SEPOLIA_PK`). Never inspect, print, log, echo or commit it. Use it on Sepolia only, with testnet funds only.
+- Never read, print, log or commit credentials, private keys or authenticated RPC URLs.
+- Never add a server-side component that holds chain keys or sponsors gas. Tailnet writes are signed by the user's
+  wallet in the browser.
+- Never write to a mainnet or spend real money.
+- Never delete branches, releases, deployments or cloud resources without the maintainer's approval.
 
-## Skills
+### Sepolia key
 
-Use `grill-me` and `grill-with-docs` to resolve ambiguity before building, `to-spec` and `to-tickets` to plan, `tdd` and `implement` to build, `diagnosing-bugs` for failures, `code-review` for reviews, and `improve-codebase-architecture` only when asked. Use `handoff` when you stop mid-task.
+The one exception to the credential rule: pass `${SEPOLIA_PRIVATE_KEY:-$SEPOLIA_PK}` straight into a Sepolia signer
+(for example `scripts/rehearse-chain.ts`). Never inspect, print or commit it, and use it on Sepolia only.
 
-## Git authentication
+## Infrastructure
 
-Your `GH_TOKEN` environment variable holds a fine-grained PAT. Codex agents see it as `GH_PAT` instead, because Codex hides variables whose names contain TOKEN, KEY or SECRET. Use whichever is set (`${GH_TOKEN:-$GH_PAT}`). Do not print it. Push with a one-shot credential helper:
-
-```sh
-git -c credential.helper='!f() { echo username=x-access-token; echo password=${GH_TOKEN:-$GH_PAT}; }; f' push origin <branch>
-```
-
-Your git author name and email are already set in the environment. Check access with `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${GH_TOKEN:-$GH_PAT}" https://api.github.com/repos/WhyAsh5114/bramble` (expect 200). Never echo the token or write it to a file.
+The `projects` EC2 host runs Dokploy, the relay and the landing page; see `deploy/projects-host/`. Every app there runs
+under gVisor (`runtime: runsc`) as a Compose app. Admin access is over Tailscale only.

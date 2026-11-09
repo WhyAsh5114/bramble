@@ -1,7 +1,7 @@
 # ADR 0017: STUN discovery wraps WireGuard's bind and gives up source stickiness
 
 **Status:** Draft, 6 November 2026. Human approver: pending.
-**Workstream:** W8a (STUN endpoint discovery), demo beat 4. See `docs/eth-36-stun-spec.md` for the protocol reference.
+**Workstream:** W8a (STUN endpoint discovery), demo beat 4. See `docs/archive/hackathon/eth-36-stun-spec.md` for the protocol reference.
 
 ## Context
 

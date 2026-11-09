@@ -1,7 +1,7 @@
 # ADR 0013: Tor transport for the sidecar's outbound traffic
 
 **Status:** Draft, 6 November 2026. Human approver: pending.
-**Workstream:** W9 (control plane over Tor), demo beat 6. See `docs/15_MUMBAI_HANDOFF.md` section 5.1.
+**Workstream:** W9 (control plane over Tor), demo beat 6. See `docs/archive/hackathon/15_MUMBAI_HANDOFF.md` section 5.1.
 **Scope of this ADR:** the Tor client module `sidecar/src/tor/`, its readiness contract, and how `brambled` waits for it. Routing the ENS reads and x402 payments through it is W9-3 (ETH-60) and builds on the interface fixed here.
 
 ## Context

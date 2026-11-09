@@ -12,9 +12,9 @@ import (
 // Endpoint exchange (W8b). A node publishes the UDP endpoints it can be
 // reached at — typically one learned from STUN — as the opaque candidate
 // string Exchange already carries. The wire format is specified in
-// docs/reference/endpoint-exchange.md. An endpoint learned this way is a
+// docs/archive/hackathon/reference/endpoint-exchange.md. An endpoint learned this way is a
 // hint for where to send probes. It never grants admission: that decision
-// comes only from ENS (docs/15_MUMBAI_HANDOFF.md, invariant 1).
+// comes only from ENS (docs/archive/hackathon/15_MUMBAI_HANDOFF.md, invariant 1).
 
 // EndpointKind says how a node learned an endpoint.
 type EndpointKind string

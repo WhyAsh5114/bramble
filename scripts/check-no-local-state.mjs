@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Gate 2.2 (docs/05_BUILD_PLAN.md): "Nothing hard-coded in the demo path."
+// Gate 2.2 (docs/archive/hackathon/05_BUILD_PLAN.md): "Nothing hard-coded in the demo path."
 // The gate's own test is "delete every local cache, restart both nodes,
 // confirm the mesh reassembles purely from chain state" — and the strongest
 // form of that property is structural: the demo runtime path must contain
@@ -91,7 +91,7 @@ if (findings.length > 0) {
   console.error('Gate 2.2 violation: the demo path writes local state.\n')
   for (const f of findings) console.error('  ' + f)
   console.error(
-    '\nA node must reassemble purely from chain state — no local caches, no persisted config (see docs/05_BUILD_PLAN.md Gate 2.2).'
+    '\nA node must reassemble purely from chain state — no local caches, no persisted config (see docs/archive/hackathon/05_BUILD_PLAN.md Gate 2.2).'
   )
   process.exit(1)
 }

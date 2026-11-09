@@ -65,6 +65,6 @@ Not built here: the gateway's single fixed-port listener, `CONNECT <service>` pr
 ## Consequence
 
 - `sidecar/src/ens/client.ts`'s `DeviceRecord.acl`/`.aclGranters: string[]` and `brambled/sidecar/client.go`'s `DeviceRecord.ACL`/`.ACLGranters []string` expose both lists as opaque strings — the sidecar's job stays pure resolution, not interpretation; it never computes or verifies a digest.
-- `docs/03_ARCHITECTURE.md` and Gate 2.3's test description in `docs/05_BUILD_PLAN.md` are corrected to the symbolic/digest shape — the `db:5432` host:port examples they still showed described the first, rejected draft.
+- `docs/archive/hackathon/03_ARCHITECTURE.md` and Gate 2.3's test description in `docs/archive/hackathon/05_BUILD_PLAN.md` are corrected to the symbolic/digest shape — the `db:5432` host:port examples they still showed described the first, rejected draft.
 - `admincli/src/set-acl.ts` cross-checks the supplied `BRAMBLE_GRANTER_PRIVATE_KEY` against the claimed granter identity's on-chain pubkey before writing anything, catching the operator-error case of vouching under the wrong identity.
 - A granter is not a new concept to operate — it's just another enrolled ENS name, provisioned with the same `enroll.ts` any device uses.

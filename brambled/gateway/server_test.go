@@ -82,7 +82,7 @@ func sendConnect(t *testing.T, conn net.Conn, service string) (status, payload s
 }
 
 // TestGate2_3_AgentCannotReachOutsideACL is Gate 2.3's required test
-// (docs/05_BUILD_PLAN.md line 58-59): a device with a `db`-only grant sends
+// (docs/archive/hackathon/05_BUILD_PLAN.md line 58-59): a device with a `db`-only grant sends
 // CONNECT cache on the same host, and CONNECT db on a different host
 // entirely — both refused by the receiving peer — while CONNECT db on the
 // authorized host succeeds and actually proxies real bytes end to end over

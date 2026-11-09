@@ -9,7 +9,7 @@ import (
 )
 
 // TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory is Gate 2.2's
-// automated evidence (docs/05_BUILD_PLAN.md): "delete every local cache,
+// automated evidence (docs/archive/hackathon/05_BUILD_PLAN.md): "delete every local cache,
 // restart both nodes, confirm the mesh reassembles purely from chain
 // state." The structural half of that property is what scripts/
 // check-no-local-state.mjs guards (the demo path has no file writes at

@@ -103,7 +103,7 @@ func startHostileRelay(t *testing.T, victimPub, poisonedCandidate string) Relay 
 }
 
 // TestGate1_2_MaliciousRelayCannotAdmitPeer is Gate 1.2's own test
-// (docs/05_BUILD_PLAN.md): "Run a deliberately hostile signaling relay that
+// (docs/archive/hackathon/05_BUILD_PLAN.md): "Run a deliberately hostile signaling relay that
 // advertises an unauthorized peer as legitimate ... assert the connection is
 // refused."
 //

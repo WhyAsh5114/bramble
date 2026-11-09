@@ -25,7 +25,7 @@ func pingUntil(t *testing.T, from *Node, to netip.Addr, deadline time.Duration) 
 }
 
 // TestGate1_1_PeerRejectsUnregisteredKey is Gate 1.1's own test
-// (docs/05_BUILD_PLAN.md): "Stand up a node, present a valid, well-formed
+// (docs/archive/hackathon/05_BUILD_PLAN.md): "Stand up a node, present a valid, well-formed
 // WireGuard handshake from an unregistered key, assert refusal. Then
 // register the key, assert acceptance after cache expiry."
 //

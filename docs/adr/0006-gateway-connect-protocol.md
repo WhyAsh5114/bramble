@@ -1,6 +1,6 @@
 # ADR 0006 — Gateway CONNECT protocol, peer-identity resolution, and client forwarding
 
-**Status:** Decided and verified, Sept 8 2026. `HARD GATE 2.3` (`docs/05_BUILD_PLAN.md`) passes end-to-end against a real WireGuard tunnel — `brambled/gateway/server_test.go`'s `TestGate2_3_AgentCannotReachOutsideACL`. The client-side counterpart (`Forwarder`, below) is verified both locally and against a real second machine over the real internet (`brambled/README.md`'s "Client forwarding runbook").
+**Status:** Decided and verified, Sept 8 2026. `HARD GATE 2.3` (`docs/archive/hackathon/05_BUILD_PLAN.md`) passes end-to-end against a real WireGuard tunnel — `brambled/gateway/server_test.go`'s `TestGate2_3_AgentCannotReachOutsideACL`. The client-side counterpart (`Forwarder`, below) is verified both locally and against a real second machine over the real internet (`brambled/README.md`'s "Client forwarding runbook").
 
 ## Context
 
@@ -59,7 +59,7 @@ Full `brambled` suite (`admission`, `gateway`, `rendezvous`, `sidecar`, `wgnode`
 
 ## Consequence
 
-- `docs/05_BUILD_PLAN.md` Gate 2.3 flips to verified.
+- `docs/archive/hackathon/05_BUILD_PLAN.md` Gate 2.3 flips to verified.
 - `brambled serve` gains four new flags: `-label` (required), `-service` (repeatable, optional), `-gateway-port` (default `7891`), `-forward` (repeatable, optional).
 - The Section C proxy path (`proxy`, `bufferedConn`) is now correctness-hardened against pipelined client writes, not just against the request shapes today's tests happen to send.
-- Section D (Gate 2.2 — clean-state validation pass) is verified Sept 9, 2026 (`docs/05_BUILD_PLAN.md`, `brambled/README.md`'s "Gate 2.2 runbook") — Phase 2 is complete.
+- Section D (Gate 2.2 — clean-state validation pass) is verified Sept 9, 2026 (`docs/archive/hackathon/05_BUILD_PLAN.md`, `brambled/README.md`'s "Gate 2.2 runbook") — Phase 2 is complete.

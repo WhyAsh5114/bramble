@@ -210,7 +210,7 @@ func TestCheckACL_WrongServiceNameDenied(t *testing.T) {
 // TestCheckACL_DifferentGatewayDenied: the same granter vouching for the
 // same device+service on a *different* gateway produces a different digest
 // (the ECDH pair is per-gateway) — digests are not portable across gateways.
-// This is the second scenario docs/05_BUILD_PLAN.md Gate 2.3 names
+// This is the second scenario docs/archive/hackathon/05_BUILD_PLAN.md Gate 2.3 names
 // ("CONNECT db on a different host entirely").
 func TestCheckACL_DifferentGatewayDenied(t *testing.T) {
 	granterPriv := strings.Repeat("aa", 32)

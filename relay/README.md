@@ -10,19 +10,22 @@ The relay never decides who may talk to whom. Each peer checks admission against
 
 ## Run one
 
+With the `bramble` binary (see the top-level README for the installer):
+
 ```sh
+bramble relay -public-host <your public IP>
+```
+
+Or as a container built from this directory (the compose file in `deploy/projects-host/relay/` runs it under gVisor):
+
+```sh
+docker build -t bramble-relay relay
 docker run -d --name bramble-relay \
   -p 9420:9420/tcp -p 3478:3478/udp -p 40000-40999:40000-40999/udp \
-  -e RELAY_PUBLIC_HOST=<your public IP or DNS name> \
-  -v bramble-relay:/state \
-  ghcr.io/whyash5114/bramble-relay:latest
+  -e RELAY_PUBLIC_HOST=<your public IP> -v bramble-relay:/state bramble-relay
 ```
 
-Print the TLS pin that clients check, then list the relay in the directory from the Bramble UI (**Relays → Publish a relay**):
-
-```sh
-docker exec bramble-relay /relay pin
-```
+It logs its TLS pin on start (`bramble relay pin` or `docker exec bramble-relay /relay pin` prints it again). List the relay in the directory from the console's **Relays** page with that pin.
 
 ## Configuration
 

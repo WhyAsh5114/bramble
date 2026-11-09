@@ -1,6 +1,6 @@
 # ADR 0011 — W10: which new Hedera service to build
 
-**Status:** Draft, 6 Nov 2026. **Human approver:** not yet named. Decision belongs to a human (checkpoint H1 in `docs/15_MUMBAI_HANDOFF.md`).
+**Status:** Draft, 6 Nov 2026. **Human approver:** not yet named. Decision belongs to a human (checkpoint H1 in `docs/archive/hackathon/15_MUMBAI_HANDOFF.md`).
 
 ## Context
 
@@ -17,7 +17,7 @@ Evidence labels: Verified (ran it), Read from source (code or docs, not run), Op
 Each grant, revoke and payment posts a salted hash commitment to a Hedera Consensus Service topic. This PR ships the standalone module, a mirror node reader and a live check. Planned, not built: the console reads the topic through the reader and verifies entries against openings that the approval service keeps.
 
 - **Demo moment:** beat 3 shows the topic entry with a HashScan link.
-- **Privacy:** the topic shows event kind, counts, timing and the payer and topic identities, so activity can be correlated. Encoded fields (subjects, services, amounts) are hidden only while each salt stays secret (`docs/16_HCS_AUDIT_RECORD_FORMAT.md`). Answer "Isn't a public Hedera log a privacy leak?" with "Only salted hash commitments are posted, and the kind and timing are public."
+- **Privacy:** the topic shows event kind, counts, timing and the payer and topic identities, so activity can be correlated. Encoded fields (subjects, services, amounts) are hidden only while each salt stays secret (`docs/archive/hackathon/16_HCS_AUDIT_RECORD_FORMAT.md`). Answer "Isn't a public Hedera log a privacy leak?" with "Only salted hash commitments are posted, and the kind and timing are public."
 - **Invariants:** no topology on-chain (commitments only), no local-state writes (the module lives outside `sidecar/src`), no enforcement role (peers do not read the topic).
 - **Cost and risk:** one HCS transaction per event, testnet only. Needs the payer secrets for a live run. Planned: the approval service must keep openings for verification; if it holds them only in memory, a restart loses them.
 - **Status:** module and unit tests with a fake client: Verified. Live testnet run: Open.

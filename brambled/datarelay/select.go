@@ -1,5 +1,5 @@
 // Package datarelay picks which data-plane relay to buy a session from
-// when a peer is configured to use one (docs/adr/0008, docs/05_BUILD_PLAN.md
+// when a peer is configured to use one (docs/adr/0008, docs/archive/hackathon/05_BUILD_PLAN.md
 // Gate 4.3's "two relays, client chooses"). Deliberately just this one pure
 // function — gathering quotes (an HTTP GET to each candidate's relay-sidecar
 // /price route, timing the round trip) is brambled/main.go's job, kept out

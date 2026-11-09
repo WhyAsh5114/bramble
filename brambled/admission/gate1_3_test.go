@@ -26,7 +26,7 @@ func pingUntil(t *testing.T, from *wgnode.Node, to netip.Addr, deadline time.Dur
 }
 
 // TestGate1_3_RevocationDropsAlreadyConnectedPeer is Gate 1.3's own concern
-// (docs/05_BUILD_PLAN.md): the caution there warns that if an admission
+// (docs/archive/hackathon/05_BUILD_PLAN.md): the caution there warns that if an admission
 // verifier only gates *new* handshakes, an already-connected revoked peer can
 // keep passing traffic for up to WireGuard's own ~2 minute rekey timer,
 // regardless of revocation. This test proves that's not what happens here:
