@@ -2,6 +2,7 @@ package rendezvous
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -30,6 +32,7 @@ type message struct {
 	Candidate string        `json:"candidate,omitempty"`
 	Message   string        `json:"message,omitempty"`
 	Bytes     int64         `json:"bytes,omitempty"`
+	Token     string        `json:"token,omitempty"` // x402 payment token for a paid relay
 	Session   *SessionGrant `json:"session,omitempty"`
 	Status    *RelayStatus  `json:"status,omitempty"`
 }
@@ -49,13 +52,24 @@ type RelayStatus struct {
 	Peers    int    `json:"peers"`
 	Sessions int    `json:"sessions"`
 	Free     bool   `json:"free"`
-	Budget   struct {
+	// Paid is set when the relay charges for data sessions (ADR 0021).
+	Paid   *PaidStatus `json:"paid,omitempty"`
+	Budget struct {
 		DayBytes         int64 `json:"dayBytes"`
 		DayLimit         int64 `json:"dayLimit"`
 		MonthBytes       int64 `json:"monthBytes"`
 		MonthLimit       int64 `json:"monthLimit"`
 		ForwardingPaused bool  `json:"forwardingPaused"`
 	} `json:"budget"`
+}
+
+// PaidStatus is what a paid relay publishes so a node can price a session
+// before paying.
+type PaidStatus struct {
+	Network     string `json:"network"`
+	Asset       string `json:"asset"`
+	PayTo       string `json:"payTo"`
+	PricePerMiB int64  `json:"pricePerMiB"`
 }
 
 // ErrRelayUnreachable marks failures that are the relay's fault (no answer,
@@ -96,6 +110,41 @@ func dial(r Relay, timeout time.Duration) (*tls.Conn, error) {
 		return nil, fmt.Errorf("%w: dialing relay %s: %w", ErrRelayUnreachable, r.Address, err)
 	}
 	return conn, nil
+}
+
+// HTTPClient returns an HTTP client for the relay's x402 routes. It reaches
+// them over the same TLS port as the rendezvous protocol and checks the relay's
+// key against its published pin, so a payment goes only to the relay that was
+// listed.
+func HTTPClient(r Relay, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				type result struct {
+					conn *tls.Conn
+					err  error
+				}
+				ch := make(chan result, 1)
+				go func() {
+					c, err := dial(r, timeout)
+					ch <- result{c, err}
+				}()
+				select {
+				case res := <-ch:
+					return res.conn, res.err
+				case <-ctx.Done():
+					go func() {
+						if res := <-ch; res.conn != nil {
+							res.conn.Close()
+						}
+					}()
+					return nil, ctx.Err()
+				}
+			},
+			DisableKeepAlives: true,
+		},
+	}
 }
 
 type wire struct {
@@ -212,12 +261,19 @@ func Exchange(relay Relay, ownPubkey, peerPubkey, myCandidate string, timeout ti
 
 // RequestSession asks relay for a data-relay session of up to bytes.
 func RequestSession(relay Relay, bytes int64, timeout time.Duration) (*SessionGrant, error) {
+	return RequestSessionWithToken(relay, bytes, "", timeout)
+}
+
+// RequestSessionWithToken asks a relay for a session and presents the token a
+// paid relay issued after payment. A paid relay sizes the session by what the
+// token paid for.
+func RequestSessionWithToken(relay Relay, bytes int64, token string, timeout time.Duration) (*SessionGrant, error) {
 	w, err := open(relay, timeout)
 	if err != nil {
 		return nil, err
 	}
 	defer w.conn.Close()
-	if err := w.enc.Encode(message{Type: "session", Bytes: bytes}); err != nil {
+	if err := w.enc.Encode(message{Type: "session", Bytes: bytes, Token: token}); err != nil {
 		return nil, err
 	}
 	m, err := w.recv()
