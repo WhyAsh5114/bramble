@@ -64,6 +64,12 @@ func Main(args []string, version string) int {
 	sessionTTL := fs.Duration("session-ttl", time.Duration(envInt("RELAY_SESSION_TTL_SECONDS", 1800))*time.Second, "lifetime of one data session")
 	maxSessions := fs.Int("max-sessions", int(envInt("RELAY_MAX_SESSIONS", 256)), "concurrent data sessions")
 	perHour := fs.Int("sessions-per-ip-per-hour", int(envInt("RELAY_SESSIONS_PER_IP_PER_HOUR", 60)), "new data sessions one source IP may open per hour")
+	x402PayTo := fs.String("x402-pay-to", os.Getenv("RELAY_X402_PAY_TO"), "Hedera account that receives payment; setting it turns paid data sessions on (ADR 0021)")
+	x402Price := fs.Int64("x402-price-per-mib", envInt("RELAY_X402_PRICE_PER_MIB", 0), "price of 1 MiB of data-relay traffic in the asset's smallest unit")
+	x402Asset := fs.String("x402-asset", envStr("RELAY_X402_ASSET", "0.0.429274"), "Hedera token ID payment is made in (default: testnet USDC)")
+	x402Network := fs.String("x402-network", envStr("RELAY_X402_NETWORK", "hedera:testnet"), "x402 network; only hedera:testnet is allowed")
+	x402Facilitator := fs.String("x402-facilitator", envStr("RELAY_X402_FACILITATOR", "https://api.testnet.blocky402.com"), "x402 facilitator base URL")
+	x402PublicURL := fs.String("x402-public-url", os.Getenv("RELAY_X402_PUBLIC_URL"), "https URL of this relay, named in 402 responses")
 	noData := fs.Bool("rendezvous-only", os.Getenv("RELAY_RENDEZVOUS_ONLY") == "1", "offer rendezvous and STUN only, no data relay")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -95,6 +101,23 @@ func Main(args []string, version string) int {
 			SessionBytes: *sessionBytes, SessionTTL: *sessionTTL, MaxSessions: *maxSessions,
 			SessionsPerHour: *perHour, PortMin: *portMin, PortMax: *portMax,
 		}, b)
+	}
+
+	var paywall *Paywall
+	if *x402PayTo != "" {
+		if data == nil {
+			fail(errors.New("paid data sessions need the data relay; drop -rendezvous-only"))
+		}
+		if *x402Network != "hedera:testnet" {
+			fail(errors.New("-x402-network must be hedera:testnet; mainnet needs a new decision (ADR 0021)"))
+		}
+		paywall, err = NewPaywall(PaywallConfig{
+			Facilitator: &Facilitator{BaseURL: *x402Facilitator}, Network: *x402Network, Asset: *x402Asset,
+			PayTo: *x402PayTo, PricePerMiB: *x402Price, MaxSessionBytes: *sessionBytes, PublicURL: *x402PublicURL,
+		}, *stateDir)
+		if err != nil {
+			fail(err)
+		}
 	}
 
 	ln, err := tls.Listen("tcp", *addr, cfg)
@@ -142,6 +165,10 @@ func Main(args []string, version string) int {
 	}()
 
 	srv := NewServer(data, *publicHost, version)
+	if paywall != nil {
+		log.Printf("paid data sessions: %d per MiB of %s on %s, paid to %s, facilitator %s", *x402Price, *x402Asset, *x402Network, *x402PayTo, *x402Facilitator)
+		srv.SetPaywall(paywall)
+	}
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		fail(err)
 	}

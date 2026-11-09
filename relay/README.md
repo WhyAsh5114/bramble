@@ -46,6 +46,23 @@ It logs its TLS pin on start (`bramble relay pin` or `docker exec bramble-relay 
 
 When the day or month budget is used up, the relay stops forwarding data until the period rolls over. Rendezvous and STUN keep working, so peers that can hole-punch still connect.
 
+## Paid data sessions (opt-in, Hedera testnet)
+
+Set `RELAY_X402_PAY_TO` to charge for data sessions. Rendezvous and STUN stay free. The relay then answers `POST /x402/session` on the same TLS port with `402 Payment Required`. A node pays with the x402 `exact` scheme on Hedera testnet, the facilitator verifies and settles, and the relay returns a single-use token that the node presents in the rendezvous `session` message. See [ADR 0021](../docs/adr/0021-paid-relays-and-audit-trail.md).
+
+| Variable                   | Default                             | Meaning                                                  |
+| -------------------------- | ----------------------------------- | -------------------------------------------------------- |
+| `RELAY_X402_PAY_TO`        | unset                               | Hedera account that receives payment; turns paid mode on |
+| `RELAY_X402_PRICE_PER_MIB` | `0` (required)                      | Price of 1 MiB in the asset's smallest unit              |
+| `RELAY_X402_ASSET`         | `0.0.429274`                        | Token paid in (testnet USDC)                             |
+| `RELAY_X402_NETWORK`       | `hedera:testnet`                    | Only `hedera:testnet` is accepted                        |
+| `RELAY_X402_FACILITATOR`   | `https://api.testnet.blocky402.com` | Facilitator base URL                                     |
+| `RELAY_X402_PUBLIC_URL`    | unset                               | `https` URL of this relay, named in 402 responses        |
+
+The relay builds the payment requirements itself and sends only those to the facilitator. It issues a token only after settlement succeeds. A token works once and expires after 10 minutes. The token secret is saved in `RELAY_STATE_DIR`, so a restart does not void a token that was already paid for. A used-token list is kept in memory, so a restart inside the 10 minutes would accept a spent token again.
+
+**Verified:** these behaviors against a fake facilitator in `relay/relaysrv/x402_test.go`. **Open:** a payment against the live Blocky402 testnet facilitator, which needs the client side and a funded account.
+
 ## What a relay operator can and cannot do
 
 - **Sees:** source IP addresses, timing and byte counts of its users, and which pseudonymous IDs talk to each other.
