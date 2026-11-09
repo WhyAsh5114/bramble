@@ -3,6 +3,7 @@ module github.com/WhyAsh5114/bramble/brambled
 go 1.27.0
 
 require (
+	github.com/WhyAsh5114/bramble/relay v0.0.0
 	golang.org/x/crypto v0.37.0
 	golang.org/x/net v0.39.0
 	golang.org/x/time v0.7.0
@@ -15,3 +16,5 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c // indirect
 )
+
+replace github.com/WhyAsh5114/bramble/relay => ../relay

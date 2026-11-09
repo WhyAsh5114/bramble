@@ -1,4 +1,4 @@
-package main
+package brambled
 
 import (
 	"fmt"
@@ -6,15 +6,15 @@ import (
 	"testing"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // fakeMeshResolver is a minimal admission.Resolver for resolvePeerMeshIPs'
 // tests — real ENS resolution needs a live chain, so this stands in for
 // sidecar.Manager the same way admission's own tests fake it out.
-type fakeMeshResolver map[string]*sidecar.DeviceRecord
+type fakeMeshResolver map[string]*registry.DeviceRecord
 
-func (f fakeMeshResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (f fakeMeshResolver) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	record, ok := f[label]
 	if !ok {
 		return nil, fmt.Errorf("no such device: %s", label)

@@ -48,6 +48,11 @@ func TestRelayMediatedHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generating bob's key pair: %v", err)
 	}
+	for _, k := range []string{alicePriv, bobPriv} {
+		if _, err := RegisterIdentity(k); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	aliceAddr := netip.MustParseAddr("10.98.0.1")
 	bobAddr := netip.MustParseAddr("10.98.0.2")
@@ -80,11 +85,11 @@ func TestRelayMediatedHandshake(t *testing.T) {
 	aliceResult := make(chan exchangeResult, 1)
 	bobResult := make(chan exchangeResult, 1)
 	go func() {
-		c, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, "", 5*time.Second)
+		c, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, 5*time.Second)
 		aliceResult <- exchangeResult{c, err}
 	}()
 	go func() {
-		c, err := Exchange(relayAddr, bobPub, alicePub, bobCandidate, "", 5*time.Second)
+		c, err := Exchange(relayAddr, bobPub, alicePub, bobCandidate, 5*time.Second)
 		bobResult <- exchangeResult{c, err}
 	}()
 

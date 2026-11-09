@@ -54,12 +54,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // Resolver is satisfied by *sidecar.Manager.
 type Resolver interface {
-	ResolveDevice(label string) (*sidecar.DeviceRecord, error)
+	ResolveDevice(label string) (*registry.DeviceRecord, error)
 }
 
 // PeerTable is satisfied by *wgnode.Node.

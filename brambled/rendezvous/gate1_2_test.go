@@ -1,8 +1,8 @@
 package rendezvous
 
 import (
+	"crypto/tls"
 	"encoding/json"
-	"net"
 	"net/netip"
 	"sync"
 	"testing"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
+	"github.com/WhyAsh5114/bramble/relay/relaysrv"
 )
 
 // startHostileRelay behaves exactly like the real relay/main.go for every
@@ -21,10 +22,20 @@ import (
 // fabricates one outright. Models an attacker running their own modified
 // relay binary — never a change to the real, dumb relay — per
 // docs/adr/0003-rendezvous-relay-split.md's "Trust boundary" section.
-func startHostileRelay(t *testing.T, victimPub, poisonedCandidate string) string {
+func startHostileRelay(t *testing.T, victimPub, poisonedCandidate string) Relay {
 	t.Helper()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// A malicious relay listed in the directory has a valid pin of its own.
+	key, err := relaysrv.LoadOrCreateKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, _ := relaysrv.PinOf(&key.PublicKey)
+	cfg, err := relaysrv.TLSConfig(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
 	if err != nil {
 		t.Fatalf("listening: %v", err)
 	}
@@ -66,7 +77,7 @@ func startHostileRelay(t *testing.T, victimPub, poisonedCandidate string) string
 						peers[pubkey] = self
 						mu.Unlock()
 					case "offer":
-						if m.To == victimPub {
+						if victimPub != "" {
 							// Forged: no lookup, no real victim involved at
 							// all — the relay just fabricates a response.
 							_ = send(self, message{Type: "offer", From: victimPub, Candidate: poisonedCandidate})
@@ -88,7 +99,7 @@ func startHostileRelay(t *testing.T, victimPub, poisonedCandidate string) string
 		}
 	}()
 
-	return ln.Addr().String()
+	return Relay{Label: "hostile", Address: ln.Addr().String(), Pin: pin}
 }
 
 // TestGate1_2_MaliciousRelayCannotAdmitPeer is Gate 1.2's own test
@@ -144,18 +155,21 @@ func TestGate1_2_MaliciousRelayCannotAdmitPeer(t *testing.T) {
 	}
 	defer attacker.Close()
 
-	relayAddr := startHostileRelay(t, bobPub, attackerCandidate)
-
-	// Alice runs the real client exchange, asking for bob's candidate. The
-	// hostile relay hands her the attacker's address instead.
-	learnedCandidate, err := Exchange(relayAddr, alicePub, bobPub, aliceCandidate, "", 5*time.Second)
-	if err != nil {
-		t.Fatalf("alice's candidate exchange failed: %v", err)
+	if _, err := RegisterIdentity(alicePriv); err != nil {
+		t.Fatal(err)
 	}
-	if learnedCandidate != attackerCandidate {
-		t.Fatalf("test setup broken: expected the hostile relay to hand back %q, got %q", attackerCandidate, learnedCandidate)
+	relay := startHostileRelay(t, bobPub, attackerCandidate)
+
+	// Since ADR 0019 candidates are sealed between the two peers: the hostile
+	// relay's fabricated offer fails authentication and Alice learns nothing.
+	if learned, err := Exchange(relay, alicePub, bobPub, aliceCandidate, 3*time.Second); err == nil {
+		t.Fatalf("alice accepted a candidate the relay fabricated: %q", learned)
 	}
 
+	// Defence in depth, the original Gate 1.2 property: even if an endpoint
+	// were poisoned some other way, WireGuard will not complete a handshake
+	// with anyone but the holder of bob's key.
+	learnedCandidate := attackerCandidate
 	poisonedEndpoint, err := netip.ParseAddrPort(learnedCandidate)
 	if err != nil {
 		t.Fatalf("parsing poisoned candidate: %v", err)

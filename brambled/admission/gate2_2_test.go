@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory is Gate 2.2's
@@ -33,7 +33,7 @@ func TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory(t *testing.T) {
 	future := now.Add(24 * time.Hour).Unix()
 
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("pre-restart-key"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("pre-restart-key"), Expiry: itoa(future)},
 	}
 
 	// Phase 1: the pre-restart node syncs against the current chain state
@@ -53,7 +53,7 @@ func TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory(t *testing.T) {
 	// The cache wipe + restart: a brand-new Loop and a brand-new peer table,
 	// sharing nothing with the old node — while the chain rotated the label
 	// to a different key in between.
-	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("post-restart-key"), Status: 2, Expiry: itoa(future)}
+	resolver["device1"] = &registry.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("post-restart-key"), Expiry: itoa(future)}
 
 	restartedTable := newFakeTable()
 	endpointCalls := 0
@@ -88,7 +88,7 @@ func TestGate2_2_FreshLoopReadsCurrentChainStateNotPriorMemory(t *testing.T) {
 	// The restarted node must still remove the peer, via its own
 	// in-process memory of what the chain said *since* the restart; the
 	// pre-restart node's memory plays no part.
-	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"}
+	resolver["device1"] = &registry.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: nil, Expiry: "0"}
 	restartedLoop.SyncOnce()
 
 	if !restartedTable.removed["post-restart-key"] {

@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -19,6 +21,16 @@ type Limits struct {
 	PortMin, PortMax int           // UDP ports sessions bind to (published by the host)
 }
 
+// Trace turns on per-session event logging (RELAY_TRACE=1). It never logs
+// secrets or payloads, only sizes, sides and source addresses.
+var Trace = os.Getenv("RELAY_TRACE") != ""
+
+func tracef(format string, args ...any) {
+	if Trace {
+		log.Printf("trace: "+format, args...)
+	}
+}
+
 type dataSession struct {
 	id        [8]byte
 	secret    []byte
@@ -30,6 +42,9 @@ type dataSession struct {
 	mu    sync.Mutex
 	used  int64
 	slots [2]*net.UDPAddr
+	// trace counters
+	firstFwd [2]bool
+	drops    map[string]int
 }
 
 type DataRelay struct {
@@ -91,6 +106,7 @@ func (r *DataRelay) allocate(ip string, bytes int64, now time.Time) (*dataSessio
 	}
 	r.perIP[ip] = append(recent, now)
 	r.sessions[s.id] = s
+	tracef("session %s allocated for %s on port %d, %d bytes, ttl %s", s.idHex(), ip, s.port(), bytes, r.limits.SessionTTL)
 	go r.forward(s)
 	return s, nil
 }
@@ -118,6 +134,9 @@ func (r *DataRelay) forward(s *dataSession) {
 		r.mu.Lock()
 		delete(r.sessions, s.id)
 		r.mu.Unlock()
+		s.mu.Lock()
+		tracef("session %s closed: %d/%d bytes used, drops %v", s.idHex(), s.used, s.allotted, s.drops)
+		s.mu.Unlock()
 	}()
 	buf := make([]byte, 65535)
 	for {
@@ -133,8 +152,15 @@ func (r *DataRelay) forward(s *dataSession) {
 		if side, isBind, ok := parseBind(buf[:n], s.id, s.secret, now); isBind {
 			if ok {
 				s.mu.Lock()
+				prev := s.slots[side]
 				s.slots[side] = src
+				other := s.slots[1-side] != nil
 				s.mu.Unlock()
+				if prev == nil || prev.String() != src.String() {
+					tracef("session %s side %d bound to %s (other side bound: %v)", s.idHex(), side, src, other)
+				}
+			} else {
+				tracef("session %s rejected a bind from %s", s.idHex(), src)
 			}
 			continue
 		}
@@ -146,13 +172,34 @@ func (r *DataRelay) forward(s *dataSession) {
 			}
 		}
 		if from < 0 || s.slots[1-from] == nil || s.used+int64(n) > s.allotted {
+			if Trace {
+				reason := "unbound-source"
+				switch {
+				case from >= 0 && s.slots[1-from] == nil:
+					reason = "peer-not-bound"
+				case from >= 0:
+					reason = "session-cap"
+				}
+				if s.drops == nil {
+					s.drops = map[string]int{}
+				}
+				if s.drops[reason] == 0 {
+					tracef("session %s dropping %d bytes from %s: %s", s.idHex(), n, src, reason)
+				}
+				s.drops[reason]++
+			}
 			s.mu.Unlock()
 			continue
+		}
+		if !s.firstFwd[from] {
+			s.firstFwd[from] = true
+			tracef("session %s first forward side %d -> %d (%d bytes)", s.idHex(), from, 1-from, n)
 		}
 		to := s.slots[1-from]
 		s.used += int64(n)
 		s.mu.Unlock()
 		if !r.budget.take(int64(n), now) {
+			tracef("session %s: budget used up, dropping", s.idHex())
 			continue
 		}
 		_, _ = s.conn.WriteToUDP(buf[:n], to)

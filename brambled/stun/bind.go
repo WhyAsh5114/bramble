@@ -196,3 +196,13 @@ func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	}
 	return b.Bind.Send(bufs, fresh)
 }
+
+// SendTo writes one raw datagram to target from the WireGuard socket, so a
+// relay sees the same source address the WireGuard traffic will come from.
+func (b *Bind) SendTo(target netip.AddrPort, payload []byte) error {
+	ep, err := b.ParseEndpoint(target.String())
+	if err != nil {
+		return err
+	}
+	return b.Send([][]byte{payload}, ep)
+}

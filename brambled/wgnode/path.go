@@ -49,7 +49,7 @@ func (n *Node) Punch(ctx context.Context, publicKey string, endpoint netip.AddrP
 	if _, err := n.admittedPeer(publicKey); err != nil {
 		return err
 	}
-	if n.stunBind == nil {
+	if !n.cfg.EnableSTUN {
 		return fmt.Errorf("shared discovery bind is disabled")
 	}
 	return n.stunBind.Punch(ctx, endpoint)

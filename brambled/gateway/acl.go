@@ -3,18 +3,18 @@ package gateway
 import (
 	"fmt"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // Resolver is satisfied by *sidecar.Manager — same shape as
 // admission.Resolver (brambled/admission/loop.go), declared separately here
 // rather than imported from admission so gateway doesn't depend on the
 // admission package for an unrelated reason (Go interface satisfaction
-// requires the return type to be the literal sidecar.DeviceRecord, not a
+// requires the return type to be the literal registry.DeviceRecord, not a
 // structurally-equivalent local type, so both packages import sidecar
 // directly instead).
 type Resolver interface {
-	ResolveDevice(label string) (*sidecar.DeviceRecord, error)
+	ResolveDevice(label string) (*registry.DeviceRecord, error)
 }
 
 // CheckACL implements adr/0005's verification loop: a gateway (identified by

@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-type fakeResolver map[string]*sidecar.DeviceRecord
+type fakeResolver map[string]*registry.DeviceRecord
 
-func (f fakeResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (f fakeResolver) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	return f[label], nil
 }
 
@@ -22,11 +22,11 @@ func (f fakeResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error)
 // RPC unreachable) for specific labels, independent of what fakeResolver
 // would otherwise return.
 type erroringResolver struct {
-	records map[string]*sidecar.DeviceRecord
+	records map[string]*registry.DeviceRecord
 	failing map[string]bool
 }
 
-func (f *erroringResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (f *erroringResolver) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	if f.failing[label] {
 		return nil, fmt.Errorf("resolver unavailable")
 	}
@@ -61,7 +61,7 @@ func TestSyncOnce_AddsAuthorizedPeer(t *testing.T) {
 	future := now.Add(24 * time.Hour).Unix()
 
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -83,7 +83,7 @@ func TestSyncOnce_RemovesExpiredPeer(t *testing.T) {
 	past := now.Add(-24 * time.Hour).Unix()
 
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(past)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(past)},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -112,7 +112,7 @@ func TestSyncOnce_RemovesPeerWhosePubkeyWasCleared(t *testing.T) {
 	future := now.Add(time.Hour).Unix()
 
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -129,7 +129,7 @@ func TestSyncOnce_RemovesPeerWhosePubkeyWasCleared(t *testing.T) {
 
 	// Revoke by clearing pubkey — the record now reports none at all, not
 	// just an expired one.
-	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"}
+	resolver["device1"] = &registry.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: nil, Expiry: "0"}
 	loop.SyncOnce()
 
 	if !table.removed["abc123"] {
@@ -139,7 +139,7 @@ func TestSyncOnce_RemovesPeerWhosePubkeyWasCleared(t *testing.T) {
 
 func TestSyncOnce_NeverRegisteredPeerIsNeitherAddedNorRemoved(t *testing.T) {
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: nil, Expiry: "0"},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -158,7 +158,7 @@ func TestSyncOnce_NeverRegisteredPeerIsNeitherAddedNorRemoved(t *testing.T) {
 func TestSyncOnce_StaticEndpointWinsOverResolver(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	staticEndpoint := netip.MustParseAddrPort("198.51.100.1:51820")
@@ -187,7 +187,7 @@ func TestSyncOnce_StaticEndpointWinsOverResolver(t *testing.T) {
 func TestSyncOnce_ResolverConsultedOnceThenCached(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	resolvedEndpoint := netip.MustParseAddrPort("203.0.113.5:51820")
@@ -215,7 +215,7 @@ func TestSyncOnce_ResolverConsultedOnceThenCached(t *testing.T) {
 func TestSyncOnce_ResolverErrorDoesNotBlockAdmission(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	var events []Event
@@ -250,7 +250,7 @@ func TestSyncOnce_ResolverErrorDoesNotBlockAdmission(t *testing.T) {
 func TestSyncOnce_KeyRotationRemovesOldPeer(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("old-key"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("old-key"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -266,7 +266,7 @@ func TestSyncOnce_KeyRotationRemovesOldPeer(t *testing.T) {
 	}
 
 	// Rotate: same label, still authorized, different pubkey.
-	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("new-key"), Status: 2, Expiry: itoa(future)}
+	resolver["device1"] = &registry.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("new-key"), Expiry: itoa(future)}
 	loop.SyncOnce()
 
 	if !table.removed["old-key"] {
@@ -285,8 +285,8 @@ func TestSyncOnce_ResolverErrorLeavesPeerAdmittedWithoutMaxStale(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	future := now.Add(time.Hour).Unix()
 	resolver := &erroringResolver{
-		records: map[string]*sidecar.DeviceRecord{
-			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		records: map[string]*registry.DeviceRecord{
+			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 		},
 		failing: map[string]bool{},
 	}
@@ -322,8 +322,8 @@ func TestSyncOnce_MaxStaleRemovesPeerAfterSustainedResolverFailure(t *testing.T)
 	now := time.Unix(1_800_000_000, 0)
 	future := now.Add(time.Hour).Unix()
 	resolver := &erroringResolver{
-		records: map[string]*sidecar.DeviceRecord{
-			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		records: map[string]*registry.DeviceRecord{
+			"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 		},
 		failing: map[string]bool{},
 	}
@@ -376,7 +376,7 @@ func TestSyncOnce_MaxStaleRemovesPeerAfterSustainedResolverFailure(t *testing.T)
 func TestSyncOnce_RemovesPeerMarkedRevoked(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	table := newFakeTable()
 	loop := &Loop{
@@ -393,7 +393,7 @@ func TestSyncOnce_RemovesPeerMarkedRevoked(t *testing.T) {
 
 	// Revoke via the EAC-gated `revoked` record, not by clearing pubkey —
 	// pubkey and expiry are unchanged.
-	resolver["device1"] = &sidecar.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future), Revoked: true}
+	resolver["device1"] = &registry.DeviceRecord{Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future), Revoked: true}
 	loop.SyncOnce()
 
 	if !table.removed["abc123"] {
@@ -419,7 +419,7 @@ func TestSyncOnce_RotationAndRevocationRemovesPreviouslyAdmittedKey(t *testing.T
 	}
 
 	loop.SyncOnce()
-	resolver["device1"] = &sidecar.DeviceRecord{
+	resolver["device1"] = &registry.DeviceRecord{
 		Fullname: "device1.acme.eth",
 		Pubkey:   strPtr("new-key"),
 		Expiry:   itoa(future),
@@ -441,7 +441,7 @@ func TestSyncOnce_RotationAndRevocationRemovesPreviouslyAdmittedKey(t *testing.T
 func TestSyncOnce_EmitsEventPerPeer(t *testing.T) {
 	future := time.Unix(1_800_000_000, 0).Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Status: 2, Expiry: itoa(future)},
+		"device1": {Fullname: "device1.acme.eth", Pubkey: strPtr("abc123"), Expiry: itoa(future)},
 	}
 	var events []Event
 	loop := &Loop{

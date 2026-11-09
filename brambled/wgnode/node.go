@@ -121,11 +121,10 @@ func New(cfg Config) (*Node, error) {
 	if bind == nil {
 		bind = conn.NewDefaultBind()
 	}
-	var stunBind *stun.Bind
-	if cfg.EnableSTUN {
-		stunBind = stun.NewBind(bind)
-		bind = stunBind
-	}
+	// The wrapper is always installed: data-relay bind packets (ADR 0019)
+	// must leave from the WireGuard socket even when STUN is off.
+	stunBind := stun.NewBind(bind)
+	bind = stunBind
 	var dev *device.Device
 	var tnet *netstack.Net
 	var interfaceName string
@@ -402,6 +401,11 @@ func (n *Node) Ping(raddr netip.Addr, timeout time.Duration) (bool, error) {
 		return false, nil // timeout or refusal — not an error, just "no reply"
 	}
 	return true, nil
+}
+
+// SendRaw writes one datagram to target from the WireGuard socket.
+func (n *Node) SendRaw(target netip.AddrPort, payload []byte) error {
+	return n.stunBind.SendTo(target, payload)
 }
 
 func (n *Node) Close() {

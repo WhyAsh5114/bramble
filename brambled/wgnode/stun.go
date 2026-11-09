@@ -41,7 +41,7 @@ func (n *Node) EndpointStatus() EndpointStatus {
 // DiscoverEndpoint runs discovery on the WireGuard bind and updates statusapi's
 // snapshot. Calls are serialized; failures clear the previous observation.
 func (n *Node) DiscoverEndpoint(ctx context.Context, servers []string) (netip.AddrPort, error) {
-	if n.stunBind == nil {
+	if !n.cfg.EnableSTUN {
 		return netip.AddrPort{}, fmt.Errorf("STUN is disabled; set Config.EnableSTUN")
 	}
 	n.discovery.query.Lock()

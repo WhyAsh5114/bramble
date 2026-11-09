@@ -2,7 +2,7 @@
   "name": "brambled",
   "private": true,
   "scripts": {
-    "build": "go build -o bin/brambled .",
+    "build": "go build -o bin/brambled ./cmd/brambled",
     "typecheck": "go build -o /dev/null ./...",
     "lint": "go vet ./...",
     "format": "gofmt -w .",

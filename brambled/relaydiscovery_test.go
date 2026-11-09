@@ -1,26 +1,23 @@
-package main
+package brambled
 
 import (
-	"context"
 	"errors"
-	"net"
-	"net/netip"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
 
 func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
 	now := time.Unix(1000, 0)
 	calls := 0
-	fetch := func() (*sidecar.RelaysResponse, error) {
+	fetch := func() ([]registry.Relay, error) {
 		calls++
 		if calls == 1 {
 			return nil, errors.New("sidecar returned 502: Invalid parameters")
 		}
-		return &sidecar.RelaysResponse{Rendezvous: []sidecar.RendezvousRelay{{Label: "relay1", Address: "203.0.113.5:9420", SidecarURL: "http://203.0.113.5:7891"}}}, nil
+		return []registry.Relay{{Label: "relay1", Address: "203.0.113.5:9420", Pin: "sha256/x"}}, nil
 	}
 	pool := newRendezvousPool(nil, fetch, 10*time.Second)
 	pool.now = func() time.Time { return now }
@@ -35,7 +32,7 @@ func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
 	}
 	now = now.Add(6 * time.Second)
 	relays, err := pool.Get()
-	if err != nil || len(relays) != 1 || relays[0].Label != "relay1" || relays[0].SidecarURL == "" {
+	if err != nil || len(relays) != 1 || relays[0].Label != "relay1" || relays[0].Pin == "" {
 		t.Fatalf("Get after gap: relays=%v err=%v, want relay1", relays, err)
 	}
 	// Once found, the pool stops querying.
@@ -45,15 +42,15 @@ func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
 }
 
 func TestRendezvousPoolKeepsStartupRelays(t *testing.T) {
-	fetch := func() (*sidecar.RelaysResponse, error) { t.Fatal("fetch must not run"); return nil, nil }
-	pool := newRendezvousPool([]sidecar.RendezvousRelay{{Label: "static", Address: "x:1"}}, fetch, time.Second)
+	fetch := func() ([]registry.Relay, error) { t.Fatal("fetch must not run"); return nil, nil }
+	pool := newRendezvousPool([]rendezvous.Relay{{Label: "static", Address: "x:1"}}, fetch, time.Second)
 	if relays, err := pool.Get(); err != nil || len(relays) != 1 {
 		t.Fatalf("relays=%v err=%v", relays, err)
 	}
 }
 
 func TestRendezvousPoolEmptyRegistryIsAnError(t *testing.T) {
-	pool := newRendezvousPool(nil, func() (*sidecar.RelaysResponse, error) { return &sidecar.RelaysResponse{}, nil }, time.Second)
+	pool := newRendezvousPool(nil, func() ([]registry.Relay, error) { return nil, nil }, time.Second)
 	if _, err := pool.Get(); err == nil {
 		t.Fatal("want an error when discovery finds no rendezvous relay")
 	}
@@ -90,53 +87,4 @@ func TestExchangeBackoffDoublesAndResets(t *testing.T) {
 	if got := b.Wait("peer"); got != 30*time.Second {
 		t.Fatalf("after reset the first failure waits %s, want 30s", got)
 	}
-}
-
-// A rendezvous set recovered after a start-up discovery failure must reach the
-// data-relay adoption watcher: the watcher keeps polling its source, and once
-// the source returns the relay it exchanges with that relay.
-func TestWatchDataRelayAdoptUsesRelaySetRecoveredAfterStartupFailure(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	accepted := make(chan struct{}, 1)
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			select {
-			case accepted <- struct{}{}:
-			default:
-			}
-			c.Close()
-		}
-	}()
-
-	var calls atomic.Int32
-	source := func() ([]sidecar.RendezvousRelay, error) {
-		if calls.Add(1) == 1 {
-			return nil, errors.New("discovery failed at start-up")
-		}
-		return []sidecar.RendezvousRelay{{Label: "recovered", Address: ln.Addr().String()}}, nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		watchDataRelayAdopt(ctx, nil, nil, "peer", "ownkey", "peerkey", "", netip.Prefix{}, source, nil)
-	}()
-
-	select {
-	case <-accepted:
-	case <-time.After(3*dataRelayAdoptExchangeTimeout + 2*time.Second):
-		t.Fatalf("adopt watcher never exchanged with the recovered relay (source calls: %d)", calls.Load())
-	}
-	cancel()
-	<-done
 }

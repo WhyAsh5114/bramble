@@ -1,4 +1,4 @@
-package main
+package brambled
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/traversal"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
-	"golang.org/x/time/rate"
 )
 
 type traversalRun struct {
@@ -30,12 +29,10 @@ type peerTraversal struct {
 	eligible        func(string) bool
 	local           func() rendezvous.Announcement
 	relaySet        rendezvousSource
-	payer           relayPayer
+	sessions        sessionSource
 	pool            dataRelayFlag
 	sessionBytes    int64
-	policy          dataRelayPurchasePolicy
 	exchangeTimeout time.Duration
-	pace            *rate.Limiter
 	onState         func(string, string, string)
 	allowLoopback   bool // rootless integration tests only
 	runs            map[string]traversalRun
@@ -89,8 +86,17 @@ func (m *peerTraversal) admitted(key string) bool {
 func (m *peerTraversal) run(ctx context.Context, label, key string) {
 	var mu sync.Mutex
 	var relay netip.AddrPort
+	var relayBind *rendezvous.RelayBind
 	exchanger := rendezvous.Exchanger{
 		Own: m.own, AllowLoopback: m.allowLoopback,
+		Bind: func() *rendezvous.RelayBind {
+			mu.Lock()
+			defer mu.Unlock()
+			return relayBind
+		},
+		OnBind: func(b rendezvous.RelayBind, endpoint netip.AddrPort) {
+			relayBinder.keep(m.node, endpoint, b, '1', time.Now().Add(2*time.Hour))
+		},
 		Admitted: func(key string) bool { return ctx.Err() == nil && m.admitted(key) },
 		Local: func() rendezvous.Announcement {
 			local := append(rendezvous.Announcement(nil), m.local()...)
@@ -109,18 +115,13 @@ func (m *peerTraversal) run(ctx context.Context, label, key string) {
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
-			learned, _, err := exchangeAnyMetered(relays, m.payer, own, peer, candidate, m.exchangeTimeout)
+			learned, _, err := exchangeAny(relays, own, peer, candidate, m.exchangeTimeout)
 			return learned, err
 		},
 	}
 	controller := traversal.Controller{
 		Node: m.node, Peer: key,
 		Learn: func(ctx context.Context) (rendezvous.Announcement, error) {
-			if m.pace != nil {
-				if err := m.pace.Wait(ctx); err != nil {
-					return nil, err
-				}
-			}
 			return exchanger.Learn(key)
 		},
 		Relay: func(ctx context.Context) (netip.AddrPort, error) {
@@ -132,7 +133,7 @@ func (m *peerTraversal) run(ctx context.Context, label, key string) {
 			if ctx.Err() != nil || !m.admitted(key) {
 				return netip.AddrPort{}, rendezvous.ErrNotAdmitted
 			}
-			session, err := buyDataRelaySession(m.payer, m.pool, m.sessionBytes, m.policy)
+			session, err := buyDataRelaySession(m.sessions, m.pool, m.sessionBytes)
 			if err != nil {
 				return netip.AddrPort{}, err
 			}
@@ -143,8 +144,9 @@ func (m *peerTraversal) run(ctx context.Context, label, key string) {
 			if ctx.Err() != nil || !m.admitted(key) {
 				return netip.AddrPort{}, rendezvous.ErrNotAdmitted
 			}
+			relayBinder.keep(m.node, endpoint, session.bind, '0', session.expiresAt)
 			mu.Lock()
-			relay = endpoint
+			relay, relayBind = endpoint, &session.bind
 			mu.Unlock()
 			return endpoint, nil
 		},

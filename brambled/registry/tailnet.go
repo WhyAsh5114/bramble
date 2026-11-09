@@ -19,8 +19,9 @@ const (
 
 // Text record keys a relay publishes in the relay directory (ADR 0019).
 const (
-	KeyRendezvous = "rendezvous" // host:port of the rendezvous listener (TCP)
-	KeyDataRelay  = "data-relay" // https URL of the session API
+	KeyRendezvous = "rendezvous" // host:port of the rendezvous listener (TCP, TLS)
+	KeyPin        = "pin"        // "sha256/<base64url SPKI hash>" of the relay's TLS key
+	KeyDataRelay  = "data-relay" // "on" when the relay offers data sessions
 	KeySTUN       = "stun"       // host:port of the STUN server (UDP)
 	KeyPrice      = "price"      // atomic units per byte; "0" is free
 	KeyRegion     = "region"     // free text, e.g. "ap-south-1"
@@ -41,27 +42,17 @@ type DeviceRecord struct {
 	Block       uint64   `json:"block"`
 }
 
-// RendezvousRelay is a relay's rendezvous endpoint from the relay directory.
-type RendezvousRelay struct {
-	Label   string `json:"label"`
-	Address string `json:"address"`
-	// SessionURL is the relay's data-relay session API, if it offers one.
-	SessionURL string `json:"sessionUrl,omitempty"`
-}
-
-// DataRelay is a relay's data-relay session API from the relay directory.
-type DataRelay struct {
-	Label      string `json:"label"`
-	SessionURL string `json:"sessionUrl"`
-	Price      string `json:"price"`
-	STUN       string `json:"stun,omitempty"`
-	Region     string `json:"region,omitempty"`
-}
-
-// Relays is the relay directory as the cache sees it.
-type Relays struct {
-	Rendezvous []RendezvousRelay `json:"rendezvous"`
-	DataRelays []DataRelay       `json:"dataRelays"`
+// Relay is one entry of the relay directory. A relay without a TLS pin is
+// skipped: a client must be able to authenticate the relay it talks to.
+type Relay struct {
+	Label     string `json:"label"`
+	Address   string `json:"address"` // rendezvous host:port
+	Pin       string `json:"pin"`
+	DataRelay bool   `json:"dataRelay"`
+	STUN      string `json:"stun,omitempty"`
+	Price     string `json:"price"`
+	Region    string `json:"region,omitempty"`
+	Owner     string `json:"owner"`
 }
 
 // ErrNotFound means the label is not registered in the watched registry.
@@ -166,23 +157,25 @@ func (t *Tailnet) Devices() []*DeviceRecord {
 	return out
 }
 
-// Relays returns the relay directory. Relays without a rendezvous record are skipped.
-func (t *Tailnet) Relays() (*Relays, error) {
-	out := &Relays{Rendezvous: []RendezvousRelay{}, DataRelays: []DataRelay{}}
+// Relays returns the relay directory, sorted by label.
+func (t *Tailnet) Relays() ([]Relay, error) {
+	out := []Relay{}
 	if !t.hasRelays {
 		return out, nil
 	}
 	for _, r := range t.Records(1) {
-		if addr := r.Texts[KeyRendezvous]; addr != "" {
-			out.Rendezvous = append(out.Rendezvous, RendezvousRelay{Label: r.Label, Address: addr, SessionURL: r.Texts[KeyDataRelay]})
+		addr, pin := r.Texts[KeyRendezvous], r.Texts[KeyPin]
+		if addr == "" || !strings.HasPrefix(pin, "sha256/") {
+			continue
 		}
-		if u := r.Texts[KeyDataRelay]; u != "" {
-			price := r.Texts[KeyPrice]
-			if price == "" {
-				price = "0"
-			}
-			out.DataRelays = append(out.DataRelays, DataRelay{Label: r.Label, SessionURL: u, Price: price, STUN: r.Texts[KeySTUN], Region: r.Texts[KeyRegion]})
+		price := r.Texts[KeyPrice]
+		if price == "" {
+			price = "0"
 		}
+		out = append(out, Relay{
+			Label: r.Label, Address: addr, Pin: pin, DataRelay: r.Texts[KeyDataRelay] == "on",
+			STUN: r.Texts[KeySTUN], Price: price, Region: r.Texts[KeyRegion], Owner: r.Owner,
+		})
 	}
 	return out, nil
 }

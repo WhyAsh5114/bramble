@@ -1,6 +1,7 @@
 package rendezvous
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -106,6 +107,7 @@ func (a Announcement) Encode() (string, error) {
 // fails the whole message. ParseAnnouncement does not decide whether the
 // peer is trusted; see Exchanger.Learn.
 func ParseAnnouncement(candidate string) (Announcement, error) {
+	candidate, _ = SplitBind(candidate)
 	if candidate == "" {
 		return nil, nil
 	}
@@ -194,10 +196,10 @@ func (a Announcement) Best() (netip.AddrPort, bool) {
 // ExchangeFunc performs one rendezvous exchange: it publishes
 // myCandidate for peerPubkey and returns the candidate peerPubkey
 // published in return. The production implementation wraps Exchange with
-// relay selection and the paid token (brambled/main.go's exchangeAnyMetered).
+// relay selection (brambled/main.go's exchangeAny).
 type ExchangeFunc func(ownPubkey, peerPubkey, myCandidate string) (peerCandidate string, err error)
 
-// Exchanger learns a peer's endpoints through the paid rendezvous channel.
+// Exchanger learns a peer's endpoints through the sealed rendezvous channel.
 type Exchanger struct {
 	// Own is this node's WireGuard public key, hex.
 	Own string
@@ -212,12 +214,16 @@ type Exchanger struct {
 	// AllowLoopback accepts loopback endpoints from peers. Only tests that
 	// run both nodes on one host set it.
 	AllowLoopback bool
+	// Bind returns a data-relay session to share with the peer, or nil.
+	Bind func() *RelayBind
+	// OnBind receives a data-relay session the peer shared, with the relay endpoint it named.
+	OnBind func(RelayBind, netip.AddrPort)
 }
 
 // Learn exchanges endpoints with peerPubkey and returns the usable ones.
 //
 // Learn touches the rendezvous channel only for a peer ENS admits, so a
-// non-admitted peer neither costs a rendezvous payment nor sees this node's
+// non-admitted peer never sees this node's
 // endpoints. It checks admission again after the exchange, because a
 // revocation can land while the exchange waits for the peer; endpoints from
 // a peer revoked meanwhile are discarded.
@@ -236,6 +242,11 @@ func (e *Exchanger) Learn(peerPubkey string) (Announcement, error) {
 			mine = encoded
 		}
 	}
+	if e.Bind != nil && mine != "" {
+		if b := e.Bind(); b != nil {
+			mine = WithBind(mine, *b)
+		}
+	}
 
 	theirs, err := e.Via(e.Own, peerPubkey, mine)
 	if err != nil {
@@ -250,6 +261,14 @@ func (e *Exchanger) Learn(peerPubkey string) (Announcement, error) {
 	if err != nil {
 		return nil, fmt.Errorf("peer %s published an unusable announcement: %w", peerPubkey, err)
 	}
+	if _, b := SplitBind(theirs); b != nil && e.OnBind != nil {
+		for _, ep := range learned {
+			if ep.Kind == KindRelay {
+				e.OnBind(*b, ep.Addr)
+				break
+			}
+		}
+	}
 	usable := learned[:0:0]
 	for _, ep := range learned {
 		if ep.Addr.Addr().IsLoopback() && !e.AllowLoopback {
@@ -260,11 +279,43 @@ func (e *Exchanger) Learn(peerPubkey string) (Announcement, error) {
 	return usable, nil
 }
 
-// ViaRelay adapts Exchange against one relay address to an ExchangeFunc,
-// for callers with a single unmetered relay (tests, the demo's static
-// relay). token is presented in hello; pass "" for an unmetered relay.
-func ViaRelay(addr, token string, timeout time.Duration) ExchangeFunc {
+// ViaRelay adapts Exchange against one relay to an ExchangeFunc.
+func ViaRelay(relay Relay, timeout time.Duration) ExchangeFunc {
 	return func(ownPubkey, peerPubkey, myCandidate string) (string, error) {
-		return Exchange(addr, ownPubkey, peerPubkey, myCandidate, token, timeout)
+		return Exchange(relay, ownPubkey, peerPubkey, myCandidate, timeout)
 	}
+}
+
+// RelayBind is the data-relay session a relay-routed announcement shares
+// with the peer, so both can prove membership to the relay (ADR 0019). It
+// travels only inside a sealed candidate.
+type RelayBind struct {
+	ID     [8]byte
+	Secret []byte
+}
+
+// WithBind appends b to an encoded announcement as ";bind=<id>.<secret>".
+func WithBind(candidate string, b RelayBind) string {
+	return candidate + ";bind=" + hex.EncodeToString(b.ID[:]) + "." + hex.EncodeToString(b.Secret)
+}
+
+// SplitBind separates an announcement from its bind extension, if any.
+func SplitBind(candidate string) (string, *RelayBind) {
+	base, ext, ok := strings.Cut(candidate, ";")
+	if !ok {
+		return candidate, nil
+	}
+	value, ok := strings.CutPrefix(ext, "bind=")
+	if !ok {
+		return base, nil
+	}
+	idHex, secretHex, ok := strings.Cut(value, ".")
+	id, err1 := hex.DecodeString(idHex)
+	secret, err2 := hex.DecodeString(secretHex)
+	if !ok || err1 != nil || err2 != nil || len(id) != 8 || len(secret) < 16 || len(secret) > 64 {
+		return base, nil
+	}
+	b := &RelayBind{Secret: secret}
+	copy(b.ID[:], id)
+	return base, b
 }

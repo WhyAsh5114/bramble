@@ -1,4 +1,4 @@
-package main
+package brambled
 
 import (
 	"fmt"
@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
 
 // rendezvousPool is the set of rendezvous relays the endpoint resolver
@@ -18,8 +19,8 @@ import (
 // no gateway could reach it.
 type rendezvousPool struct {
 	mu         sync.Mutex
-	relays     []sidecar.RendezvousRelay
-	fetch      func() (*sidecar.RelaysResponse, error)
+	relays     []rendezvous.Relay
+	fetch      func() ([]registry.Relay, error)
 	now        func() time.Time
 	retryAfter time.Duration
 	lastTry    time.Time
@@ -28,21 +29,21 @@ type rendezvousPool struct {
 // rendezvousSource returns the rendezvous relays known right now, or an error
 // when there are none yet. It is a function, not a slice, so a set recovered
 // after a start-up discovery failure reaches every consumer.
-type rendezvousSource func() ([]sidecar.RendezvousRelay, error)
+type rendezvousSource func() ([]rendezvous.Relay, error)
 
 // staticRendezvous is a rendezvousSource over a fixed set.
-func staticRendezvous(relays []sidecar.RendezvousRelay) rendezvousSource {
-	return func() ([]sidecar.RendezvousRelay, error) { return relays, nil }
+func staticRendezvous(relays []rendezvous.Relay) rendezvousSource {
+	return func() ([]rendezvous.Relay, error) { return relays, nil }
 }
 
-func newRendezvousPool(initial []sidecar.RendezvousRelay, fetch func() (*sidecar.RelaysResponse, error), retryAfter time.Duration) *rendezvousPool {
+func newRendezvousPool(initial []rendezvous.Relay, fetch func() ([]registry.Relay, error), retryAfter time.Duration) *rendezvousPool {
 	return &rendezvousPool{relays: initial, fetch: fetch, now: time.Now, retryAfter: retryAfter}
 }
 
 // Get returns the known relays. When there are none, it queries discovery
 // again, at most once per retryAfter. The caller treats an error as "retry on
 // the next sync".
-func (p *rendezvousPool) Get() ([]sidecar.RendezvousRelay, error) {
+func (p *rendezvousPool) Get() ([]rendezvous.Relay, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.relays) > 0 {
@@ -56,8 +57,8 @@ func (p *rendezvousPool) Get() ([]sidecar.RendezvousRelay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay discovery retry: %w", err)
 	}
-	for _, r := range resp.Rendezvous {
-		p.relays = append(p.relays, sidecar.RendezvousRelay{Label: r.Label, Address: r.Address, SidecarURL: r.SidecarURL})
+	for _, r := range resp {
+		p.relays = append(p.relays, rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin})
 	}
 	if len(p.relays) == 0 {
 		return nil, fmt.Errorf("relay discovery retry found no rendezvous relays")

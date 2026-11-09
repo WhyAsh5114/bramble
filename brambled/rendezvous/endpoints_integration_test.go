@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -35,9 +35,9 @@ func freeUDPPorts(t *testing.T, n int) []uint16 {
 }
 
 // ensStub is the test's stand-in for ENS: the only source of admission.
-type ensStub map[string]*sidecar.DeviceRecord
+type ensStub map[string]*registry.DeviceRecord
 
-func (e ensStub) ResolveDevice(label string) (*sidecar.DeviceRecord, error) { return e[label], nil }
+func (e ensStub) ResolveDevice(label string) (*registry.DeviceRecord, error) { return e[label], nil }
 
 // admits reports whether ENS currently admits pubkey: a pubkey record that
 // is not revoked. admission.Loop also checks expiry; this stub does not.
@@ -77,7 +77,12 @@ func TestEndpointsLearnedOverRendezvousReachAdmittedPeersOnly(t *testing.T) {
 
 	alicePriv, alicePub, _ := wgnode.GenerateKeyPair()
 	bobPriv, bobPub, _ := wgnode.GenerateKeyPair()
-	_, malloryPub, _ := wgnode.GenerateKeyPair()
+	malloryPriv, malloryPub, _ := wgnode.GenerateKeyPair()
+	for _, k := range []string{alicePriv, bobPriv, malloryPriv} {
+		if _, err := RegisterIdentity(k); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	aliceAddr, bobAddr, malloryAddr := netip.MustParseAddr("10.97.0.1"), netip.MustParseAddr("10.97.0.2"), netip.MustParseAddr("10.97.0.3")
 	ports := freeUDPPorts(t, 2)
@@ -114,7 +119,7 @@ func TestEndpointsLearnedOverRendezvousReachAdmittedPeersOnly(t *testing.T) {
 				callsMu.Lock()
 				rendezvousCalls[p]++
 				callsMu.Unlock()
-				return Exchange(relayAddr, o, p, c, "", 5*time.Second)
+				return Exchange(relayAddr, o, p, c, 5*time.Second)
 			},
 			Admitted:      ens.admits,
 			AllowLoopback: true,
@@ -152,7 +157,7 @@ func TestEndpointsLearnedOverRendezvousReachAdmittedPeersOnly(t *testing.T) {
 	// Mallory publishes an endpoint addressed to alice and waits for hers.
 	malloryDone := make(chan error, 1)
 	go func() {
-		_, err := Exchange(relayAddr, malloryPub, alicePub, "ep1:srflx=127.0.0.1:9", "", 3*time.Second)
+		_, err := Exchange(relayAddr, malloryPub, alicePub, "ep1:srflx=127.0.0.1:9", 3*time.Second)
 		malloryDone <- err
 	}()
 

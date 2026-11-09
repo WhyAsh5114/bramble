@@ -1,270 +1,205 @@
 package rendezvous
 
 import (
+	"bufio"
+	"crypto/tls"
 	"encoding/json"
-	"net"
-	"sync"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/WhyAsh5114/bramble/brambled/wgnode"
+	"github.com/WhyAsh5114/bramble/relay/relaysrv"
 )
 
-func TestExchangeRegistersRemotePeer(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+// startFakeRelay starts the real relay on loopback and returns it pinned.
+func startFakeRelay(t *testing.T) Relay {
+	t.Helper()
+	l, err := relaysrv.StartLocal(relaysrv.Limits{SessionBytes: 1 << 20, SessionTTL: time.Minute, MaxSessions: 8, SessionsPerHour: 100, PortMin: 47000, PortMax: 47099}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
-	helloCh := make(chan message, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-		var hello, offer message
-		dec := json.NewDecoder(conn)
-		if dec.Decode(&hello) != nil || dec.Decode(&offer) != nil {
-			return
-		}
-		helloCh <- hello
-		enc := json.NewEncoder(conn)
-		_ = enc.Encode(message{Type: "offer", From: "remote-key", Candidate: "203.0.113.2:51820"})
-		_ = enc.Encode(message{Type: "ack"})
-	}()
-	candidate, err := Exchange(ln.Addr().String(), "own-key", "remote-key", "203.0.113.1:51820", "test-token", 2*time.Second)
-	if err != nil || candidate != "203.0.113.2:51820" {
-		t.Fatalf("exchange: candidate=%q error=%v", candidate, err)
-	}
-	hello := <-helloCh
-	if hello.Type != "hello" || hello.Pubkey != "own-key" || hello.To != "remote-key" || hello.Token != "test-token" {
-		t.Fatal("hello must identify both peers and carry its single-use token")
-	}
+	t.Cleanup(l.Close)
+	return Relay{Label: "test", Address: l.Addr, Pin: l.Pin}
 }
 
-// fakeRelay is a minimal stand-in for ../../relay's Server, reimplemented
-// here rather than imported: the relay is a separate Go module by design
-// (it's a standalone deployable, not a brambled dependency), and the two
-// only need to agree on the wire protocol, not share Go types.
-func startFakeRelay(t *testing.T) string {
+// identity registers a fresh node key and returns its public key.
+func identity(t *testing.T) string {
 	t.Helper()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	priv, _, err := wgnode.GenerateKeyPair()
 	if err != nil {
-		t.Fatalf("listening: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
-
-	// A json.Encoder isn't safe for concurrent use, and two different
-	// senders' handler goroutines can end up writing to the same target
-	// around the same time — mirror relay/main.go's per-peer write mutex
-	// rather than risk a flaky, corrupted-stream test failure.
-	type fakePeer struct {
-		mu  sync.Mutex
-		enc *json.Encoder
+	pub, err := RegisterIdentity(priv)
+	if err != nil {
+		t.Fatal(err)
 	}
-	send := func(p *fakePeer, m message) error {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.enc.Encode(m)
-	}
-
-	var mu sync.Mutex
-	peers := make(map[string]*fakePeer)
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				self := &fakePeer{enc: json.NewEncoder(conn)}
-				dec := json.NewDecoder(conn)
-				var pubkey string
-				for {
-					var m message
-					if err := dec.Decode(&m); err != nil {
-						return
-					}
-					switch m.Type {
-					case "hello":
-						pubkey = m.Pubkey
-						mu.Lock()
-						peers[pubkey] = self
-						mu.Unlock()
-					case "offer":
-						mu.Lock()
-						target, ok := peers[m.To]
-						mu.Unlock()
-						if !ok {
-							_ = send(self, message{Type: "error", Message: "peer not registered"})
-							continue
-						}
-						_ = send(target, message{Type: "offer", From: pubkey, Candidate: m.Candidate})
-						_ = send(self, message{Type: "ack"})
-					}
-				}
-			}()
-		}
-	}()
-
-	return ln.Addr().String()
+	return pub
 }
 
 func TestExchangeBothSidesCallSimultaneously(t *testing.T) {
-	addr := startFakeRelay(t)
-
-	type outcome struct {
-		candidate string
-		err       error
+	relay := startFakeRelay(t)
+	alice, bob := identity(t), identity(t)
+	type res struct {
+		c   string
+		err error
 	}
-	aliceCh := make(chan outcome, 1)
-	bobCh := make(chan outcome, 1)
-
+	a, b := make(chan res, 1), make(chan res, 1)
 	go func() {
-		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", "", 5*time.Second)
-		aliceCh <- outcome{c, err}
+		c, err := Exchange(relay, alice, bob, "ep1:srflx=203.0.113.1:51820", 5*time.Second)
+		a <- res{c, err}
 	}()
 	go func() {
-		c, err := Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", "", 5*time.Second)
-		bobCh <- outcome{c, err}
+		c, err := Exchange(relay, bob, alice, "ep1:srflx=203.0.113.2:51820", 5*time.Second)
+		b <- res{c, err}
 	}()
-
-	alice := <-aliceCh
-	bob := <-bobCh
-
-	if alice.err != nil {
-		t.Fatalf("alice's exchange failed: %v", alice.err)
+	ra, rb := <-a, <-b
+	if ra.err != nil || rb.err != nil {
+		t.Fatalf("alice %v, bob %v", ra.err, rb.err)
 	}
-	if bob.err != nil {
-		t.Fatalf("bob's exchange failed: %v", bob.err)
-	}
-	if alice.candidate != "10.0.0.2:51820" {
-		t.Fatalf("alice got wrong candidate for bob: %q", alice.candidate)
-	}
-	if bob.candidate != "10.0.0.1:51820" {
-		t.Fatalf("bob got wrong candidate for alice: %q", bob.candidate)
+	if ra.c != "ep1:srflx=203.0.113.2:51820" || rb.c != "ep1:srflx=203.0.113.1:51820" {
+		t.Fatalf("alice got %q, bob got %q", ra.c, rb.c)
 	}
 }
 
 func TestExchangeRetriesUntilPeerArrives(t *testing.T) {
-	addr := startFakeRelay(t)
-
-	resultCh := make(chan struct {
-		candidate string
-		err       error
-	}, 1)
+	relay := startFakeRelay(t)
+	alice, bob := identity(t), identity(t)
+	done := make(chan string, 1)
 	go func() {
-		c, err := Exchange(addr, "alice-pub", "bob-pub", "10.0.0.1:51820", "", 5*time.Second)
-		resultCh <- struct {
-			candidate string
-			err       error
-		}{c, err}
+		c, err := Exchange(relay, alice, bob, "a", 6*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- c
 	}()
-
-	// Bob shows up late — after the relay has already told alice "not
-	// registered" at least once. Exchange must retry rather than giving up.
 	time.Sleep(1500 * time.Millisecond)
-	go func() {
-		_, _ = Exchange(addr, "bob-pub", "alice-pub", "10.0.0.2:51820", "", 5*time.Second)
-	}()
-
-	select {
-	case r := <-resultCh:
-		if r.err != nil {
-			t.Fatalf("alice's exchange failed: %v", r.err)
-		}
-		if r.candidate != "10.0.0.2:51820" {
-			t.Fatalf("alice got wrong candidate for bob: %q", r.candidate)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for alice's exchange to succeed after bob's late arrival")
+	go func() { _, _ = Exchange(relay, bob, alice, "b", 6*time.Second) }()
+	if got := <-done; got != "b" {
+		t.Fatalf("alice got %q", got)
 	}
 }
 
 func TestExchangeTimesOutIfPeerNeverArrives(t *testing.T) {
-	addr := startFakeRelay(t)
-
-	_, err := Exchange(addr, "alice-pub", "nobody-pub", "10.0.0.1:51820", "", 2*time.Second)
-	if err == nil {
-		t.Fatal("expected a timeout error when the peer never registers")
+	relay := startFakeRelay(t)
+	alice, nobody := identity(t), identity(t)
+	if _, err := Exchange(relay, alice, nobody, "a", 2*time.Second); err == nil {
+		t.Fatal("expected a timeout")
 	}
 }
 
-// TestExchangeResendsOfferAsSoonAsPeerArrives covers a peer that registers
-// late in this side's window. Its offer proves it is registered, so this
-// side must resend its own unacked offer at once, not on the next one-second
-// retry tick. Waiting for the tick lost the peer's candidate whenever it
-// arrived in the last second before the deadline: the relay had already
-// acked the peer's offer, so the peer never resent it, and this side's next
-// Exchange never saw it. That stranded the adopting side in
-// TestDataRelayFailover_SwitchesToBackupRelayWhenPrimaryStalls (found
-// 6 November 2026, ETH-86).
-//
-// The relay here is scripted, not the fake above: it rejects this side's
-// offers until it has delivered the peer's offer, 1.3s in, and acks every
-// offer after that. With a 2s timeout, the 1s tick fires before the peer
-// arrives and the 2s tick fires after the deadline, so only an immediate
-// resend can succeed.
-func TestExchangeResendsOfferAsSoonAsPeerArrives(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listening: %v", err)
+func TestExchangeRefusesAWrongPin(t *testing.T) {
+	relay := startFakeRelay(t)
+	relay.Pin = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	alice, bob := identity(t), identity(t)
+	_, err := Exchange(relay, alice, bob, "a", 2*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "pin") {
+		t.Fatalf("expected a pin mismatch, got %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+}
 
+func TestExchangeRefusesARelayWithoutAPin(t *testing.T) {
+	relay := startFakeRelay(t)
+	relay.Pin = ""
+	alice, bob := identity(t), identity(t)
+	if _, err := Exchange(relay, alice, bob, "a", 2*time.Second); err == nil {
+		t.Fatal("talked to an unpinned relay")
+	}
+}
+
+func TestExchangeNeedsARegisteredIdentity(t *testing.T) {
+	relay := startFakeRelay(t)
+	_, stranger, _ := wgnode.GenerateKeyPair()
+	bob := identity(t)
+	if _, err := Exchange(relay, stranger, bob, "a", time.Second); err == nil {
+		t.Fatal("sent a candidate without sealing keys")
+	}
+}
+
+// The relay sees only pseudonymous IDs and ciphertext.
+func TestRelayNeverSeesKeysOrCandidates(t *testing.T) {
+	alice, bob := identity(t), identity(t)
+	keys, err := derivePair(alice, bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{keys.myID, keys.peerID} {
+		if strings.Contains(alice, id) || strings.Contains(bob, id) {
+			t.Fatal("ID leaks a public key")
+		}
+	}
+	sealed, err := keys.seal("ep1:srflx=198.51.100.7:51820", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sealed, "198.51.100.7") {
+		t.Fatal("candidate visible in the sealed offer")
+	}
+	// Bob derives the same pair from his side and opens it.
+	back, _ := derivePair(bob, alice)
+	if back.myID != keys.peerID || back.peerID != keys.myID {
+		t.Fatal("the two sides derived different IDs")
+	}
+	if got, err := back.open(sealed, time.Now()); err != nil || got != "ep1:srflx=198.51.100.7:51820" {
+		t.Fatalf("open: %q %v", got, err)
+	}
+}
+
+func TestForgedAndStaleOffersAreRejected(t *testing.T) {
+	alice, bob, mallory := identity(t), identity(t), identity(t)
+	ab, _ := derivePair(alice, bob)
+	ba, _ := derivePair(bob, alice)
+	mb, _ := derivePair(mallory, bob)
+	forged, _ := mb.seal("ep1:srflx=192.0.2.66:51820", time.Now())
+	if _, err := ba.open(forged, time.Now()); err == nil {
+		t.Fatal("bob accepted an offer sealed by someone else")
+	}
+	old, _ := ab.seal("ep1:srflx=192.0.2.1:51820", time.Now().Add(-10*time.Minute))
+	if _, err := ba.open(old, time.Now()); err == nil {
+		t.Fatal("bob accepted a replayed offer")
+	}
+}
+
+// A relay that injects an unsealed offer gets ignored; the exchange times out.
+func TestInjectedOfferIsIgnored(t *testing.T) {
+	alice, bob := identity(t), identity(t)
+	keys, _ := derivePair(alice, bob)
+	l, err := relaysrv.StartLocal(relaysrv.Limits{PortMin: 47100, PortMax: 47101}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	relay := Relay{Label: "test", Address: l.Addr, Pin: l.Pin}
 	go func() {
-		conn, err := ln.Accept()
+		// A third party that knows Bob's ID (it cannot: here we cheat) still cannot seal for Alice.
+		time.Sleep(300 * time.Millisecond)
+		conn, err := tls.Dial("tcp", l.Addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test injector
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		accepted := time.Now()
-		var encMu sync.Mutex
 		enc := json.NewEncoder(conn)
-		send := func(m message) {
-			encMu.Lock()
-			defer encMu.Unlock()
-			_ = enc.Encode(m)
-		}
-
-		var peerArrived sync.Mutex
-		arrived := false
-		go func() {
-			time.Sleep(time.Until(accepted.Add(1300 * time.Millisecond)))
-			peerArrived.Lock()
-			arrived = true
-			peerArrived.Unlock()
-			send(message{Type: "offer", From: "peer", Candidate: "10.0.0.2:51820"})
-		}()
-
-		dec := json.NewDecoder(conn)
-		for {
-			var m message
-			if err := dec.Decode(&m); err != nil {
-				return
-			}
-			if m.Type != "offer" {
-				continue
-			}
-			peerArrived.Lock()
-			ok := arrived
-			peerArrived.Unlock()
-			if ok {
-				send(message{Type: "ack"})
-			} else {
-				send(message{Type: "error", Message: "peer not registered"})
-			}
-		}
+		_ = enc.Encode(message{Type: "hello", Pubkey: keys.peerID, To: keys.myID})
+		_ = enc.Encode(message{Type: "offer", To: keys.myID, Candidate: "ep1:srflx=192.0.2.66:51820"})
+		_, _ = bufio.NewReader(conn).ReadBytes('\n')
+		time.Sleep(2 * time.Second)
 	}()
-
-	got, err := Exchange(ln.Addr().String(), "own", "peer", "10.0.0.1:51820", "", 2*time.Second)
-	if err != nil {
-		t.Fatalf("Exchange: %v", err)
+	if c, err := Exchange(relay, alice, bob, "a", 2*time.Second); err == nil {
+		t.Fatalf("accepted an injected candidate %q", c)
 	}
-	if got != "10.0.0.2:51820" {
-		t.Fatalf("got candidate %q, want 10.0.0.2:51820", got)
+}
+
+func TestRequestSessionGrantsABoundedSession(t *testing.T) {
+	relay := startFakeRelay(t)
+	g, err := RequestSession(relay, 1<<40, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Bytes != 1<<20 || g.Secret == "" || !strings.HasPrefix(g.Endpoint, "127.0.0.1:") {
+		t.Fatalf("grant %+v", g)
+	}
+	st, err := Status(relay, 2*time.Second)
+	if err != nil || st.Sessions != 1 || !st.Free {
+		t.Fatalf("status %+v %v", st, err)
 	}
 }

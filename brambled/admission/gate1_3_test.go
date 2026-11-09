@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -78,7 +78,7 @@ func TestGate1_3_RevocationDropsAlreadyConnectedPeer(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	future := now.Add(time.Hour).Unix()
 	resolver := fakeResolver{
-		"peer": {Fullname: "peer.acme.eth", Pubkey: strPtr(peerPub), Status: 2, Expiry: itoa(future)},
+		"peer": {Fullname: "peer.acme.eth", Pubkey: strPtr(peerPub), Expiry: itoa(future)},
 	}
 	peerEndpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), peerPort)
 	loop := &Loop{
@@ -97,7 +97,7 @@ func TestGate1_3_RevocationDropsAlreadyConnectedPeer(t *testing.T) {
 	// cleared `pubkey` text record would (see set-pubkey.ts). No sleeping, no
 	// waiting for any rekey timer — just the next sync pass, as Run's ticker
 	// would trigger on the next TTL tick.
-	resolver["peer"] = &sidecar.DeviceRecord{Fullname: "peer.acme.eth", Pubkey: nil, Status: 0, Expiry: "0"}
+	resolver["peer"] = &registry.DeviceRecord{Fullname: "peer.acme.eth", Pubkey: nil, Expiry: "0"}
 	loop.SyncOnce()
 
 	ok, err := underTest.Ping(peerAddr, 2*time.Second)

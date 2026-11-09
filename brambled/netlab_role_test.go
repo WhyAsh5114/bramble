@@ -1,4 +1,4 @@
-package main
+package brambled
 
 import (
 	"context"
@@ -12,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
-	"github.com/WhyAsh5114/bramble/brambled/sponsor"
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -55,8 +54,7 @@ func TestNetlabRole(t *testing.T) {
 	mode := os.Getenv("NETLAB_MODE") // "relay" (default) or "direct-control"
 	priv := netlabEnv(t, "NETLAB_PRIV")
 	peerPub := netlabEnv(t, "NETLAB_PEER_PUB")
-	label := netlabEnv(t, "NETLAB_LABEL")
-	ownPub, err := wgnode.PublicKeyFromPrivateHex(priv)
+	ownPub, err := rendezvous.RegisterIdentity(priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +81,7 @@ func TestNetlabRole(t *testing.T) {
 		defer ln.Close()
 		go func() {
 			_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				fmt.Fprint(w, "hello from the cloud node through the sponsored relay")
+				fmt.Fprint(w, "hello from the cloud node through the relay")
 			}))
 		}()
 	}
@@ -96,20 +94,18 @@ func TestNetlabRole(t *testing.T) {
 		ep := netip.MustParseAddrPort(netlabEnv(t, "NETLAB_DIRECT_ENDPOINT"))
 		endpoint = &ep
 	default:
-		rdv, sc := netlabEnv(t, "NETLAB_RELAY_RDV"), netlabEnv(t, "NETLAB_RELAY_SIDECAR")
-		relays := []sidecar.RendezvousRelay{{Label: "relay1", Address: rdv, SidecarURL: sc}}
-		payer := &sponsor.Payer{Label: label}
+		relays := staticRendezvousRelays(netlabEnv(t, "NETLAB_RELAY")) // host:port@pin
 		if role == "device" {
-			endpoint, _, err = relayRoutedEndpoint(node, payer, dataRelayFlag{"relay1": sc}, 10_000,
-				unrestrictedDataRelayPurchasePolicy, relays, ownPub, peerPub, 40*time.Second, nil)
+			endpoint, _, err = relayRoutedEndpoint(node, freeSessions{}, dataRelayFlag{"relay1": relays[0]}, 10_000,
+				relays, ownPub, peerPub, 40*time.Second, nil)
 		} else {
 			var candidate string
-			candidate, _, err = exchangeAnyMetered(relays, payer, ownPub, peerPub, "", 40*time.Second)
+			candidate, _, err = exchangeAny(relays, ownPub, peerPub, "", 40*time.Second)
 			if err == nil {
 				var addr netip.AddrPort
 				if addr, err = peerEndpointFromCandidate(candidate); err == nil {
 					endpoint = &addr
-					err = node.SetPersistentKeepalive(peerPub, dataRelayKeepaliveSeconds)
+					adoptBind(node, candidate, addr)
 				}
 			}
 		}

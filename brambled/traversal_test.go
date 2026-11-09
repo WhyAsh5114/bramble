@@ -1,39 +1,19 @@
-package main
+package brambled
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
-type traversalPayer struct {
-	t        *testing.T
-	sessions atomic.Int32
-	tokens   atomic.Int32
-}
-
-func (p *traversalPayer) RendezvousToken(string) (*sidecar.RendezvousTokenResponse, error) {
-	n := p.tokens.Add(1)
-	return &sidecar.RendezvousTokenResponse{Token: fmt.Sprintf("traversal-%d", n)}, nil
-}
-func (p *traversalPayer) DataRelaySession(string, int64) (*sidecar.DataRelaySessionResponse, error) {
-	n := p.sessions.Add(1)
-	endpoint := startTestDataRelay(p.t) // a genuinely new port for every allocation
-	return &sidecar.DataRelaySessionResponse{SessionID: fmt.Sprintf("session-%d", n), Port: int(endpoint.Port())}, nil
-}
-
 func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
-	relay, _ := startTestRendezvousRelay(t, "traversal")
-	sidecarURL := startFakeDataRelaySidecar(t)
-	payer := &traversalPayer{t: t}
+	relay, _ := startRelay(t, "test")
+	payer := &countingSessions{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var nodes [2]*wgnode.Node
@@ -42,6 +22,9 @@ func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
 	for i := range nodes {
 		private, public, err := wgnode.GenerateKeyPair()
 		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rendezvous.RegisterIdentity(private); err != nil {
 			t.Fatal(err)
 		}
 		keys[i] = public
@@ -57,11 +40,9 @@ func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
 		if err := nodes[i].AddPeer(keys[peer], netip.PrefixFrom(addresses[peer], 32), nil); err != nil {
 			t.Fatal(err)
 		}
-		managers[i] = &peerTraversal{ctx: ctx, node: nodes[i], own: keys[i], payer: payer, pool: dataRelayFlag{"test": sidecarURL}, sessionBytes: 10000, policy: unrestrictedDataRelayPurchasePolicy, exchangeTimeout: time.Second, allowLoopback: true,
-			local: func() rendezvous.Announcement { return nil }, // no manual peer endpoint
-			relaySet: func() ([]sidecar.RendezvousRelay, error) {
-				return []sidecar.RendezvousRelay{{Label: "test", Address: relay, SidecarURL: sidecarURL}}, nil
-			},
+		managers[i] = &peerTraversal{ctx: ctx, node: nodes[i], own: keys[i], sessions: payer, pool: dataRelayFlag{"test": relay}, sessionBytes: 10000, exchangeTimeout: time.Second, allowLoopback: true,
+			local:    func() rendezvous.Announcement { return nil }, // no manual peer endpoint
+			relaySet: func() ([]rendezvous.Relay, error) { return []rendezvous.Relay{relay}, nil },
 		}
 		event := admission.Event{Label: "other", PublicKey: keys[peer], Authorized: true}
 		managers[i].Handle(event)
@@ -91,7 +72,7 @@ func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
 	if !connected {
 		t.Fatal("automatic shared-relay tunnel did not connect")
 	}
-	if n := payer.sessions.Load(); n != 1 {
+	if n := payer.n.Load(); n != 1 {
 		t.Fatalf("allocated %d sessions; need one elected buyer", n)
 	}
 	a, _ := nodes[0].Peers()
@@ -116,10 +97,7 @@ func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
 }
 
 func TestForcedRelayIsReportedAsRelayedByAutomaticPeer(t *testing.T) {
-	relay, _ := startTestRendezvousRelay(t, "")
-	endpoint := startTestDataRelay(t)
-	payer := startFakeENSSidecar(t, int(endpoint.Port()))
-	sidecarURL := startFakeDataRelaySidecar(t)
+	relay, _ := startRelay(t, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var nodes [2]*wgnode.Node
@@ -128,6 +106,9 @@ func TestForcedRelayIsReportedAsRelayedByAutomaticPeer(t *testing.T) {
 	for i := range nodes {
 		private, public, err := wgnode.GenerateKeyPair()
 		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rendezvous.RegisterIdentity(private); err != nil {
 			t.Fatal(err)
 		}
 		keys[i] = public
@@ -142,18 +123,18 @@ func TestForcedRelayIsReportedAsRelayedByAutomaticPeer(t *testing.T) {
 			}
 		}
 	}
-	relays := []sidecar.RendezvousRelay{{Label: "test", Address: relay}}
+	relays := []rendezvous.Relay{relay}
 	forcedDone := make(chan error, 1)
 	go func() {
-		ep, _, err := relayRoutedEndpoint(nodes[0], payer, dataRelayFlag{"test": sidecarURL}, 10000, unrestrictedDataRelayPurchasePolicy, relays, keys[0], keys[1], 3*time.Second, nil)
+		ep, _, err := relayRoutedEndpoint(nodes[0], freeSessions{}, dataRelayFlag{"test": relay}, 10000, relays, keys[0], keys[1], 3*time.Second, nil)
 		if err == nil {
 			err = nodes[0].AddPeer(keys[1], netip.PrefixFrom(addresses[1], 32), ep)
 		}
 		forcedDone <- err
 	}()
 	states := make(chan string, 100)
-	manager := &peerTraversal{ctx: ctx, node: nodes[1], own: keys[1], payer: payer, allowLoopback: true, exchangeTimeout: 3 * time.Second,
-		local: func() rendezvous.Announcement { return nil }, relaySet: func() ([]sidecar.RendezvousRelay, error) { return relays, nil },
+	manager := &peerTraversal{ctx: ctx, node: nodes[1], own: keys[1], sessions: freeSessions{}, allowLoopback: true, exchangeTimeout: 3 * time.Second,
+		local: func() rendezvous.Announcement { return nil }, relaySet: func() ([]rendezvous.Relay, error) { return relays, nil },
 		onState: func(_, _, state string) { states <- state },
 	}
 	manager.Handle(admission.Event{Label: "forced", PublicKey: keys[0], Authorized: true})

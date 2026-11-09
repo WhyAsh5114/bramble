@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // fakeResolver is an in-memory stand-in for *sidecar.Manager, keyed by
 // label, for testing CheckACL without a live sidecar/chain.
-type fakeResolver map[string]*sidecar.DeviceRecord
+type fakeResolver map[string]*registry.DeviceRecord
 
-func (f fakeResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (f fakeResolver) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	rec, ok := f[label]
 	if !ok {
 		return nil, fmt.Errorf("no such device: %s", label)

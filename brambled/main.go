@@ -1,156 +1,164 @@
-// brambled is the per-node mesh networking daemon.
-//
-// Phase 1 Section A: spawn its own local ENS sidecar (docs/adr/0002) and
-// resolve a real device subname through it (`resolve`).
-// Phase 1 Section B: the admission verifier (Gate 1.1) — keep a WireGuard
-// device's peer table synced to ENS state (`serve`).
-// Phase 1 Section C: real OS TUN by default (Gate 0.2's "ping and one TCP
-// connection across the tunnel" needs a genuine OS-visible interface, not
-// just an in-process one — see brambled/wgnode) and rendezvous-relay
-// candidate exchange (`-rendezvous`, see brambled/rendezvous and ../relay),
-// so two nodes on different networks can find each other without a trusted
-// coordinator. With STUN enabled, admitted peers probe direct paths and
-// automatically fall back to a shared data-relay session. Real two-NAT
-// cloud verification remains Open.
-// Phase 2 Section A: EAC-gated enrollment/revocation/rotation (Gate 2.1) —
-// built in ../admincli, a separate package that writes to the registry
-// directly rather than through any node's sidecar (see
-// docs/adr/0004-admin-cli-writes-directly-to-registry.md). The only change
-// on this side is admission.Loop's authorization rule, which now also
-// checks a `revoked` text record (additive — the pre-existing clear-pubkey
-// revocation path Gate 1.3 verified is untouched).
-// Phase 2 Section C: gateway enforcement (Gate 2.3) — a fixed-port CONNECT
-// listener (see ../gateway) started alongside the admission loop, checking a
-// requester's on-chain acl digests against this node's own acl-granters
-// before proxying to a local service (docs/adr/0005-acl-record-schema.md,
-// docs/adr/0006-gateway-connect-protocol.md).
-package main
+// Package brambled is the per-node mesh daemon: it keeps a WireGuard peer
+// table in step with the tailnet registry (admission), finds paths to peers
+// (STUN, hole punching, sealed rendezvous, data relays) and enforces service
+// ACLs at its gateway. Every check happens at the peer; relays and RPC
+// endpoints are untrusted (docs/adr/0003, docs/adr/0019).
+package brambled
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"maps"
 	"net"
-	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
-	"github.com/WhyAsh5114/bramble/brambled/datarelay"
 	"github.com/WhyAsh5114/bramble/brambled/gateway"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
-	"github.com/WhyAsh5114/bramble/brambled/sponsor"
 	"github.com/WhyAsh5114/bramble/brambled/statusapi"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
-	"golang.org/x/time/rate"
 )
 
-func main() {
-	if len(os.Args) < 2 {
+// Main runs brambled with args (without the program name) and returns an exit code.
+// The bramble binary runs it as `bramble node ...`; cmd/brambled wraps it too.
+func Main(args []string) int {
+	if len(args) < 1 {
 		usage()
-		os.Exit(1)
+		return 1
 	}
-
-	switch os.Args[1] {
+	var err error
+	switch args[0] {
 	case "resolve":
-		if len(os.Args) < 3 {
+		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: brambled resolve <device-label>")
-			os.Exit(1)
+			return 1
 		}
-		if err := runResolve(os.Args[2]); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
-		}
+		err = runResolve(args[1])
 	case "serve":
-		if err := runServe(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
-		}
-	case "demo-data-relay":
-		if err := runDemoDataRelay(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
-		}
+		err = runServe(args[1:])
 	case "genkey":
-		priv, pub, err := wgnode.GenerateKeyPair()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+		var priv, pub string
+		if priv, pub, err = wgnode.GenerateKeyPair(); err == nil {
+			fmt.Printf("private: %s\n", priv)
+			fmt.Printf("public:  %s\n", pub)
 		}
-		fmt.Printf("private: %s\n", priv)
-		fmt.Printf("public:  %s\n", pub)
 	default:
 		usage()
-		os.Exit(1)
+		return 1
 	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
 }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: brambled resolve <device-label>")
-	fmt.Fprintln(os.Stderr, "       brambled serve -label <own-label> [-peer label[=allowed-ip/prefix] ...] [-service name=port ...] [-forward local-port=gateway-label:service ...] [-rendezvous host:port] [-netstack]  (omit -peer entirely to auto-discover the whole tailnet)")
+	fmt.Fprintln(os.Stderr, "       brambled serve -label <own-label> [-peer label[=allowed-ip/prefix] ...] [-service name=port ...] [-forward local-port=gateway-label:service ...] [-rendezvous host:port@pin] [-netstack]  (omit -peer to track the whole tailnet)")
 	fmt.Fprintln(os.Stderr, "       brambled genkey")
-	fmt.Fprintln(os.Stderr, "       brambled demo-data-relay [-rendezvous host:port] [-primary url] [-backup url] [-small-bytes n] [-large-bytes n] [-session-bytes n]")
 }
 
-func sidecarConfig() sidecar.Config {
-	port := 7890
-	if v := os.Getenv("BRAMBLE_SIDECAR_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
+// chainConfig reads the tailnet and relay directory from the environment:
+//
+//	BRAMBLE_TAILNET_NAME, BRAMBLE_TAILNET_REGISTRY, BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK
+//	BRAMBLE_RELAY_REGISTRY, BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK, BRAMBLE_RELAY_SUFFIX
+//	BRAMBLE_RPC_URLS (comma-separated; SEPOLIA_RPC_URL is also read), BRAMBLE_STATE_DIR
+//
+// The relay directory defaults to the Sepolia one (registry.Sepolia).
+func chainConfig() (registry.TailnetConfig, error) {
+	cfg := registry.TailnetConfig{
+		Name:               os.Getenv("BRAMBLE_TAILNET_NAME"),
+		Registry:           os.Getenv("BRAMBLE_TAILNET_REGISTRY"),
+		RelayRegistry:      envOr("BRAMBLE_RELAY_REGISTRY", registry.Sepolia.RelayRegistry),
+		RelaySuffix:        envOr("BRAMBLE_RELAY_SUFFIX", registry.Sepolia.RelaySuffix),
+		RelayRegistryStart: registry.Sepolia.RelayStart,
+	}
+	if cfg.Name == "" || cfg.Registry == "" {
+		return cfg, fmt.Errorf("BRAMBLE_TAILNET_NAME and BRAMBLE_TAILNET_REGISTRY must be set")
+	}
+	start, err := strconv.ParseUint(os.Getenv("BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK"), 10, 64)
+	if err != nil || start == 0 {
+		return cfg, fmt.Errorf("BRAMBLE_TAILNET_REGISTRY_DEPLOY_BLOCK must be the registry's deployment block")
+	}
+	cfg.RegistryStart = start
+	if v := os.Getenv("BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK"); v != "" {
+		if cfg.RelayRegistryStart, err = strconv.ParseUint(v, 10, 64); err != nil {
+			return cfg, fmt.Errorf("BRAMBLE_RELAY_REGISTRY_DEPLOY_BLOCK: %w", err)
 		}
 	}
-	return sidecar.Config{
-		Dir:             envOr("BRAMBLE_SIDECAR_DIR", "../sidecar"),
-		Binary:          os.Getenv("BRAMBLE_SIDECAR_BIN"),
-		Port:            port,
-		TailnetName:     os.Getenv("BRAMBLE_TAILNET_NAME"),
-		TailnetRegistry: os.Getenv("BRAMBLE_TAILNET_REGISTRY"),
-		RPCURL:          os.Getenv("SEPOLIA_RPC_URL"),
-		// docs/adr/0007's client-side payment config — all optional, only
-		// needed when a relay in play is running with -meter.
-		HederaClientAccountID:  os.Getenv("HEDERA_CLIENT_ACCOUNT_ID"),
-		HederaClientPrivateKey: os.Getenv("HEDERA_CLIENT_PRIVATE_KEY"),
+	var urls []string
+	for _, u := range strings.Split(os.Getenv("BRAMBLE_RPC_URLS")+","+os.Getenv("SEPOLIA_RPC_URL"), ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
 	}
+	// User endpoints first, then the public fallbacks.
+	cfg.RPC = registry.NewRPC(append(urls, registry.DefaultRPCURLs...))
+	if dir := os.Getenv("BRAMBLE_STATE_DIR"); dir != "" {
+		cfg.Path = filepath.Join(dir, "registry-cache.json")
+	}
+	return cfg, nil
+}
+
+// startChain builds the registry cache, syncs it once and keeps it syncing until ctx ends.
+func startChain(ctx context.Context) (*registry.Tailnet, error) {
+	cfg, err := chainConfig()
+	if err != nil {
+		return nil, err
+	}
+	tn, err := registry.NewTailnet(cfg)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(os.Stderr, "registry: syncing %s from the chain...\n", cfg.Name)
+	first, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	for {
+		if err := tn.Sync(first); err == nil {
+			break
+		} else if first.Err() != nil {
+			return nil, fmt.Errorf("first registry sync: %w", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "registry: sync failed, retrying: %v\n", err)
+			time.Sleep(3 * time.Second)
+		}
+	}
+	st := tn.Status()
+	fmt.Fprintf(os.Stderr, "registry: synced to block %d\n", st.Head)
+	go tn.Run(ctx)
+	return tn, nil
 }
 
 func runResolve(label string) error {
-	cfg := sidecarConfig()
-	if cfg.TailnetName == "" || cfg.TailnetRegistry == "" {
-		return fmt.Errorf("BRAMBLE_TAILNET_NAME and BRAMBLE_TAILNET_REGISTRY must be set")
-	}
-
-	fmt.Fprintln(os.Stderr, "starting sidecar...")
-	m, err := sidecar.Start(cfg)
+	tn, err := startChain(context.Background())
 	if err != nil {
 		return err
 	}
-	defer m.Stop()
-	fmt.Fprintln(os.Stderr, "sidecar healthy, resolving...")
-
-	record, err := m.ResolveDevice(label)
+	record, err := tn.ResolveDevice(label)
 	if err != nil {
 		return err
 	}
-
 	fmt.Printf("fullname: %s\n", record.Fullname)
 	if record.Pubkey != nil {
 		fmt.Printf("pubkey:   %s\n", *record.Pubkey)
 	} else {
 		fmt.Printf("pubkey:   (unset)\n")
 	}
-	fmt.Printf("status:   %d\n", record.Status)
+	if record.MeshIP != nil {
+		fmt.Printf("mesh-ip:  %s\n", *record.MeshIP)
+	}
+	fmt.Printf("revoked:  %v\n", record.Revoked)
 	fmt.Printf("expiry:   %s\n", record.Expiry)
-	fmt.Printf("tokenId:  %s\n", record.TokenID)
+	fmt.Printf("owner:    %s\n", record.Owner)
 	return nil
 }
 
@@ -344,767 +352,6 @@ func (f *forwardFlag) Set(value string) error {
 	return nil
 }
 
-// relayPayer is how brambled gets a rendezvous token and a data-relay
-// session. *sidecar.Manager pays through x402 on Hedera; *sponsor.Payer asks
-// the relay for an operator-sponsored one (docs/adr/0018).
-type relayPayer interface {
-	RendezvousToken(sidecarURL string) (*sidecar.RendezvousTokenResponse, error)
-	DataRelaySession(sidecarURL string, sessionBytes int64) (*sidecar.DataRelaySessionResponse, error)
-}
-
-// dataRelayFlag accumulates repeated -data-relay label=sidecar-url flags —
-// the pool of candidate data relays brambled picks between for any peer
-// flagged with -relay-peer (docs/adr/0008, "Relay selection").
-type dataRelayFlag map[string]string
-
-func (d dataRelayFlag) String() string { return fmt.Sprintf("%v", map[string]string(d)) }
-
-func (d dataRelayFlag) Set(value string) error {
-	label, sidecarURL, ok := strings.Cut(value, "=")
-	if !ok || label == "" || sidecarURL == "" {
-		return fmt.Errorf("expected label=sidecar-url, got %q", value)
-	}
-	d[label] = sidecarURL
-	return nil
-}
-
-// relayPeerFlag accumulates repeated -relay-peer label flags: tracked peer
-// labels that should use the data-relay pool above instead of publishing
-// this node's own real candidate — the explicit, operator-chosen substitute
-// for hole-punch-failure detection this project doesn't implement (see
-// docs/adr/0008's "How does brambled decide to use the data relay?").
-type relayPeerFlag map[string]bool
-
-func (r relayPeerFlag) String() string { return fmt.Sprintf("%v", map[string]bool(r)) }
-
-func (r relayPeerFlag) Set(value string) error {
-	if value == "" {
-		return fmt.Errorf("expected a tracked -peer label, got empty string")
-	}
-	r[value] = true
-	return nil
-}
-
-// priceQuote mirrors relay-sidecar's GET /price response (docs/adr/0008).
-type priceQuote struct {
-	Asset  string `json:"asset"`
-	Amount string `json:"amount"`
-}
-
-const dataRelayQuoteTimeout = 5 * time.Second
-
-type dataRelayPurchasePolicy struct {
-	MaxPricePerByte int64
-	MaxSessionCost  int64
-}
-
-var unrestrictedDataRelayPurchasePolicy = dataRelayPurchasePolicy{
-	MaxPricePerByte: 1<<63 - 1,
-	MaxSessionCost:  1<<63 - 1,
-}
-
-func validateDataRelayQuote(q datarelay.Quote, bytes int64, policy dataRelayPurchasePolicy) error {
-	if bytes <= 0 {
-		return fmt.Errorf("session bytes must be positive")
-	}
-	if policy.MaxPricePerByte <= 0 || policy.MaxSessionCost <= 0 {
-		return fmt.Errorf("relay purchase limits must be positive")
-	}
-	if q.PricePerByte <= 0 {
-		return fmt.Errorf("price must be positive")
-	}
-	if q.PricePerByte > policy.MaxPricePerByte {
-		return fmt.Errorf("price %d exceeds per-byte limit %d", q.PricePerByte, policy.MaxPricePerByte)
-	}
-	// Division avoids overflowing price*bytes for an untrusted quote.
-	if q.PricePerByte > policy.MaxSessionCost/bytes {
-		return fmt.Errorf("session cost exceeds limit %d atomic USDC", policy.MaxSessionCost)
-	}
-	return nil
-}
-
-// quoteDataRelay fetches label's advertised per-byte price and measures the
-// round trip as a latency proxy — both inputs to datarelay.Pick's
-// composite score (docs/adr/0008, "Relay selection").
-func quoteDataRelay(label, sidecarURL string) (datarelay.Quote, error) {
-	relayURL, err := url.Parse(sidecarURL)
-	if err != nil || (relayURL.Scheme != "http" && relayURL.Scheme != "https") || relayURL.Host == "" {
-		return datarelay.Quote{}, fmt.Errorf("%s has an invalid HTTP(S) sidecar URL", label)
-	}
-	if relayURL.User != nil || relayURL.RawQuery != "" || relayURL.Fragment != "" {
-		return datarelay.Quote{}, fmt.Errorf("%s sidecar URL must not contain credentials, a query, or a fragment", label)
-	}
-	start := time.Now()
-	client := &http.Client{
-		Timeout: dataRelayQuoteTimeout,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	resp, err := client.Get(strings.TrimRight(sidecarURL, "/") + "/price")
-	latency := time.Since(start)
-	if err != nil {
-		return datarelay.Quote{}, fmt.Errorf("querying %s price: %w", label, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return datarelay.Quote{}, fmt.Errorf("%s returned HTTP %d for /price", label, resp.StatusCode)
-	}
-	var q priceQuote
-	if err := json.NewDecoder(resp.Body).Decode(&q); err != nil {
-		return datarelay.Quote{}, fmt.Errorf("decoding %s price quote: %w", label, err)
-	}
-	price, err := strconv.ParseInt(q.Amount, 10, 64)
-	if err != nil {
-		return datarelay.Quote{}, fmt.Errorf("%s price %q is not an integer: %w", label, q.Amount, err)
-	}
-	if q.Asset != "0.0.429274" {
-		return datarelay.Quote{}, fmt.Errorf("%s quoted unsupported asset %q; expected Hedera testnet USDC 0.0.429274", label, q.Asset)
-	}
-	if price <= 0 {
-		return datarelay.Quote{}, fmt.Errorf("%s quoted non-positive price %d", label, price)
-	}
-	return datarelay.Quote{Label: label, SidecarURL: sidecarURL, PricePerByte: price, LatencyMS: latency.Milliseconds()}, nil
-}
-
-// dataRelaySession is what buyDataRelaySession hands back to the
-// EndpointResolver closure — everything it needs to log and to build the
-// candidate string it publishes in place of this node's real address.
-type dataRelaySession struct {
-	id             string
-	relayLabel     string
-	candidate      string
-	settlementTxID string
-	grantedBytes   int64
-	expiresAt      time.Time
-}
-
-// buyDataRelaySession queries every candidate in pool for a price quote,
-// picks the best via datarelay.Pick, buys a session from it through the
-// local sidecar, and derives the relay's public data-relay candidate
-// address from the winning sidecar URL's hostname — same-machine
-// co-location between a relay-sidecar and its Go relay is an assumed,
-// documented deployment convention (docs/adr/0008), not something
-// discovered dynamically.
-func buyDataRelaySession(m relayPayer, pool dataRelayFlag, bytes int64, policy dataRelayPurchasePolicy) (*dataRelaySession, error) {
-	if bytes <= 0 {
-		return nil, fmt.Errorf("data-relay session bytes must be positive")
-	}
-	quotes := make([]datarelay.Quote, 0, len(pool))
-	for label, sidecarURL := range pool {
-		q, err := quoteDataRelay(label, sidecarURL)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
-			continue
-		}
-		if err := validateDataRelayQuote(q, bytes, policy); err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
-			continue
-		}
-		quotes = append(quotes, q)
-	}
-	if len(quotes) == 0 {
-		return nil, fmt.Errorf("no -data-relay candidate returned a usable price quote")
-	}
-
-	winner := datarelay.Pick(quotes)
-	resp, err := m.DataRelaySession(winner.SidecarURL, bytes)
-	if err != nil {
-		return nil, fmt.Errorf("buying session from %s: %w", winner.Label, err)
-	}
-
-	relayURL, err := url.Parse(winner.SidecarURL)
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s sidecar URL %q: %w", winner.Label, winner.SidecarURL, err)
-	}
-
-	return &dataRelaySession{
-		id:             resp.SessionID,
-		relayLabel:     winner.Label,
-		candidate:      net.JoinHostPort(relayURL.Hostname(), strconv.Itoa(resp.Port)),
-		settlementTxID: resp.SettlementTxID,
-		grantedBytes:   resp.Bytes,
-		expiresAt:      time.Unix(resp.ExpiresAt, 0),
-	}, nil
-}
-
-// dataRelayKeepaliveSeconds governs how often a relay-routed peer sends an
-// unsolicited packet to the relay (see relayRoutedEndpoint's SetPersistentKeepalive
-// call) — needs to be well under the data-relay session TTL and short
-// enough for a live demo to feel responsive, not tuned for production NAT
-// mapping lifetimes (docs/adr/0008).
-const dataRelayKeepaliveSeconds = 5
-
-// keepaliveSetter is satisfied by *wgnode.Node — narrowed so
-// relayRoutedEndpoint's signature only asks for what it actually uses.
-type keepaliveSetter interface {
-	SetPersistentKeepalive(publicKeyHex string, seconds int) error
-}
-
-// relayRoutedEndpoint is the EndpointResolver path for a -relay-peer
-// (docs/adr/0008). It buys a session, then returns the relay's own address
-// as this node's peer-endpoint — never the peer's candidate from Exchange's
-// return value. That distinction matters: both sides of a relay-routed
-// connection must end up pointed at the identical relay socket for the
-// relay's address-learning to fill both of its slots, and the peer's own
-// published candidate (which could be "" for a peer with no direct address
-// at all — the exact topology -relay-peer exists for) is irrelevant to
-// where this node sends next. Exchange is still called so the peer learns
-// this node's candidate (the relay address) the normal way.
-//
-// It also arms a persistent keepalive on this peer before returning: the
-// relay only learns an address from outbound traffic it observes, but
-// WireGuard's own protocol never has the passive/responder side send
-// anything on its own — without this, whichever side doesn't happen to
-// initiate the real handshake would never register with the relay at all,
-// and nothing would ever forward in that direction. Calling it here, before
-// admission.Loop's own AddPeer runs, is safe and deterministic: WireGuard's
-// UAPI merges fields into a peer entry by public key rather than requiring
-// them all in one call.
-// Returns the allocation, including its expiry, alongside the endpoint — Section
-// D's failover watcher (below) needs to know which relay a peer is
-// currently routed through, so it can preserve an unproven allocation or
-// exclude a confirmed stalled relay when picking a replacement.
-func relayRoutedEndpoint(node keepaliveSetter, m relayPayer, pool dataRelayFlag, sessionBytes int64, policy dataRelayPurchasePolicy, relays []sidecar.RendezvousRelay, own, peerPubkey string, ttl time.Duration, session *dataRelaySession) (*netip.AddrPort, *dataRelaySession, error) {
-	if session == nil || !time.Now().Before(session.expiresAt) {
-		var err error
-		session, err = buyDataRelaySession(m, pool, sessionBytes, policy)
-		if err != nil {
-			return nil, nil, fmt.Errorf("buying data-relay session: %w", err)
-		}
-	}
-	relayEndpoint, err := netip.ParseAddrPort(session.candidate)
-	if err != nil {
-		return nil, session, fmt.Errorf("data-relay candidate %q unparseable: %w", session.candidate, err)
-	}
-	if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
-		return nil, session, err
-	}
-	if err := publishDataRelaySession(m, session, relays, own, peerPubkey, ttl); err != nil {
-		return nil, session, err
-	}
-	return &relayEndpoint, session, nil
-}
-
-// publishDataRelaySession re-offers a still-valid allocation. A rendezvous ack
-// does not prove that the other peer has started sending WireGuard packets.
-// Publication never changes the peer table; admission owns membership.
-func publishDataRelaySession(m relayPayer, session *dataRelaySession, relays []sidecar.RendezvousRelay, own, peerPubkey string, ttl time.Duration) error {
-	if !time.Now().Before(session.expiresAt) {
-		return fmt.Errorf("data-relay session expired before publication")
-	}
-	if session.settlementTxID == "" {
-		fmt.Fprintf(os.Stderr, "data-relay: publishing sponsored session %s from %s (%d bytes, no payment), routing %s via %s\n",
-			session.id, session.relayLabel, session.grantedBytes, peerPubkey, session.candidate)
-	} else {
-		fmt.Fprintf(os.Stderr, "data-relay: publishing paid session %s from %s (tx %s), routing %s via %s\n",
-			session.id, session.relayLabel, session.settlementTxID, peerPubkey, session.candidate)
-	}
-	if u := hashscanTestnetTxURL(session.settlementTxID); u != "" {
-		fmt.Fprintf(os.Stderr, "  %s\n", u)
-	}
-	// New peers retain the relay kind. Pre-W8d ep1 parsers skip the unknown
-	// relay entry, then accept the duplicate static address for compatibility.
-	// New parsers keep the first known occurrence and discard the duplicate.
-	candidate := "ep1:relay=" + session.candidate + ",static=" + session.candidate
-	if _, _, err := exchangeAnyMetered(relays, m, own, peerPubkey, candidate, ttl); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Section D failover (docs/adr/0008, docs/05_BUILD_PLAN.md Gate 4.3): how
-// often to poll RxBytes, and how long it must sit still before a relay is
-// declared stalled. Deliberately fast for a live demo, not tuned for
-// production — a real deployment would want a longer stallTimeout to avoid
-// false positives during ordinary idle gaps outside an active transfer.
-const (
-	dataRelayPollInterval = 2 * time.Second
-	dataRelayStallTimeout = 6 * time.Second
-)
-
-// relayState is the shared record of which data relay each -relay-peer is
-// currently routed through, and under which pubkey — set by
-// relayRoutedEndpoint (via the EndpointResolver closure) on every successful
-// connect, and read by watchDataRelayFailover to know what to watch and
-// what to exclude on failover. Keyed by tracked-peer *label*, not pubkey,
-// so a key rotation naturally carries over: EndpointResolver runs again
-// under the new pubkey (admission.Loop's resolvedEndpoints cache is keyed
-// by pubkey), which just overwrites this label's entry.
-type relayState struct {
-	mu       sync.Mutex
-	pubkey   map[string]string
-	sessions map[string]*dataRelaySession
-}
-
-func newRelayState() *relayState {
-	return &relayState{pubkey: make(map[string]string), sessions: make(map[string]*dataRelaySession)}
-}
-
-func (s *relayState) set(peerLabel, pubkey string, session *dataRelaySession) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pubkey[peerLabel] = pubkey
-	s.sessions[peerLabel] = session
-}
-
-func (s *relayState) get(peerLabel string) (pubkey, relayLabel string, ok bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pubkey, hasPubkey := s.pubkey[peerLabel]
-	session, hasRelay := s.sessions[peerLabel]
-	if !hasPubkey || !hasRelay {
-		return pubkey, "", false
-	}
-	return pubkey, session.relayLabel, true
-}
-
-// session returns the allocation only while the label still has this public key.
-func (s *relayState) session(peerLabel, pubkey string) *dataRelaySession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.pubkey[peerLabel] != pubkey {
-		return nil
-	}
-	return s.sessions[peerLabel]
-}
-
-func (s *relayState) replace(peerLabel, pubkey string, previous, next *dataRelaySession) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.pubkey[peerLabel] != pubkey || s.sessions[peerLabel] != previous {
-		return false
-	}
-	s.sessions[peerLabel] = next
-	return true
-}
-
-// setPubkey records peerLabel's current pubkey without touching the relay
-// map — used for peers that aren't -relay-peer (they never call set(),
-// since they never buy a session), so watchDataRelayAdopt below still has
-// something to poll for once EndpointResolver has resolved them at least
-// once.
-func (s *relayState) setPubkey(peerLabel, pubkey string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pubkey[peerLabel] = pubkey
-}
-
-func (s *relayState) getPubkey(peerLabel string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pubkey, ok := s.pubkey[peerLabel]
-	return pubkey, ok
-}
-
-// staticRendezvousRelays is the rendezvous set for an explicit -rendezvous
-// address. paymentURL (BRAMBLE_RENDEZVOUS_PAYMENT_URL) is that relay's own
-// token sidecar (docs/adr/0007). Empty means the relay is unmetered:
-// exchangeAnyMetered then sends no token, and a -meter relay rejects the
-// hello (ETH-301).
-func staticRendezvousRelays(addr, paymentURL string) []sidecar.RendezvousRelay {
-	if addr == "" {
-		return []sidecar.RendezvousRelay{}
-	}
-	return []sidecar.RendezvousRelay{{Label: "static", Address: addr, SidecarURL: paymentURL}}
-}
-
-// exchangeAnyMetered is the rendezvous-set failover docs/adr/0003 requires,
-// fixed to pair each relay with a token bought from *that relay's own*
-// sidecar rather than one token tried everywhere (docs/adr/0008): a relay
-// running with -meter verifies hellos against a secret only its own
-// relay-sidecar knows (relay/sidecar.go generates a fresh random one per
-// relay process), so a token minted for relay A can never verify at relay
-// B. Tries every relay in relays concurrently, each buying its own token
-// from its SidecarURL first if it has one, then calling rendezvous.Exchange
-// against its Address with the *full* exchangeTimeout — returning as soon
-// as any one succeeds, alongside the label of the relay actually used.
-//
-// Concurrent, not sequential-with-a-split-timeout: a first version tried
-// relays one at a time with exchangeTimeout/len(relays) each, and a live
-// run plus a two-relay regression test both caught the same failure mode —
-// whichever relay came later in the list got starved to a fraction of the
-// budget, and worse, a caller that re-dials every relay every cycle (like
-// watchDataRelayAdopt) spent part of each cycle connected to an earlier,
-// dead relay instead of continuously present at the one that actually
-// works, missing the peer's own once-a-second retry window on the relay
-// that mattered. Every relay getting the full timeout, all at once, closes
-// that gap — and costs the same in token purchases as the sequential
-// version already did (a dead relay's token still got bought before it was
-// dialed, either way).
-//
-// A token is bought fresh on every attempt, never cached or reused: a
-// relay's own tokenVerifier (relay/token.go) marks each token's nonce
-// consumed on first use and rejects it on a second presentation, matching
-// rendezvous.Exchange's own documented contract of "one rendezvous-token
-// per Exchange call" (docs/adr/0007) — reuse isn't an optimization here,
-// it's a guaranteed failure the second time. If a caller needs to spend
-// less, the fix is a slower loop cycle, not a cached token.
-func exchangeAnyMetered(relays []sidecar.RendezvousRelay, m relayPayer, ownPubkey, peerPubkey, myCandidate string, exchangeTimeout time.Duration) (candidate, usedLabel string, err error) {
-	if len(relays) == 0 {
-		return "", "", fmt.Errorf("no rendezvous relays to try")
-	}
-
-	type attemptResult struct {
-		candidate, label string
-		err              error
-	}
-	results := make(chan attemptResult, len(relays))
-	for _, r := range relays {
-		go func(r sidecar.RendezvousRelay) {
-			var token string
-			if r.SidecarURL != "" {
-				resp, tokErr := m.RendezvousToken(r.SidecarURL)
-				if tokErr != nil {
-					results <- attemptResult{label: r.Label, err: fmt.Errorf("buying rendezvous token: %w", tokErr)}
-					return
-				}
-				token = resp.Token
-				if resp.SettlementTxID != "" {
-					fmt.Fprintf(os.Stderr, "rendezvous: paid %s for a rendezvous token (tx %s)\n", r.Label, resp.SettlementTxID)
-					fmt.Fprintf(os.Stderr, "  %s\n", hashscanTestnetTxURL(resp.SettlementTxID))
-				}
-			}
-			candidate, err := rendezvous.Exchange(r.Address, ownPubkey, peerPubkey, myCandidate, token, exchangeTimeout)
-			results <- attemptResult{candidate: candidate, label: r.Label, err: err}
-		}(r)
-	}
-
-	var lastErr error
-	for range relays {
-		res := <-results
-		if res.err == nil {
-			return res.candidate, res.label, nil
-		}
-		fmt.Fprintf(os.Stderr, "rendezvous: %s: exchange failed: %v\n", res.label, res.err)
-		lastErr = res.err
-	}
-	return "", "", lastErr
-}
-
-// watchDataRelayFailover is Gate 4.3's kill-mid-transfer failover: once
-// peerLabel's initial data-relay connect has happened (state.get succeeds),
-// it blocks on datarelay.WaitForStall. Before traffic confirms an allocation,
-// it republishes that same allocation until expiry. On a confirmed stall, it buys a fresh
-// session from the pool minus whichever relay just stalled, re-points this
-// node's own peer-endpoint directly (admission.Loop won't — its
-// EndpointResolver only fires once per pubkey for the life of the Loop),
-// and records the received-byte baseline for the new allocation. Old session
-// bytes cannot confirm a renewal before the adopting peer catches up.
-//
-// A stall is also what a session looks like once it reaches its byte cap or
-// its TTL (docs/adr/0018): the relay stops forwarding. So when every relay
-// in the pool has stalled since the last reset, the watcher starts a new
-// round over the whole pool instead of giving up. With one relay, that is
-// how a capped sponsored session is renewed. Failed attempts back off
-// (failoverBackoff), so a peer that is gone does not spend a token every
-// few seconds. A new session is retained even if publication fails.
-//
-// relaySet is read on every attempt, so a rendezvous set recovered after a
-// start-up discovery failure reaches this watcher.
-func relayPeerSnapshot(node *wgnode.Node, pubkey string) (wgnode.PeerInfo, bool) {
-	peers, err := node.Peers()
-	if err == nil {
-		for _, peer := range peers {
-			if peer.PublicKeyHex == pubkey {
-				return peer, true
-			}
-		}
-	}
-	return wgnode.PeerInfo{}, false
-}
-
-func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m relayPayer, state *relayState, peerLabel string, pool dataRelayFlag, sessionBytes int64, policy dataRelayPurchasePolicy, relaySet rendezvousSource, ownPubkey string, ttl time.Duration) {
-	excluded := map[string]bool{}
-	failures := 0
-	var observed *dataRelaySession
-	var baselineRx int64
-	confirmed := false
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Second):
-		}
-		pubkey, usedLabel, ok := state.get(peerLabel)
-		if !ok {
-			continue
-		}
-		session := state.session(peerLabel, pubkey)
-		if session == nil {
-			continue
-		}
-		if session != observed {
-			observed, baselineRx, confirmed = session, 0, false
-		}
-		if err := datarelay.WaitForStall(ctx, node, pubkey, dataRelayPollInterval, dataRelayStallTimeout); err != nil {
-			return
-		}
-		peer, found := relayPeerSnapshot(node, pubkey)
-		if !found || state.session(peerLabel, pubkey) != session {
-			continue
-		}
-		if !confirmed && peer.RxBytes > baselineRx && peer.Endpoint == session.candidate {
-			confirmed = true
-			failures = 0
-		}
-		reuse := !confirmed && time.Now().Before(session.expiresAt)
-		remaining := dataRelayFlag{}
-		if !reuse {
-			fmt.Fprintf(os.Stderr, "data-relay: %s via %s stalled — failing over\n", peerLabel, usedLabel)
-			excluded[usedLabel] = true
-			for label, url := range pool {
-				if !excluded[label] {
-					remaining[label] = url
-				}
-			}
-			if len(remaining) == 0 {
-				excluded = map[string]bool{}
-				for label, url := range pool {
-					remaining[label] = url
-				}
-			}
-		}
-		if wait := failoverBackoff(failures); wait > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(wait):
-			}
-		}
-		relays, err := relaySet()
-		if err != nil {
-			continue
-		}
-		// Backoff and relay discovery may outlive admission or a recovered link.
-		current, found := relayPeerSnapshot(node, pubkey)
-		if !found || state.session(peerLabel, pubkey) != session || current.RxBytes != peer.RxBytes {
-			continue
-		}
-		if !reuse {
-			next, err := buyDataRelaySession(m, remaining, sessionBytes, policy)
-			if err != nil {
-				failures++
-				fmt.Fprintf(os.Stderr, "data-relay: %s: allocation failed, will retry: %v\n", peerLabel, err)
-				continue
-			}
-			current, found = relayPeerSnapshot(node, pubkey)
-			if !found || state.session(peerLabel, pubkey) != session || current.RxBytes != peer.RxBytes {
-				continue
-			}
-			endpoint, err := netip.ParseAddrPort(next.candidate)
-			if err != nil {
-				failures++
-				continue
-			}
-			// update_only prevents this transport update from resurrecting a key that
-			// admission removes concurrently. It never writes allowed IPs.
-			if err := node.UpdatePeerEndpoint(pubkey, endpoint, dataRelayKeepaliveSeconds); err != nil {
-				failures++
-				continue
-			}
-			current, found = relayPeerSnapshot(node, pubkey)
-			if !found || !state.replace(peerLabel, pubkey, session, next) {
-				continue
-			}
-			// Sample after the switch. Old traffic received during network calls must
-			// not confirm the replacement; confirmation also requires its endpoint.
-			session = next
-			observed, baselineRx, confirmed = next, current.RxBytes, false
-		}
-		if err := publishDataRelaySession(m, session, relays, ownPubkey, pubkey, ttl); err != nil {
-			failures++
-			fmt.Fprintf(os.Stderr, "data-relay: %s: publication failed, will retry the allocation until expiry: %v\n", peerLabel, err)
-			continue
-		}
-		// An ack without new received bytes is still an unproven session.
-		// Back off re-publication too, rather than spending tokens every stall.
-		failures++
-	}
-}
-
-// failoverBackoff is the extra wait after consecutive attempts without
-// received traffic. The first retry gets none (a
-// failure is often timing skew: the peer has not noticed the stall yet).
-// After that it doubles from 5 s up to 3 minutes. Each attempt costs a
-// publication and, after expiry, a new session. Unconfirmed publications
-// back off even when rendezvous acknowledges them; only received traffic
-// resets the retry count. Relay-side sponsored limits still apply.
-func failoverBackoff(failures int) time.Duration {
-	if failures < 2 {
-		return 0
-	}
-	wait := 5 * time.Second
-	for i := 2; i < failures && wait < failoverMaxBackoff; i++ {
-		wait *= 2
-	}
-	return min(wait, failoverMaxBackoff)
-}
-
-const failoverMaxBackoff = 3 * time.Minute
-
-// watchDataRelayAdopt is the non-buying side's half of Section D failover
-// (docs/adr/0008): this node never buys a data-relay session for
-// peerLabel — it just adopts whatever candidate the peer publishes, same
-// as the initial connect (EndpointResolver's non-relay-peer branch).
-// Nothing else re-learns a peer's new address after that peer fails over,
-// since admission.Loop's EndpointResolver only fires once per pubkey for
-// the life of the Loop — this watcher is what makes that not a dead end.
-// It watches the same real RxBytes signal watchDataRelayFailover does and,
-// on a stall, re-runs the plain candidate exchange and re-points, mirroring
-// runServe's own non-relay-peer EndpointResolver branch exactly.
-// dataRelayAdoptExchangeTimeout is every relay's Exchange budget per cycle
-// (exchangeAnyMetered gives each relay this in full, run concurrently —
-// see its own doc comment for why sequential-with-a-split-budget measured
-// worse), deliberately short unlike the buying side's own exchange calls:
-// Exchange is one-shot rendezvous (it returns the *first* offer that
-// arrives while its own offer gets acked), not a subscription — a
-// long-lived call here could sit open across several of the peer's own
-// re-publishes and end up adopting a stale one, whichever happened to be
-// in flight when its own ack finally landed. Short calls mean this side
-// re-registers every few seconds instead, so the peer's next re-publish
-// reliably lands inside a live window instead of an already-stale one
-// (found via a live run and a test that only worked when the fake relay's
-// ports were coincidentally identical across calls — see docs/adr/0008).
-const dataRelayAdoptExchangeTimeout = 3 * time.Second
-
-const (
-	// rendezvousDiscoveryRetry is the minimum gap between repeated relay
-	// discovery queries while no rendezvous relay is known.
-	rendezvousDiscoveryRetry = 10 * time.Second
-	// exchangeBackoffMax caps the pause before retrying a peer that did not
-	// answer a rendezvous exchange (see exchangeBackoff).
-	exchangeBackoffMax = 2 * time.Minute
-)
-
-// On the paid path (pace nil), watchDataRelayAdopt does not gate on
-// WaitForStall the way watchDataRelayFailover does: it stays continuously present at the relay
-// instead, cycling a short Exchange every few seconds for as long as ctx
-// lives. Tested this way, not gated on its own stall detection — Exchange
-// is one-shot rendezvous, not a subscription, so this side has to keep
-// re-registering to reliably catch the peer's next re-publish regardless
-// of when its own RxBytes happens to stall. A peer that is genuinely still
-// connected keeps re-exchanging the same candidate here too — harmless,
-// since AddPeer only runs again when the candidate actually changes.
-//
-// dataRelayAdoptBackoffGrace/dataRelayAdoptMaxBackoff bound the recurring
-// spend below: every cycle here buys a real rendezvous token from every
-// metered relay (exchangeAnyMetered), so polling at a fixed ~3s cadence
-// forever, long after a connection has settled, is an unbounded real-money
-// cost for a connection that isn't going anywhere. Backoff only starts
-// once nothing has changed for dataRelayAdoptBackoffGrace — comfortably
-// longer than any failover this project's own tests or demo exercise, so a
-// genuine failover (which happens within seconds of a stall, not minutes)
-// is never slowed down; only a connection that's been idle far longer than
-// that gets the extra sleep, on top of (not instead of) the exchange
-// call's own ~3s natural cadence.
-const (
-	dataRelayAdoptBackoffGrace = 2 * time.Minute
-	dataRelayAdoptMaxBackoff   = 30 * time.Second
-)
-
-// watchDataRelayAdopt's pace is nil on the paid path. A sponsored node passes the shared limiter
-// from sponsor.PollLimiter, because the relay limits sponsored tokens per
-// label per hour: polling every few seconds would use the whole allowance
-// in about 90 seconds. With pace set, the loop polls only while the peer's
-// traffic has stalled (the same RxBytes signal the buying side's
-// watchDataRelayFailover acts on; keepalives move it every
-// dataRelayKeepaliveSeconds on a healthy link), and each cycle waits for
-// the limiter. If it had to wait for a token, it checks for the stall again
-// before polling (datarelay.WaitForStallWithToken).
-//
-// A cycle that fails fast (a refused token, an unreachable sidecar) still
-// takes dataRelayAdoptExchangeTimeout, so a failing relay is not hammered.
-//
-// relaySet is read on every cycle, so a rendezvous set recovered after a
-// start-up discovery failure reaches this watcher. While no relay is known,
-// a cycle waits dataRelayAdoptExchangeTimeout like any other failed cycle.
-func watchDataRelayAdopt(ctx context.Context, node *wgnode.Node, m relayPayer, peerLabel, ownPubkey, peerPubkey, ownCandidate string, allowedIP netip.Prefix, relaySet rendezvousSource, pace *rate.Limiter) {
-	var current string
-	lastChange := time.Now()
-	backoff := dataRelayAdoptExchangeTimeout
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if pace != nil {
-			if err := datarelay.WaitForStallWithToken(ctx, node, peerPubkey, dataRelayPollInterval, dataRelayStallTimeout, pace); err != nil {
-				return
-			}
-		}
-		started := time.Now()
-		var candidate string
-		relays, err := relaySet()
-		if err == nil {
-			candidate, _, err = exchangeAnyMetered(relays, m, ownPubkey, peerPubkey, ownCandidate, dataRelayAdoptExchangeTimeout)
-		}
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(dataRelayAdoptExchangeTimeout - time.Since(started)):
-			}
-		}
-		if err != nil || candidate == "" || candidate == current {
-			if pace == nil && time.Since(lastChange) > dataRelayAdoptBackoffGrace {
-				// Long-idle connection — sleep extra before the next paid
-				// attempt, doubling up to dataRelayAdoptMaxBackoff. Reset
-				// the instant a real change is adopted below.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-				if backoff *= 2; backoff > dataRelayAdoptMaxBackoff {
-					backoff = dataRelayAdoptMaxBackoff
-				}
-			}
-			continue
-		}
-		endpoint, err := peerEndpointFromCandidate(candidate)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: %s: peer published unparseable candidate %q, will retry\n", peerLabel, candidate)
-			continue
-		}
-		// This node has no way to know peerPubkey's new candidate is
-		// relay-routed rather than a real direct address, so this has to
-		// be unconditional — the relay only learns an address from
-		// outbound traffic it observes (docs/adr/0008).
-		if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: %s: arming persistent keepalive failed, will retry: %v\n", peerLabel, err)
-			continue
-		}
-		if err := node.AddPeer(peerPubkey, allowedIP, &endpoint); err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: %s: adopting new candidate failed, will retry: %v\n", peerLabel, err)
-			continue
-		}
-		lastChange = time.Now()
-		backoff = dataRelayAdoptExchangeTimeout
-		fmt.Fprintf(os.Stderr, "data-relay: %s adopted new candidate %s\n", peerLabel, candidate)
-		current = candidate
-	}
-}
-
-// peerEndpointFromCandidate picks the endpoint to use from a peer's
-// published candidate: an "ep1:" announcement (docs/reference/endpoint-exchange.md)
-// or a legacy bare ip:port. The endpoint is a dial hint, never an admission
-// signal. Admission is not checked here: admission.Loop calls EndpointResolver
-// only for peers ENS currently admits (serve does not use Exchanger yet), and
-// the data-relay adopt watcher does not re-check admission.
-func peerEndpointFromCandidate(candidate string) (netip.AddrPort, error) {
-	announcement, err := rendezvous.ParseAnnouncement(candidate)
-	if err != nil {
-		return netip.AddrPort{}, err
-	}
-	best, ok := announcement.Best()
-	if !ok {
-		return netip.AddrPort{}, fmt.Errorf("announcement has no usable endpoint")
-	}
-	return best, nil
-}
-
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
@@ -1127,18 +374,14 @@ func runServe(args []string) error {
 	statusBind := fs.String("status-bind", "127.0.0.1", "bind address for the status API — loopback-only by default; set to 0.0.0.0 only if a dashboard on a different machine genuinely needs to reach this node's status API remotely")
 	interfaceName := fs.String("interface", "", "real OS interface name (auto-picked if unset: \"utun\" on macOS, \"bramble0\" on linux)")
 	netstackMode := fs.Bool("netstack", false, "use a virtual (gVisor) TUN instead of a real OS interface — testing/local dev only, never the demo")
-	rendezvousAddr := fs.String("rendezvous", "", "rendezvous relay address (host:port) for candidate exchange; omit for static/dial-in-first peers only")
+	rendezvousAddr := fs.String("rendezvous", "", "rendezvous relay as host:port@pin; omit to use the relay directory")
 	myCandidate := fs.String("my-candidate", "", "this node's own reachable address (ip:port) to publish via the rendezvous relay, e.g. a VPS's public IP:listen-port")
 	dataRelays := dataRelayFlag{}
-	fs.Var(dataRelays, "data-relay", "candidate data-plane relay: label=relay-sidecar-base-url (repeatable) — the pool -relay-peer picks from (docs/adr/0008)")
+	fs.Var(dataRelays, "data-relay", "data relay as label=host:port@pin (repeatable); omit to use the relay directory")
 	relayPeers := relayPeerFlag{}
 	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — forces relay routing even when STUN traversal is enabled (docs/adr/0008)")
-	relaySessionBytes := fs.Int64("relay-session-bytes", 10_000, "byte allotment to buy per data-relay session (docs/adr/0008) — size this to the transfer you're about to demo; running out mid-transfer needs a fresh session, not an automatic top-up. At the -price-per-byte default (1 atomic USDC/byte), the default here is 0.01 USDC per session — raise deliberately, since cost scales linearly with this")
-	sponsoredRelay := fs.Bool("sponsored-relay", false, "get rendezvous tokens and data-relay sessions from each relay's operator-sponsored routes instead of paying on Hedera — for a device with no Hedera key (docs/adr/0018). The relay must run -sponsor-enrolled; it checks -label is enrolled, grants a capped free session and sees this device's source IP")
-	sponsoredTokensPerHour := fs.Int("sponsored-tokens-per-hour", 30, "with -sponsored-relay: the relay's -sponsor-max-per-hour. brambled paces its rendezvous polling to stay a fifth under it, leaving the rest for connects and session renewals (docs/adr/0018)")
-	relayFirst := fs.Bool("relay-first", false, "treat every tracked peer as a -relay-peer: route all of them through the data-relay pool instead of a direct candidate — for a device with no direct path to the mesh (docs/adr/0018)")
-	maxRelayPricePerByte := fs.Int64("max-relay-price-per-byte", 10, "maximum acceptable data-relay price in atomic USDC per byte")
-	maxRelaySessionCost := fs.Int64("max-relay-session-cost", 100_000, "maximum acceptable data-relay session cost in atomic USDC (0.10 USDC by default)")
+	relaySessionBytes := fs.Int64("relay-session-bytes", 256<<20, "bytes to ask for per data-relay session; the relay may grant less")
+	relayFirst := fs.Bool("relay-first", false, "route every tracked peer through the data-relay pool instead of a direct path, for a device with no direct path to the mesh")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1146,12 +389,8 @@ func runServe(args []string) error {
 	// list means "auto-discover every other device on the tailnet"
 	// instead of an error; see the discoverAllPeers call below, after the
 	// sidecar exists to ask.
-	if *relaySessionBytes <= 0 || *maxRelayPricePerByte <= 0 || *maxRelaySessionCost <= 0 {
-		return fmt.Errorf("relay session bytes and relay price/cost limits must all be positive")
-	}
-	relayPurchasePolicy := dataRelayPurchasePolicy{
-		MaxPricePerByte: *maxRelayPricePerByte,
-		MaxSessionCost:  *maxRelaySessionCost,
+	if *relaySessionBytes <= 0 {
+		return fmt.Errorf("-relay-session-bytes must be positive")
 	}
 	if *ownLabel == "" {
 		return fmt.Errorf("-label (this node's own ENS label) is required")
@@ -1173,27 +412,17 @@ func runServe(args []string) error {
 		return fmt.Errorf("deriving own public key: %w", err)
 	}
 
-	scfg := sidecarConfig()
-	if scfg.TailnetName == "" || scfg.TailnetRegistry == "" {
-		return fmt.Errorf("BRAMBLE_TAILNET_NAME and BRAMBLE_TAILNET_REGISTRY must be set")
+	if _, err := rendezvous.RegisterIdentity(*privateKeyHex); err != nil {
+		return fmt.Errorf("registering rendezvous identity: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "starting sidecar...")
-	m, err := sidecar.Start(scfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	m, err := startChain(ctx)
 	if err != nil {
 		return err
 	}
-	defer m.Stop()
-
-	var payer relayPayer = m
-	var adoptPace *rate.Limiter
-	if *sponsoredRelay {
-		if adoptPace, err = sponsor.PollLimiter(*sponsoredTokensPerHour); err != nil {
-			return fmt.Errorf("-sponsored-tokens-per-hour: %w", err)
-		}
-		payer = &sponsor.Payer{Label: *ownLabel}
-		fmt.Fprintf(os.Stderr, "relay: sponsored mode — nothing is paid on-chain; each relay checks %q is enrolled, grants a capped session and sees this device's source IP\n", *ownLabel)
-	}
+	var sessions sessionSource = freeSessions{}
 
 	// No -peer flags at all: auto-discover every other device on the
 	// tailnet instead of requiring each one typed out by hand
@@ -1260,29 +489,27 @@ func runServe(args []string) error {
 	// just yields empty lists here (m.Relays()'s own documented behavior),
 	// which is indistinguishable from "no relays available" — non-fatal,
 	// same fail-open-on-discovery posture the rest of this file already has.
-	rendezvousRelays := staticRendezvousRelays(*rendezvousAddr, os.Getenv("BRAMBLE_RENDEZVOUS_PAYMENT_URL"))
-	if *rendezvousAddr != "" && os.Getenv("BRAMBLE_RENDEZVOUS_PAYMENT_URL") == "" {
-		fmt.Fprintf(os.Stderr, "rendezvous: %s has no BRAMBLE_RENDEZVOUS_PAYMENT_URL; a -meter relay rejects every exchange without a token (ETH-301)\n", *rendezvousAddr)
-	}
-	// discoveryFailed: the registry scan errored (not merely found nothing).
-	// The resolver below then retries it lazily; without that, one transient
-	// RPC error would leave this node with no rendezvous for its whole life.
+	rendezvousRelays := staticRendezvousRelays(*rendezvousAddr)
 	discoveryFailed := false
 	if len(dataRelays) == 0 || len(rendezvousRelays) == 0 {
-		if relays, relErr := m.Relays(); relErr != nil {
+		relays, relErr := m.Relays()
+		if relErr != nil {
 			discoveryFailed = true
-			fmt.Fprintf(os.Stderr, "relay discovery: %v (will retry; using -rendezvous/-data-relay meanwhile)\n", relErr)
-		} else {
-			if len(rendezvousRelays) == 0 {
-				for _, r := range relays.Rendezvous {
-					rendezvousRelays = append(rendezvousRelays, sidecar.RendezvousRelay{Label: r.Label, Address: r.Address, SidecarURL: r.SidecarURL})
-				}
+			fmt.Fprintf(os.Stderr, "relay discovery: %v (will retry)\n", relErr)
+		}
+		staticRendezvous := len(rendezvousRelays) > 0
+		staticData := len(dataRelays) > 0
+		for _, r := range relays {
+			rr := rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin}
+			if !staticRendezvous {
+				rendezvousRelays = append(rendezvousRelays, rr)
 			}
-			if len(dataRelays) == 0 {
-				for _, r := range relays.DataRelays {
-					dataRelays[r.Label] = r.SidecarURL
-				}
+			if !staticData && r.DataRelay {
+				dataRelays[r.Label] = rr
 			}
+		}
+		if len(rendezvousRelays) == 0 {
+			discoveryFailed = true
 		}
 	}
 	if len(relayPeers) > 0 && len(dataRelays) == 0 {
@@ -1321,17 +548,15 @@ func runServe(args []string) error {
 	// dashboard's source for everything ENS/Hedera state alone can't show.
 	// It has no write path of its own: OnAdmissionEvent/OnGatewayDecision
 	// only ever record what the admission loop and gateway already decided.
-	status := &statusapi.Server{PeerTable: node, EndpointSource: node, DataRelays: maps.Clone(dataRelays)}
+	status := &statusapi.Server{PeerTable: node, EndpointSource: node, DataRelays: relayAddresses(dataRelays)}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	tracker := newPeerTracker(*ownLabel, prefix.Addr(), peers)
 	useTraversal := func(p admission.Peer) bool {
 		return len(discoveryServers) > 0 && p.Endpoint == nil && !relayPeers[p.Label]
 	}
 	paths := &peerTraversal{
-		ctx: ctx, node: node, own: ownPubkey, relaySet: nil, payer: payer, pool: dataRelays,
-		sessionBytes: *relaySessionBytes, policy: relayPurchasePolicy, exchangeTimeout: *ttl, pace: adoptPace,
+		ctx: ctx, node: node, own: ownPubkey, relaySet: nil, sessions: sessions, pool: dataRelays,
+		sessionBytes: *relaySessionBytes, exchangeTimeout: *ttl,
 		eligible: func(label string) bool {
 			tracker.mu.Lock()
 			defer tracker.mu.Unlock()
@@ -1394,13 +619,13 @@ func runServe(args []string) error {
 			pubkey  string
 			session *dataRelaySession
 		})
-		resolve := func(relays []sidecar.RendezvousRelay, p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
+		resolve := func(relays []rendezvous.Relay, p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
 			if relayPeers[p.Label] {
 				cached := initialSessions[p.Label]
 				if cached.pubkey != peerPubkey {
 					cached.session = nil
 				}
-				endpoint, session, err := relayRoutedEndpoint(node, payer, dataRelays, *relaySessionBytes, relayPurchasePolicy, relays, own, peerPubkey, *ttl, cached.session)
+				endpoint, session, err := relayRoutedEndpoint(node, sessions, dataRelays, *relaySessionBytes, relays, own, peerPubkey, *ttl, cached.session)
 				cached.pubkey, cached.session = peerPubkey, session
 				initialSessions[p.Label] = cached
 				if err == nil {
@@ -1413,12 +638,7 @@ func runServe(args []string) error {
 			// place that ever learns one.
 			relState.setPubkey(p.Label, peerPubkey)
 
-			// exchangeAnyMetered is the rendezvous-set failover
-			// docs/adr/0003 requires: one rogue or unreachable relay among
-			// the (possibly discovered) set can't unilaterally block this
-			// connection. Buys a fresh (or cached) token per relay it
-			// tries, from that relay's own sidecar — docs/adr/0008.
-			candidate, _, err := exchangeAnyMetered(relays, payer, own, peerPubkey, defaultCandidate, *ttl)
+			candidate, _, err := exchangeAny(relays, own, peerPubkey, defaultCandidate, *ttl)
 			if err != nil {
 				return nil, err
 			}
@@ -1427,21 +647,9 @@ func runServe(args []string) error {
 			}
 			endpoint, err := peerEndpointFromCandidate(candidate)
 			if err != nil {
-				return nil, fmt.Errorf("peer %s published an unusable candidate %q: %w", peerPubkey, candidate, err)
+				return nil, fmt.Errorf("peer %s published an unusable candidate: %w", short(peerPubkey), err)
 			}
-			// This node has no way to know peerPubkey's candidate is
-			// relay-routed rather than a real direct address — a relay
-			// only learns an address from outbound traffic it observes
-			// (docs/adr/0008), so if a data-relay pool is even in play on
-			// this node at all, arm the keepalive defensively. Harmless
-			// for a genuinely direct peer (a standard, common WireGuard
-			// setting), required for one that turns out to be relay-routed
-			// on the other end.
-			if len(dataRelays) > 0 {
-				if err := node.SetPersistentKeepalive(peerPubkey, dataRelayKeepaliveSeconds); err != nil {
-					return nil, fmt.Errorf("arming persistent keepalive for %s: %w", peerPubkey, err)
-				}
-			}
+			adoptBind(node, candidate, endpoint)
 			return &endpoint, nil
 		}
 		loop.EndpointResolver = func(p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
@@ -1453,7 +661,7 @@ func runServe(args []string) error {
 				return nil, err
 			}
 			// A peer that failed to answer recently is skipped: each attempt
-			// buys a token and blocks this loop for a whole exchange timeout.
+			// blocks this loop for a whole exchange timeout.
 			if wait := backoff.Wait(peerPubkey); wait > 0 {
 				return nil, fmt.Errorf("skipping rendezvous with %s for %s: it did not answer the last attempt", p.Label, wait.Round(time.Second))
 			}
@@ -1482,7 +690,7 @@ func runServe(args []string) error {
 			continue
 		}
 		p := p
-		go watchDataRelayFailover(ctx, node, payer, relState, p.Label, dataRelays, *relaySessionBytes, relayPurchasePolicy, relaySet, ownPubkey, *ttl)
+		go watchDataRelayFailover(ctx, node, sessions, relState, p.Label, dataRelays, *relaySessionBytes, relaySet, ownPubkey, *ttl)
 	}
 
 	// The other half of Gate 4.3: every tracked peer that ISN'T a
@@ -1509,7 +717,7 @@ func runServe(args []string) error {
 				if !ok {
 					continue
 				}
-				watchDataRelayAdopt(ctx, node, payer, p.Label, ownPubkey, pubkey, *myCandidate, p.AllowedIP, relaySet, adoptPace)
+				watchDataRelayAdopt(ctx, node, p.Label, ownPubkey, pubkey, *myCandidate, p.AllowedIP, relaySet)
 				return
 			}
 		}()
@@ -1615,4 +823,13 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// relayAddresses reports the data-relay pool as label -> rendezvous address for the status API.
+func relayAddresses(pool dataRelayFlag) map[string]string {
+	out := make(map[string]string, len(pool))
+	for label, r := range pool {
+		out[label] = r.Address
+	}
+	return out
 }

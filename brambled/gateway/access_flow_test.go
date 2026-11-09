@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/internal/testport"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
@@ -22,7 +22,7 @@ import (
 // approval status nor a test-controlled allow/deny flag enters the gateway.
 type accessFlowResolver struct{ url string }
 
-func (r accessFlowResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (r accessFlowResolver) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(r.url + "/devices/" + label)
 	if err != nil {
@@ -32,7 +32,7 @@ func (r accessFlowResolver) ResolveDevice(label string) (*sidecar.DeviceRecord, 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("in-memory resolver: HTTP %d", resp.StatusCode)
 	}
-	var record sidecar.DeviceRecord
+	var record registry.DeviceRecord
 	err = json.NewDecoder(resp.Body).Decode(&record)
 	return &record, err
 }

@@ -1,4 +1,4 @@
-package main
+package brambled
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
-	"github.com/WhyAsh5114/bramble/brambled/sidecar"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
 )
 
 // liveTailnet is a fake sidecar whose device list and records can change
@@ -21,7 +21,7 @@ import (
 type liveTailnet struct {
 	mu      sync.Mutex
 	labels  []string
-	records map[string]*sidecar.DeviceRecord
+	records map[string]*registry.DeviceRecord
 }
 
 func (n *liveTailnet) ListDevices() ([]string, error) {
@@ -30,7 +30,7 @@ func (n *liveTailnet) ListDevices() ([]string, error) {
 	return append([]string(nil), n.labels...), nil
 }
 
-func (n *liveTailnet) ResolveDevice(label string) (*sidecar.DeviceRecord, error) {
+func (n *liveTailnet) ResolveDevice(label string) (*registry.DeviceRecord, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	record, ok := n.records[label]
@@ -45,7 +45,7 @@ func (n *liveTailnet) enroll(label, pubkey, meshIP string, revoked bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.labels = append(n.labels, label)
-	n.records[label] = &sidecar.DeviceRecord{
+	n.records[label] = &registry.DeviceRecord{
 		Pubkey:  &pubkey,
 		MeshIP:  &meshIP,
 		Expiry:  strconv.FormatInt(time.Now().Add(24*time.Hour).Unix(), 10),
@@ -85,7 +85,7 @@ func (s *syncTable) has(pubkey string) (netip.Prefix, bool) {
 // gateway must start tracking it, admit it to the WireGuard table, and map
 // its tunnel address to its label for the gateway's ACL check.
 func TestRediscovery_DeviceEnrolledAfterStartupIsAdmitted(t *testing.T) {
-	tailnet := &liveTailnet{records: map[string]*sidecar.DeviceRecord{}}
+	tailnet := &liveTailnet{records: map[string]*registry.DeviceRecord{}}
 	tailnet.enroll("gateway", "gwkey", "10.77.0.1/24", false)
 	tailnet.enroll("laptop", "laptopkey", "10.77.0.2/24", false)
 
@@ -132,7 +132,7 @@ func TestRediscovery_DeviceEnrolledAfterStartupIsAdmitted(t *testing.T) {
 // rediscovery does not bypass admission: a device that shows up in the
 // registry already revoked is tracked, and admission.Loop keeps it out.
 func TestRediscovery_LateRevokedDeviceIsTrackedButNotAdmitted(t *testing.T) {
-	tailnet := &liveTailnet{records: map[string]*sidecar.DeviceRecord{}}
+	tailnet := &liveTailnet{records: map[string]*registry.DeviceRecord{}}
 	tailnet.enroll("gateway", "gwkey", "10.77.0.1/24", false)
 	table := &syncTable{added: map[string]netip.Prefix{}}
 	var events sync.Map
@@ -161,7 +161,7 @@ func TestRediscovery_LateRevokedDeviceIsTrackedButNotAdmitted(t *testing.T) {
 }
 
 func TestPeerTracker_DiscoverNew_SkipsUntilMeshIPAndCollisionsLogOnce(t *testing.T) {
-	tailnet := &liveTailnet{records: map[string]*sidecar.DeviceRecord{}}
+	tailnet := &liveTailnet{records: map[string]*registry.DeviceRecord{}}
 	tailnet.enroll("gateway", "gwkey", "10.77.0.1/24", false)
 	tailnet.enroll("laptop", "laptopkey", "10.77.0.2/24", false)
 	tracker := newPeerTracker("gateway", netip.MustParseAddr("10.77.0.1"), []admission.Peer{
