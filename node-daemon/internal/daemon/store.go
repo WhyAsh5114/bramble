@@ -27,7 +27,9 @@ type Identity struct {
 }
 
 // PublicKeyHex derives the public key.
-func (i Identity) PublicKeyHex() (string, error) { return wgnode.PublicKeyFromPrivateHex(i.PrivateKeyHex) }
+func (i Identity) PublicKeyHex() (string, error) {
+	return wgnode.PublicKeyFromPrivateHex(i.PrivateKeyHex)
+}
 
 const (
 	identityFile = "identity.json"
