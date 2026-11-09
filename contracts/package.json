@@ -1,0 +1,12 @@
+{
+  "name": "@bramble/contracts",
+  "private": true,
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "deploy:names": "bun script/deploy-names.ts"
+  },
+  "devDependencies": {
+    "viem": "2.56.3"
+  }
+}

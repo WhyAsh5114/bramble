@@ -1,0 +1,12 @@
+{
+  "rootResolver": "0x0614F7C63010Cbb6dbef26b5C6CB22C528De2aA9",
+  "ethTokenId": "109287486291540976796797580690759568790239837158701163272011063581961304932352",
+  "rootRegistry": "0x47C0487e9e23Ec0917C134026CCb864bA5496851",
+  "netRegistry": "0xDCBBFc531DA58ede81a8e122BDdb271F6366954c",
+  "netRegistryDeployBlock": "12097153",
+  "netOpenRegistrar": "0x56a0a5905631e6684bed5dce2e3445af78f6b1c8",
+  "relayRegistry": "0x3723B26814c3590195fF89eA22E330a6F3D4f3A8",
+  "relayRegistryDeployBlock": "12097160",
+  "relayOpenRegistrar": "0x5f42c763e9d3c80a9579ad08bb3c1af0a59752a2",
+  "name": "bramble.eth"
+}
