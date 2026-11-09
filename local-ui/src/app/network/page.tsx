@@ -45,7 +45,7 @@ function subtitle(item: Item) {
   if (d.revoked) return 'Revoked'
   if (!d.pubkey) return 'Not enrolled'
   if (!d.connected) return 'No observed link'
-  return d.path === 'direct' ? 'Direct' : d.path === 'relay' ? 'Relayed' : 'Connected'
+  return d.path === 'direct' ? 'Direct' : d.path?.startsWith('relay') ? 'Relayed' : 'Connected'
 }
 
 const PeerNode = memo(function PeerNode({ data }: NodeProps<FlowNode>) {
@@ -88,7 +88,7 @@ const nodeTypes = { peer: PeerNode }
 
 function edgeStyle(path?: string) {
   if (path === 'direct') return { stroke: 'var(--foreground)', strokeWidth: 2 }
-  if (path === 'relay') return { stroke: 'var(--muted-foreground)', strokeWidth: 2, strokeDasharray: '7 5' }
+  if (path?.startsWith('relay')) return { stroke: 'var(--muted-foreground)', strokeWidth: 2, strokeDasharray: '7 5' }
   return {
     stroke: 'var(--muted-foreground)',
     strokeWidth: 1.5,
@@ -150,7 +150,7 @@ function Graph({
         source: self.id,
         target: i.id,
         type: 'straight',
-        animated: path === 'relay',
+        animated: !!path?.startsWith('relay'),
         style: edgeStyle(path),
         selectable: false,
         focusable: false,
