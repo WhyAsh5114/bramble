@@ -1,6 +1,5 @@
 packages:
   - sidecar
-  - relay-sidecar
   - brambled
   - node-daemon
   - relay

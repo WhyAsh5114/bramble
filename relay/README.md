@@ -1,48 +1,50 @@
 # relay
 
-The dumb rendezvous relay (`docs/10_DAY0_GATES.md` Gate 0.2, `docs/adr/0003-rendezvous-relay-split.md`). Forwards opaque candidate-exchange blobs between two node agents; never decides who may talk to whom.
+A free, permissionless Bramble relay ([ADR 0019](../docs/adr/0019-user-driven-tailnets.md)). It offers three things:
 
-```bash
-go build -o bin/relay .
-./bin/relay -addr :9420
+- **Rendezvous** (TCP 9420, TLS): peers exchange sealed connection candidates. The relay routes them by pseudonymous IDs and cannot read or forge them.
+- **Data relay** (UDP 40000–40999): for peers that cannot hole-punch, a per-session UDP port that forwards WireGuard ciphertext between the two peers that proved the session secret.
+- **STUN** (UDP 3478): tells a node its public address.
+
+The relay never decides who may talk to whom. Each peer checks admission against the chain itself.
+
+## Run one
+
+```sh
+docker run -d --name bramble-relay \
+  -p 9420:9420/tcp -p 3478:3478/udp -p 40000-40999:40000-40999/udp \
+  -e RELAY_PUBLIC_HOST=<your public IP or DNS name> \
+  -v bramble-relay:/state \
+  ghcr.io/whyash5114/bramble-relay:latest
 ```
 
-## Metering (`-meter`, `docs/adr/0007-rendezvous-relay-metering.md`)
+Print the TLS pin that clients check, then list the relay in the directory from the Bramble UI (**Relays → Publish a relay**):
 
-Off by default — an unmetered relay behaves exactly as before Section B, no token needed.
-
-```
--meter                 require a paid rendezvous token per hello (default false)
--payee <account id>    Hedera account to receive rendezvous fees (required with -meter)
--sidecar-dir <path>    relay-sidecar/ project directory (default ../relay-sidecar)
--sidecar-port <port>   local port relay-sidecar listens on (default 7891)
+```sh
+docker exec bramble-relay /relay pin
 ```
 
-With `-meter`, the relay generates a fresh HMAC secret at startup, spawns `relay-sidecar` (`../relay-sidecar` by default) as a child process, hands it the secret over an env var, and requires every `hello` to carry a valid, unexpired, not-already-used rendezvous token — minted by `relay-sidecar` only after a real x402/Hedera payment settles. Token verification itself is entirely local (no callback to the sidecar per connection) — see `relay/token.go` and `relay-sidecar/README.md` for the live proof.
+## Configuration
 
-```bash
-./bin/relay -addr :9420 -meter -payee 0.0.XXXXXXX -sidecar-dir ../relay-sidecar
-```
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAY_PUBLIC_HOST` | (required) | Public IP or DNS name peers reach data sessions at |
+| `RELAY_ADDR` | `:9420` | Rendezvous listener (TLS) |
+| `RELAY_STUN_ADDR` | `:3478` | STUN listener; empty disables it |
+| `RELAY_PORT_MIN`, `RELAY_PORT_MAX` | `40000`, `40999` | UDP ports for data sessions |
+| `RELAY_MAX_BYTES_PER_DAY` | 3 GiB | Data relay budget per UTC day; `0` is unlimited |
+| `RELAY_MAX_BYTES_PER_MONTH` | 80 GiB | Data relay budget per UTC month; `0` is unlimited |
+| `RELAY_SESSION_BYTES` | 512 MiB | Cap of one session |
+| `RELAY_SESSION_TTL_SECONDS` | `1800` | Lifetime of one session |
+| `RELAY_MAX_SESSIONS` | `256` | Concurrent sessions |
+| `RELAY_SESSIONS_PER_IP_PER_HOUR` | `60` | New sessions one source IP may open per hour |
+| `RELAY_RENDEZVOUS_ONLY` | unset | `1` turns the data relay off |
+| `RELAY_STATE_DIR` | `/state` | TLS key and byte counters |
 
-## Sponsored sessions (`-sponsor-enrolled`, `docs/adr/0018-sponsored-relay-sessions.md`)
+When the day or month budget is used up, the relay stops forwarding data until the period rolls over. Rendezvous and STUN keep working, so peers that can hole-punch still connect.
 
-Off by default. Lets a device with no Hedera key use the relay for free, paid for by the operator. Requires `-meter` and `-data-relay`.
+## What a relay operator can and cannot do
 
-```
--sponsor-enrolled          grant a capped free session and rendezvous token to an enrolled device (default false)
--sponsor-bytes <n>         byte allotment of one sponsored session (default 1048576, 1 MiB)
--sponsor-max-per-hour <n>  sponsored sessions, and separately tokens, per label per hour (default 30)
-```
-
-The relay environment must also set `BRAMBLE_TAILNET_NAME`, `BRAMBLE_TAILNET_REGISTRY` and, unless the public default is acceptable, `SEPOLIA_RPC_URL`. The relay refuses to start if the first two are missing.
-
-`relay-sidecar` then serves two unpaid routes. Each takes `{"label": "<enrolled label>"}`:
-
-| Route                                | Reply                                                              |
-| ------------------------------------ | ------------------------------------------------------------------ |
-| `POST /sponsored/rendezvous-token`   | `{token, expiresAt}`                                               |
-| `POST /sponsored/data-relay-session` | `{sessionId, port, expiresAt, bytes}` with `bytes` at most the cap |
-
-Errors: 400 malformed label, 403 label not enrolled (no `pubkey` record, revoked or expired), 429 hourly limit, 502 registry read or allocation failed.
-
-The operator sees each device's source IP and label. See the ADR for the full claim.
+- **Sees:** source IP addresses, timing and byte counts of its users, and which pseudonymous IDs talk to each other.
+- **Cannot:** read candidates or traffic, learn WireGuard keys, impersonate a peer or admit a device.
+- **Can:** drop or delay traffic. Clients use several relays and prefer direct paths, so a bad relay slows a connection down without breaking it.

@@ -3,119 +3,115 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"sync"
 	"time"
 )
 
-// Bytes-scaled data-plane relay (docs/adr/0008): one ephemeral UDP port per
-// purchased session, not a shared/multiplexed port — see the ADR's
-// "wireguard-go owns the peer socket" finding for why. relay-sidecar buys a
-// session on a client's behalf via the loopback-only /internal
-// endpoint below after a real x402/Hedera payment settles; this file never
-// touches payment or pricing, only allocation, forwarding, and accounting.
+// dataLimits bounds what one relay gives away.
+type dataLimits struct {
+	SessionBytes     int64         // cap of one session
+	SessionTTL       time.Duration // lifetime of one session
+	MaxSessions      int           // concurrent sessions
+	SessionsPerHour  int           // new sessions per source IP per hour
+	PortMin, PortMax int           // UDP ports sessions bind to (published by the host)
+}
 
-const sessionTTL = 5 * time.Minute
-
-// dataSession is one purchased byte allotment and its forwarding socket.
-// slots are learned from the first two distinct UDP source addresses seen
-// on conn, not pre-registered — see the ADR's "Trust model" section for why
-// that's an accepted, documented simplification here.
 type dataSession struct {
-	id            string
-	conn          *net.UDPConn
-	bytesAllotted int64
-	expiresAt     time.Time
+	id        [8]byte
+	secret    []byte
+	conn      *net.UDPConn
+	allotted  int64
+	expiresAt time.Time
+	owner     string // source IP that allocated it
 
-	mu        sync.Mutex
-	bytesUsed int64
-	slots     [2]*net.UDPAddr // first two distinct sources; nil until learned
+	mu    sync.Mutex
+	used  int64
+	slots [2]*net.UDPAddr
 }
 
-// dataRelay owns every active session and the loopback allocation API.
-// Public forwarding traffic never reaches allocate — each session gets its
-// own socket, so there is nothing shared across sessions to protect beyond
-// the session map itself.
 type dataRelay struct {
+	limits dataLimits
+	budget *budget
+	host   string // interface sessions bind to
+
 	mu       sync.Mutex
-	sessions map[string]*dataSession
-
-	// sponsorBytes is the per-session cap on operator-sponsored (unpaid)
-	// sessions; 0 means sponsorship is off and sponsored requests are
-	// refused. Set once at startup from -sponsor-bytes, before serving.
-	sponsorBytes int64
+	sessions map[[8]byte]*dataSession
+	perIP    map[string][]time.Time
+	nextPort int
 }
 
-func newDataRelay() *dataRelay {
-	return &dataRelay{sessions: make(map[string]*dataSession)}
+func newDataRelay(host string, limits dataLimits, b *budget) *dataRelay {
+	return &dataRelay{limits: limits, budget: b, host: host, sessions: map[[8]byte]*dataSession{}, perIP: map[string][]time.Time{}, nextPort: limits.PortMin}
 }
 
-// allocateSponsored is allocate for a session the operator pays for (D11 of
-// the ETH-177 spec): the requested size is clamped to the relay's own
-// sponsorBytes cap, whatever the caller asked for. The cap is enforced here,
-// in the process that owns the forwarding socket, so a bug or compromise in
-// relay-sidecar's enrollment check cannot turn into an unbounded free
-// session.
-func (r *dataRelay) allocateSponsored(host string, bytes int64) (*dataSession, error) {
-	if r.sponsorBytes <= 0 {
-		return nil, errSponsorshipOff
-	}
-	if bytes <= 0 {
-		return nil, fmt.Errorf("bytes must be positive, got %d", bytes)
-	}
-	if bytes > r.sponsorBytes {
-		bytes = r.sponsorBytes
-	}
-	return r.allocate(host, bytes)
-}
+var (
+	errBudget  = errors.New("relay data budget is used up for now; direct paths still work")
+	errBusy    = errors.New("relay is at its session limit")
+	errTooMany = errors.New("too many sessions from this address; try again later")
+)
 
-var errSponsorshipOff = errors.New("sponsored sessions are not enabled on this relay")
-
-// allocate opens a fresh ephemeral UDP port, starts forwarding on it, and
-// registers the session. Called only from the loopback /internal handler.
-func (r *dataRelay) allocate(host string, bytes int64) (*dataSession, error) {
-	if bytes <= 0 {
-		return nil, fmt.Errorf("bytes must be positive, got %d", bytes)
+// allocate opens a session for the requester at ip. The grant is clamped to the session cap.
+func (r *dataRelay) allocate(ip string, bytes int64, now time.Time) (*dataSession, error) {
+	if r.budget.exhausted(now) {
+		return nil, errBudget
 	}
-
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(host), Port: 0})
-	if err != nil {
-		return nil, fmt.Errorf("allocating data-relay port: %w", err)
+	if bytes <= 0 || bytes > r.limits.SessionBytes {
+		bytes = r.limits.SessionBytes
 	}
-
-	idBytes := make([]byte, 8)
-	if _, err := rand.Read(idBytes); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("generating session id: %w", err)
-	}
-
-	s := &dataSession{
-		id:            hex.EncodeToString(idBytes),
-		conn:          conn,
-		bytesAllotted: bytes,
-		expiresAt:     time.Now().Add(sessionTTL),
-	}
-
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.sessions) >= r.limits.MaxSessions {
+		return nil, errBusy
+	}
+	recent := r.perIP[ip][:0]
+	for _, t := range r.perIP[ip] {
+		if now.Sub(t) < time.Hour {
+			recent = append(recent, t)
+		}
+	}
+	if r.limits.SessionsPerHour > 0 && len(recent) >= r.limits.SessionsPerHour {
+		r.perIP[ip] = recent
+		return nil, errTooMany
+	}
+	conn, err := r.listenLocked()
+	if err != nil {
+		return nil, err
+	}
+	s := &dataSession{conn: conn, allotted: bytes, expiresAt: now.Add(r.limits.SessionTTL), owner: ip, secret: make([]byte, 32)}
+	if _, err := rand.Read(s.id[:]); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if _, err := rand.Read(s.secret); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	r.perIP[ip] = append(recent, now)
 	r.sessions[s.id] = s
-	r.mu.Unlock()
-
 	go r.forward(s)
 	return s, nil
 }
 
-// forward is the whole relay: read one datagram, learn its source as a slot
-// if one is still free, forward it to the other slot if both are known and
-// the allotment isn't exhausted, repeat. Matching is exact source IP:port
-// equality — a genuine NAT remap mid-session arrives as an unmatched
-// source and takes the other free slot (or is dropped if both are already
-// full), not silently re-bound to its old slot. This is NOT WireGuard
-// roaming support; don't claim it is. Fine for a stable-NAT or localhost
-// demo, a real gap for anything longer-lived.
+// listenLocked binds the next free port in the configured range.
+func (r *dataRelay) listenLocked() (*net.UDPConn, error) {
+	span := r.limits.PortMax - r.limits.PortMin + 1
+	for i := 0; i < span; i++ {
+		port := r.nextPort
+		r.nextPort++
+		if r.nextPort > r.limits.PortMax {
+			r.nextPort = r.limits.PortMin
+		}
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(r.host), Port: port})
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("no free UDP port in %d-%d", r.limits.PortMin, r.limits.PortMax)
+}
+
 func (r *dataRelay) forward(s *dataSession) {
 	defer func() {
 		s.conn.Close()
@@ -123,132 +119,52 @@ func (r *dataRelay) forward(s *dataSession) {
 		delete(r.sessions, s.id)
 		r.mu.Unlock()
 	}()
-
 	buf := make([]byte, 65535)
 	for {
-		// Deadline is s.expiresAt itself, not a rolling window — a session
-		// expires at the TTL it was allocated with regardless of how
-		// recently traffic arrived (unlike, say, an idle-timeout design).
 		_ = s.conn.SetReadDeadline(s.expiresAt)
 		n, src, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
-			return // deadline exceeded or socket closed — session is done
-		}
-		if time.Now().After(s.expiresAt) {
 			return
 		}
-
+		now := time.Now()
+		if now.After(s.expiresAt) {
+			return
+		}
+		if side, isBind, ok := parseBind(buf[:n], s.id, s.secret, now); isBind {
+			if ok {
+				s.mu.Lock()
+				s.slots[side] = src
+				s.mu.Unlock()
+			}
+			continue
+		}
 		s.mu.Lock()
-		other := s.learnAndFindOther(src)
-		if other == nil {
-			s.mu.Unlock()
-			continue // only one slot filled so far — nothing to forward to yet
+		from := -1
+		for i, slot := range s.slots {
+			if slot != nil && slot.IP.Equal(src.IP) && slot.Port == src.Port {
+				from = i
+			}
 		}
-		if s.bytesUsed+int64(n) > s.bytesAllotted {
+		if from < 0 || s.slots[1-from] == nil || s.used+int64(n) > s.allotted {
 			s.mu.Unlock()
-			continue // allotment exhausted — drop until a fresh session is bought
+			continue
 		}
-		s.bytesUsed += int64(n)
+		to := s.slots[1-from]
+		s.used += int64(n)
 		s.mu.Unlock()
-
-		_, _ = s.conn.WriteToUDP(buf[:n], other)
+		if !r.budget.take(int64(n), now) {
+			continue
+		}
+		_, _ = s.conn.WriteToUDP(buf[:n], to)
 	}
 }
 
-// learnAndFindOther assigns src to a free slot (or confirms it against its
-// existing slot) and returns the other slot's address, or nil if the other
-// slot isn't filled yet. Caller holds s.mu.
-func (s *dataSession) learnAndFindOther(src *net.UDPAddr) *net.UDPAddr {
-	for i, slot := range s.slots {
-		if slot != nil && slot.IP.Equal(src.IP) && slot.Port == src.Port {
-			other := s.slots[1-i]
-			s.slots[i] = src // no-op unless src somehow differs by object identity only; see forward's doc comment on what this does NOT handle
-			return other
-		}
-	}
-	for i, slot := range s.slots {
-		if slot == nil {
-			s.slots[i] = src
-			return s.slots[1-i]
-		}
-	}
-	return nil // both slots taken by two other addresses — ignore a third source
+func (r *dataRelay) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sessions)
 }
 
-// bytesRemaining reports the session's live usage, for tests and logging.
-func (s *dataSession) bytesRemaining() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bytesAllotted - s.bytesUsed
-}
+func (s *dataSession) port() int { return s.conn.LocalAddr().(*net.UDPAddr).Port }
 
-// internalAllocateRequest/Response is the loopback-only contract with
-// relay-sidecar (docs/adr/0008): relay-sidecar collects payment, then calls
-// this endpoint because only this Go process can open the forwarding
-// socket — the mirror image of adr/0007's secret handoff (there Go hands TS
-// a secret; here TS hands Go a request).
-type internalAllocateRequest struct {
-	Bytes int64 `json:"bytes"`
-	// Sponsored marks a session the operator pays for instead of the
-	// client; the size is then clamped to -sponsor-bytes (allocateSponsored).
-	Sponsored bool `json:"sponsored,omitempty"`
-}
-
-type internalAllocateResponse struct {
-	SessionID string `json:"sessionId"`
-	Port      int    `json:"port"`
-	ExpiresAt int64  `json:"expiresAt"`
-	// Bytes is the allotment actually granted, which for a sponsored
-	// session can be smaller than the request.
-	Bytes int64 `json:"bytes"`
-}
-
-// internalAPIHandler builds the loopback-only allocation route. Separated
-// from serveInternalAPI so tests can exercise it via httptest without
-// binding a real listener.
-func internalAPIHandler(r *dataRelay, dataHost string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/internal/data-relay-session", func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var body internalAllocateRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			http.Error(w, fmt.Sprintf("bad request: %v", err), http.StatusBadRequest)
-			return
-		}
-		var s *dataSession
-		var err error
-		if body.Sponsored {
-			s, err = r.allocateSponsored(dataHost, body.Bytes)
-		} else {
-			s, err = r.allocate(dataHost, body.Bytes)
-		}
-		if errors.Is(err, errSponsorshipOff) {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(internalAllocateResponse{
-			SessionID: s.id,
-			Port:      s.conn.LocalAddr().(*net.UDPAddr).Port,
-			ExpiresAt: s.expiresAt.Unix(),
-			Bytes:     s.bytesAllotted,
-		})
-	})
-	return mux
-}
-
-// serveInternalAPI starts the loopback-only allocation listener. Binding to
-// 127.0.0.1 explicitly (not the -addr/-data-port host) is the only access
-// control this endpoint has — it must never be reachable from outside the
-// machine relay-sidecar runs on.
-func serveInternalAPI(r *dataRelay, port int, dataHost string) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	return http.ListenAndServe(addr, internalAPIHandler(r, dataHost))
-}
+func (s *dataSession) idHex() string { return hex.EncodeToString(s.id[:]) }

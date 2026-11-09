@@ -340,34 +340,6 @@ importers:
 
   relay: {}
 
-  relay-sidecar:
-    dependencies:
-      '@x402/core':
-        specifier: ^2.25.0
-        version: 2.25.0
-      '@x402/hedera':
-        specifier: ^2.25.0
-        version: 2.25.0(ansi-regex@6.2.2)(ansi-styles@6.2.3)(bn.js@5.2.3)(debug@4.4.1)(protobufjs@8.0.1)(strip-ansi@7.1.2)
-      '@x402/hono':
-        specifier: ^2.25.0
-        version: 2.25.0(ethers@6.16.0)(hono@4.13.7)(typescript@6.0.3)
-      hono:
-        specifier: ^4.13.7
-        version: 4.13.7
-      viem:
-        specifier: ^2.56.3
-        version: 2.56.3(typescript@6.0.3)(zod@3.25.76)
-    devDependencies:
-      '@types/bun':
-        specifier: ^1.4.1
-        version: 1.4.1
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.4.1)(vite@8.2.2(@types/node@26.4.1)(jiti@2.7.0)(terser@5.51.2))
-
   rpc-proxy:
     devDependencies:
       '@types/node':
@@ -2094,20 +2066,6 @@ packages:
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
-  '@signinwithethereum/siwe-parser@4.2.1':
-    resolution: {integrity: sha512-GAdwNiBaRpUMTiFfPrbQ3e/RBhPbEhRRN1sZmDMLgLEZuKqKwO7V0ksVzCerE9l8HFKTNw5R/q3kPDCWJRz4zA==}
-
-  '@signinwithethereum/siwe@4.2.1':
-    resolution: {integrity: sha512-CQEQhCIgN9blil1YpaGR+wvGPdsBVK6zed5DBu03s1IdbSO3kA/n7Zp+SAkZGiHy3HY6OJm1Su0/Bd33vKK6nQ==}
-    peerDependencies:
-      ethers: ^5.7.0 || ^6.13.0
-      viem: ^2.7.0
-    peerDependenciesMeta:
-      ethers:
-        optional: true
-      viem:
-        optional: true
-
   '@sinclair/typebox@0.27.12':
     resolution: {integrity: sha512-hhyNJ+nbR6ZR7pToHvllEFun9TL0sbL+tk/ON75lo+Xas054uez98qRbsuNt7MBCyZKK4+8Yli/OAGZhmfBZ/g==}
 
@@ -2519,23 +2477,11 @@ packages:
   '@x402/core@2.25.0':
     resolution: {integrity: sha512-5Ys0XYz3FKutxVKoXC46R/XPT/oaAbuj7ahzrlVHwQxZJPH9u6u91IOh0ztz+7G/zYGsaXR8l3ety205QtEnUw==}
 
-  '@x402/extensions@2.25.0':
-    resolution: {integrity: sha512-7gXpYoHX8CkQ4bwUfzx0GS6VQlx810+GiGOAYhwsbTtIZFt/ahz/5CjCs7qfoKYcgAWcVyvBCl9U3FYYBX01nA==}
-
   '@x402/fetch@2.25.0':
     resolution: {integrity: sha512-kpmxnMTjxZJD5r4yVhRDtCrBVfGhum+XwrUUUdffi3Y91eAm9ZiWCDNHLtahOS2kmuzTR2NPbbIoohZQJmQsxg==}
 
   '@x402/hedera@2.25.0':
     resolution: {integrity: sha512-mPtnyAtENqD3N/3i6ls1WhOCb1w/a2E5MQmePj4hVZWZO+YSUDY6BPGT9MQZbLGPmoNpUG5KfgKH1bYoTNGakA==}
-
-  '@x402/hono@2.25.0':
-    resolution: {integrity: sha512-wjDY8dW3fY0VsKLkbGWtjqxfYbgRH1lUu+vACRx6jDyy5R6rS0GnHFcenEBvhjKgH1jCzyP32anp4+tRv1S3jg==}
-    peerDependencies:
-      '@x402/paywall': ^2.25.0
-      hono: ^4.0.0
-    peerDependenciesMeta:
-      '@x402/paywall':
-        optional: true
 
   '@xyflow/react@12.12.1':
     resolution: {integrity: sha512-g41OHmP+GL5wDBQKpgYt8AF6RlB4CrABtiStXhCMqdItK6gPdSpsuDk8V0YtdyvIvMPTjDJvkuLkz0JbSYu5Cw==}
@@ -2633,9 +2579,6 @@ packages:
   ansi-styles@6.2.3:
     resolution: {integrity: sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg==}
     engines: {node: '>=12'}
-
-  apg-js@4.4.0:
-    resolution: {integrity: sha512-fefmXFknJmtgtNEXfPwZKYkMFX4Fyeyz+fNF6JWp87biGOPslJbCBVU158zvKRZfHBKnJDy8CMM40oLFGkXT8Q==}
 
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
@@ -4063,9 +4006,6 @@ packages:
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
-
-  jose@5.10.0:
-    resolution: {integrity: sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==}
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
@@ -7706,18 +7646,6 @@ snapshots:
 
   '@sec-ant/readable-stream@0.4.1': {}
 
-  '@signinwithethereum/siwe-parser@4.2.1':
-    dependencies:
-      '@noble/hashes': 1.8.0
-      apg-js: 4.4.0
-
-  '@signinwithethereum/siwe@4.2.1(ethers@6.16.0)(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))':
-    dependencies:
-      '@signinwithethereum/siwe-parser': 4.2.1
-    optionalDependencies:
-      ethers: 6.16.0
-      viem: 2.56.3(typescript@6.0.3)(zod@3.25.76)
-
   '@sinclair/typebox@0.27.12': {}
 
   '@sindresorhus/merge-streams@4.0.0': {}
@@ -8210,23 +8138,6 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  '@x402/extensions@2.25.0(ethers@6.16.0)(typescript@6.0.3)':
-    dependencies:
-      '@noble/curves': 1.9.1
-      '@scure/base': 1.2.6
-      '@signinwithethereum/siwe': 4.2.1(ethers@6.16.0)(viem@2.56.3(typescript@6.0.3)(zod@3.25.76))
-      '@x402/core': 2.25.0
-      ajv: 8.20.0
-      jose: 5.10.0
-      tweetnacl: 1.0.3
-      viem: 2.56.3(typescript@6.0.3)(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - bufferutil
-      - ethers
-      - typescript
-      - utf-8-validate
-
   '@x402/fetch@2.25.0':
     dependencies:
       '@x402/core': 2.25.0
@@ -8247,17 +8158,6 @@ snapshots:
       - react-native
       - strip-ansi
       - supports-color
-      - utf-8-validate
-
-  '@x402/hono@2.25.0(ethers@6.16.0)(hono@4.13.7)(typescript@6.0.3)':
-    dependencies:
-      '@x402/core': 2.25.0
-      '@x402/extensions': 2.25.0(ethers@6.16.0)(typescript@6.0.3)
-      hono: 4.13.7
-    transitivePeerDependencies:
-      - bufferutil
-      - ethers
-      - typescript
       - utf-8-validate
 
   '@xyflow/react@12.12.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
@@ -8342,8 +8242,6 @@ snapshots:
   ansi-styles@5.2.0: {}
 
   ansi-styles@6.2.3: {}
-
-  apg-js@4.4.0: {}
 
   argparse@2.0.1: {}
 
@@ -10042,8 +9940,6 @@ snapshots:
       supports-color: 8.1.1
 
   jiti@2.7.0: {}
-
-  jose@5.10.0: {}
 
   jose@6.2.12: {}
 
