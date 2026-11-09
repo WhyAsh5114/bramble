@@ -212,6 +212,10 @@ type PaywallConfig struct {
 	MaxSessionBytes int64
 	// PublicURL names the relay in the 402 response, without a path.
 	PublicURL string
+	// Audit, when set, gets a receipt for every session sold. AuditTopic
+	// names where they go, for the status reply.
+	Audit      ReceiptSink
+	AuditTopic string
 }
 
 // Paywall serves the paid routes and mints and redeems payment tokens.
@@ -425,6 +429,9 @@ func (p *Paywall) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracef("x402: paid %s %s for %d bytes (%s)", req.Amount, req.Asset, bytes, s.Transaction)
+	if p.Audit != nil {
+		p.Audit.Submit(Receipt{Transaction: s.Transaction, Bytes: bytes, Amount: req.Amount, Asset: req.Asset, Network: req.Network, At: p.now()})
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessionTokenReply{Token: token, Bytes: bytes, ExpiresAt: exp, Transaction: s.Transaction})
 }

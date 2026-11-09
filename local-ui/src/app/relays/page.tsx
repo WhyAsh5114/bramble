@@ -8,7 +8,7 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { useApp } from '../../components/app-state'
 import { CopyButton, Empty, PageHeader, Problem, Section, TxSteps, errorText } from '../../components/bits'
-import { api, bytes, type RelayInfo } from '../../lib/api'
+import { api, bytes, usdc, type RelayInfo } from '../../lib/api'
 import * as tx from '../../lib/chain/tx'
 import { runSteps, useWallet, type TxStep } from '../../lib/wallet'
 
@@ -21,6 +21,29 @@ function Budget({ r }: { r: RelayInfo }) {
   return (
     <span className="text-xs text-muted-foreground">
       {bytes(b.dayBytes)} of {bytes(b.dayLimit)} today
+    </span>
+  )
+}
+
+function Price({ r }: { r: RelayInfo }) {
+  const p = r.status?.paid
+  if (!r.status) return <span className="text-muted-foreground">—</span>
+  if (!p) return <Badge variant="success">Free</Badge>
+  return (
+    <span className="text-xs">
+      <Badge variant="warning">Paid</Badge>
+      <span className="mono mt-1 block text-muted-foreground">{usdc(p.pricePerMiB)} / MiB</span>
+      {p.auditTopic && (
+        <a
+          className="mt-1 block underline"
+          href={`https://hashscan.io/testnet/topic/${p.auditTopic}`}
+          target="_blank"
+          rel="noreferrer"
+          title="Receipts this relay publishes for every session it sells"
+        >
+          Receipts on Hedera
+        </a>
+      )}
     </span>
   )
 }
@@ -73,6 +96,7 @@ function Directory({ relays, onSaved }: { relays?: RelayInfo[]; onSaved: () => v
               <th>Relay</th>
               <th>Region</th>
               <th>Carries traffic</th>
+              <th>Price</th>
               <th>Round trip</th>
               <th>Today</th>
             </tr>
@@ -103,6 +127,9 @@ function Directory({ relays, onSaved }: { relays?: RelayInfo[]; onSaved: () => v
                 </td>
                 <td>{r.region || '—'}</td>
                 <td>{r.dataRelay ? 'Yes' : 'Introductions only'}</td>
+                <td>
+                  <Price r={r} />
+                </td>
                 <td>
                   {r.error ? (
                     <span className="block max-w-56 truncate text-xs text-destructive" title={r.error}>
@@ -143,7 +170,7 @@ function Directory({ relays, onSaved }: { relays?: RelayInfo[]; onSaved: () => v
 function Publish() {
   const { state } = useApp()
   const w = useWallet()
-  const [f, setF] = useState({ label: '', rendezvous: '', pin: '', stun: '', region: '', data: true })
+  const [f, setF] = useState({ label: '', rendezvous: '', pin: '', stun: '', region: '', data: true, paid: false })
   const [steps, setSteps] = useState<TxStep[]>([])
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -177,6 +204,7 @@ function Publish() {
                   dataRelay: f.data,
                   stun: f.stun || undefined,
                   region: f.region || undefined,
+                  paid: f.paid,
                 })
               ),
           },
@@ -191,7 +219,7 @@ function Publish() {
   }
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setF({ ...f, [k]: k === 'data' ? e.target.checked : e.target.value.trim() })
+    setF({ ...f, [k]: k === 'data' || k === 'paid' ? e.target.checked : e.target.value.trim() })
 
   return (
     <Card className="gap-4">
@@ -199,8 +227,8 @@ function Publish() {
         <div>
           <CardTitle>Run a relay</CardTitle>
           <CardDescription className="mt-1.5">
-            Anyone can add a free relay to the directory. Relays see only sealed introductions and encrypted WireGuard
-            packets; devices pin each relay&apos;s TLS key and drop relays that misbehave.
+            Anyone can add a relay to the directory, free or paid. Relays see only sealed introductions and encrypted
+            WireGuard packets; devices pin each relay&apos;s TLS key and drop relays that misbehave.
           </CardDescription>
         </div>
       </CardHeader>
@@ -231,6 +259,16 @@ function Publish() {
             ))}
             <label className="flex items-center gap-2 self-end pb-2 text-sm">
               <input type="checkbox" checked={f.data} onChange={set('data')} /> Carry traffic (data relay)
+            </label>
+            <label className="flex items-start gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" className="mt-1" checked={f.paid} onChange={set('paid')} />
+              <span>
+                This relay charges for data sessions
+                <span className="block text-xs text-muted-foreground">
+                  Start it with RELAY_X402_PAY_TO and RELAY_X402_PRICE_PER_MIB (see the relay README). Devices that pay
+                  use it only when no free relay can serve; the relay&apos;s own status gives the real price.
+                </span>
+              </span>
             </label>
           </div>
           <div>

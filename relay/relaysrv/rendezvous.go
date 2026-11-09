@@ -56,6 +56,9 @@ type paidStatus struct {
 	Asset       string `json:"asset"`
 	PayTo       string `json:"payTo"`
 	PricePerMiB int64  `json:"pricePerMiB"`
+	// AuditTopic is the HCS topic that holds this relay's receipts, when it
+	// publishes them (ADR 0021).
+	AuditTopic string `json:"auditTopic,omitempty"`
 }
 
 const (
@@ -287,7 +290,7 @@ func (s *Server) status(now time.Time) *relayStatus {
 	s.mu.Unlock()
 	st := &relayStatus{Version: s.version, Peers: peers, Free: s.paywall == nil}
 	if p := s.paywall; p != nil {
-		st.Paid = &paidStatus{Network: p.Network, Asset: p.Asset, PayTo: p.PayTo, PricePerMiB: p.PricePerMiB}
+		st.Paid = &paidStatus{Network: p.Network, Asset: p.Asset, PayTo: p.PayTo, PricePerMiB: p.PricePerMiB, AuditTopic: p.AuditTopic}
 	}
 	if s.data != nil {
 		st.Sessions = s.data.count()

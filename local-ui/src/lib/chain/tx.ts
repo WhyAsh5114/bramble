@@ -221,9 +221,11 @@ export interface RelayRecords {
   dataRelay: boolean
   stun?: string
   region?: string
+  /** True when the relay charges for data sessions over x402 (ADR 0021). The relay's own status gives the price. */
+  paid?: boolean
 }
 
-/** Publish a relay's records on the resolver its claim created. Price is always 0. */
+/** Publish a relay's records on the resolver its claim created. The price record is "0" (free) or "paid". */
 export function writeRelayRecords(resolver: Address, relaySuffix: string, label: string, r: RelayRecords) {
   const name = `${label}.${relaySuffix}`
   const values: [string, string][] = [
@@ -231,7 +233,7 @@ export function writeRelayRecords(resolver: Address, relaySuffix: string, label:
     [Keys.pin, r.pin],
     [Keys.dataRelay, r.dataRelay ? 'on' : ''],
     [Keys.stun, r.stun ?? ''],
-    [Keys.price, '0'],
+    [Keys.price, r.paid ? 'paid' : '0'],
     [Keys.region, r.region ?? ''],
   ]
   return {

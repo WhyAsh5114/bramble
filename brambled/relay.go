@@ -113,7 +113,8 @@ func resolveEndpoint(hostport string) (netip.AddrPort, error) {
 
 // buyDataRelaySession asks every relay in pool for its status, skips relays
 // whose budget is used up, and takes a session from the one that answered
-// fastest. Nothing is paid; the name is kept for the failover code's sake.
+// fastest. Free relays come first; a relay that charges is used only when no
+// free one can serve and the node's payments are on (ADR 0021).
 func buyDataRelaySession(m sessionSource, pool dataRelayFlag, bytes int64) (*dataRelaySession, error) {
 	if bytes <= 0 {
 		return nil, fmt.Errorf("data-relay session bytes must be positive")
@@ -122,8 +123,10 @@ func buyDataRelaySession(m sessionSource, pool dataRelayFlag, bytes int64) (*dat
 	// hold up the others.
 	type probe struct {
 		quote datarelay.Quote
+		paid  bool
 		err   error
 	}
+	pay, canPay := m.(payer)
 	probes := make(chan probe, len(pool))
 	for label, r := range pool {
 		go func(label string, r rendezvous.Relay) {
@@ -139,20 +142,39 @@ func buyDataRelaySession(m sessionSource, pool dataRelayFlag, bytes int64) (*dat
 				probes <- probe{err: fmt.Errorf("%s: %w", label, err)}
 			case st.Budget.ForwardingPaused:
 				probes <- probe{err: fmt.Errorf("%s: its data budget is used up for now", label)}
+			case st.Paid != nil && !canPay:
+				health.ok(label)
+				probes <- probe{err: fmt.Errorf("%s: it charges for sessions and this node's payments are off", label)}
+			case st.Paid != nil:
+				health.ok(label)
+				if err := pay.CanPay(st.Paid); err != nil {
+					probes <- probe{err: fmt.Errorf("%s: %w", label, err)}
+					break
+				}
+				probes <- probe{paid: true, quote: datarelay.Quote{Label: label, PricePerByte: max(1, st.Paid.PricePerMiB/bytesPerMiB), LatencyMS: time.Since(start).Milliseconds()}}
 			default:
 				health.ok(label)
 				probes <- probe{quote: datarelay.Quote{Label: label, LatencyMS: time.Since(start).Milliseconds()}}
 			}
 		}(label, r)
 	}
+	// A free relay always beats a paid one: pay only when no free relay can serve.
 	quotes := make([]datarelay.Quote, 0, len(pool))
+	var paidQuotes []datarelay.Quote
 	for range pool {
 		p := <-probes
 		if p.err != nil {
 			fmt.Fprintf(os.Stderr, "data-relay: skipping %v\n", p.err)
 			continue
 		}
+		if p.paid {
+			paidQuotes = append(paidQuotes, p.quote)
+			continue
+		}
 		quotes = append(quotes, p.quote)
+	}
+	if len(quotes) == 0 {
+		quotes = paidQuotes
 	}
 	if len(quotes) == 0 {
 		return nil, fmt.Errorf("no data relay is reachable with budget left")

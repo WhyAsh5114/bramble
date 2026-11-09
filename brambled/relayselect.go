@@ -26,20 +26,22 @@ const (
 )
 
 // usableRelay reports whether a directory entry can be used at all.
-func usableRelay(r registry.Relay) bool {
-	if r.Pin == "" || r.Price != "0" {
-		return false // no pin: cannot authenticate; a price: no payment path exists
+// A relay that publishes a price is usable only when this node pays; the
+// relay's own status says what it really charges.
+func usableRelay(r registry.Relay, allowPaid bool) bool {
+	if r.Pin == "" || (r.Price != "0" && !allowPaid) {
+		return false // no pin: cannot authenticate; a price: this node does not pay
 	}
 	host, port, err := net.SplitHostPort(r.Address)
 	return err == nil && host != "" && port != ""
 }
 
 // chooseRelays picks the rendezvous set and the data-relay pool from the directory.
-func chooseRelays(directory []registry.Relay, preferred []string) (rdv []rendezvous.Relay, data dataRelayFlag, stun []stunServer) {
+func chooseRelays(directory []registry.Relay, preferred []string, allowPaid bool) (rdv []rendezvous.Relay, data dataRelayFlag, stun []stunServer) {
 	byLabel := map[string]registry.Relay{}
 	var usable []registry.Relay
 	for _, r := range directory {
-		if usableRelay(r) {
+		if usableRelay(r, allowPaid) {
 			byLabel[r.Label] = r
 			usable = append(usable, r)
 		}

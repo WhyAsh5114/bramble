@@ -21,6 +21,7 @@ import (
 
 	"github.com/WhyAsh5114/bramble/brambled/admission"
 	"github.com/WhyAsh5114/bramble/brambled/gateway"
+	"github.com/WhyAsh5114/bramble/brambled/hederapay"
 	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/statusapi"
@@ -404,6 +405,10 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	relayPeers := relayPeerFlag{}
 	fs.Var(relayPeers, "relay-peer", "tracked -peer label that should use the data-relay pool instead of a direct candidate (repeatable) — forces relay routing even when STUN traversal is enabled (docs/adr/0008)")
 	relaySessionBytes := fs.Int64("relay-session-bytes", 256<<20, "bytes to ask for per data-relay session; the relay may grant less")
+	hederaAccount := fs.String("hedera-account", os.Getenv("BRAMBLE_HEDERA_ACCOUNT"), "this node's own Hedera testnet account (0.0.N); with -hedera-key it turns on paying relays that charge for data sessions over x402 (docs/adr/0021). Off when unset")
+	hederaKey := fs.String("hedera-key", os.Getenv("BRAMBLE_HEDERA_KEY"), "hex ECDSA private key of -hedera-account. It cannot write tailnet records and is never printed or logged")
+	payMaxSession := fs.Int64("pay-max-session", defaultMaxSession, "most one paid data session may cost, in USDC's smallest unit (six decimals)")
+	payMaxDay := fs.Int64("pay-max-day", defaultMaxDay, "most this node pays in a UTC day, in USDC's smallest unit")
 	relayFirst := fs.Bool("relay-first", false, "route every tracked peer through the data-relay pool instead of a direct path, for a device with no direct path to the mesh")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -446,6 +451,17 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		}
 	}
 	var sessions sessionSource = freeSessions{}
+	paying := *hederaAccount != "" && *hederaKey != ""
+	var paySource *paidSessions
+	if paying {
+		signer, err := hederapay.NewSigner(*hederaAccount, *hederaKey)
+		if err != nil {
+			return err
+		}
+		paySource = newPaidSessions(signer, *payMaxSession, *payMaxDay)
+		sessions = paySource
+		fmt.Fprintf(os.Stderr, "payments on: %s pays relays that charge, up to %d per session and %d per day (testnet USDC)\n", signer.Account(), *payMaxSession, *payMaxDay)
+	}
 
 	// No -peer flags at all: auto-discover every other device on the
 	// tailnet instead of requiring each one typed out by hand
@@ -515,7 +531,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		rdv, data, stun := chooseRelays(dir, m.PreferredRelays())
+		rdv, data, stun := chooseRelays(dir, m.PreferredRelays(), paying)
 		return rdv, data, stun, nil
 	}, relaySets{
 		Rendezvous: staticRendezvousRelays(*rendezvousAddr), FixedRendezvous: *rendezvousAddr != "",
@@ -845,7 +861,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 
 	fmt.Fprintf(os.Stderr, "serving on %s:%d (pubkey %s), tracking %d peer(s), ttl=%s, rediscover=%s (Ctrl+C to stop)\n", prefix.Addr(), *listenPort, ownPubkey, len(peers), *ttl, *rediscover)
 	if onReady != nil {
-		onReady(&Handle{node: node, tracker: tracker, status: status, gatewayPort: uint16(*gatewayPort), netstack: *netstackMode, Label: *ownLabel, Address: prefix.Addr(), PublicKey: ownPubkey})
+		onReady(&Handle{pay: paySource, payAccount: *hederaAccount, node: node, tracker: tracker, status: status, gatewayPort: uint16(*gatewayPort), netstack: *netstackMode, Label: *ownLabel, Address: prefix.Addr(), PublicKey: ownPubkey})
 	}
 	err = loop.Run(ctx)
 	if err == context.Canceled || ctx.Err() != nil {

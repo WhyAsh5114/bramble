@@ -70,6 +70,9 @@ func Main(args []string, version string) int {
 	x402Network := fs.String("x402-network", envStr("RELAY_X402_NETWORK", "hedera:testnet"), "x402 network; only hedera:testnet is allowed")
 	x402Facilitator := fs.String("x402-facilitator", envStr("RELAY_X402_FACILITATOR", "https://api.testnet.blocky402.com"), "x402 facilitator base URL")
 	x402PublicURL := fs.String("x402-public-url", os.Getenv("RELAY_X402_PUBLIC_URL"), "https URL of this relay, named in 402 responses")
+	hcsAccount := fs.String("hedera-account", os.Getenv("RELAY_HEDERA_ACCOUNT"), "Hedera testnet account that pays to write receipts; with -hedera-key and paid mode it turns on the HCS audit log (ADR 0021)")
+	hcsKey := fs.String("hedera-key", os.Getenv("RELAY_HEDERA_KEY"), "hex ECDSA private key of -hedera-account; never printed or logged")
+	hcsTopic := fs.String("hcs-topic", os.Getenv("RELAY_HCS_TOPIC"), "HCS topic for receipts; empty creates one that only this account can write to and remembers it in the state directory")
 	noData := fs.Bool("rendezvous-only", os.Getenv("RELAY_RENDEZVOUS_ONLY") == "1", "offer rendezvous and STUN only, no data relay")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -104,6 +107,7 @@ func Main(args []string, version string) int {
 	}
 
 	var paywall *Paywall
+	var auditor *HCSAuditor
 	if *x402PayTo != "" {
 		if data == nil {
 			fail(errors.New("paid data sessions need the data relay; drop -rendezvous-only"))
@@ -117,6 +121,14 @@ func Main(args []string, version string) int {
 		}, *stateDir)
 		if err != nil {
 			fail(err)
+		}
+		if *hcsAccount != "" && *hcsKey != "" {
+			auditor, err = NewHCSAuditor(*hcsAccount, *hcsKey, *hcsTopic, *stateDir)
+			if err != nil {
+				fail(err)
+			}
+			paywall.Audit, paywall.AuditTopic = auditor, auditor.Topic
+			log.Printf("audit log: receipts go to HCS topic %s on hedera:testnet", auditor.Topic)
 		}
 	}
 
@@ -164,6 +176,9 @@ func Main(args []string, version string) int {
 		ln.Close()
 	}()
 
+	if auditor != nil {
+		go auditor.Run(ctx)
+	}
 	srv := NewServer(data, *publicHost, version)
 	if paywall != nil {
 		log.Printf("paid data sessions: %d per MiB of %s on %s, paid to %s, facilitator %s", *x402Price, *x402Asset, *x402Network, *x402PayTo, *x402Facilitator)

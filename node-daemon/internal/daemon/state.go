@@ -20,6 +20,8 @@ type Saved struct {
 	// RelayFirst routes every peer through a relay (for networks that block UDP hole punching).
 	RelayFirst bool     `json:"relayFirst,omitempty"`
 	RPCURLs    []string `json:"rpcUrls,omitempty"`
+	// Pay turns on paying relays that charge for data sessions (ADR 0021).
+	Pay *PaySettings `json:"pay,omitempty"`
 }
 
 // TailnetRef is where a tailnet lives on-chain.

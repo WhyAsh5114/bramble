@@ -23,6 +23,17 @@ type Handle struct {
 	status      *statusapi.Server
 	gatewayPort uint16
 	netstack    bool
+	pay         *paidSessions
+	payAccount  string
+}
+
+// Payments reports what this node has paid relays since it started, or false
+// when payments are off.
+func (h *Handle) Payments() (PayStats, bool) {
+	if h.pay == nil {
+		return PayStats{}, false
+	}
+	return h.pay.stats(h.payAccount), true
 }
 
 // Peers returns every tracked peer with its admission and path state.

@@ -50,6 +50,8 @@ type Daemon struct {
 	TUN        bool   // real interface instead of userspace networking
 	// RPCOverride replaces every RPC endpoint (tests).
 	RPCOverride []string
+	// Mirror replaces the Hedera testnet mirror node (tests).
+	Mirror string
 
 	mu       sync.Mutex
 	id       Identity
@@ -68,6 +70,10 @@ type Daemon struct {
 	relayMu  sync.Mutex
 	relayAt  time.Time
 	relayOut []RelayInfo
+	hedera   *HederaKey
+	payBal   payBalances
+	payAt    time.Time
+	payErr   string
 }
 
 type nodeRun struct {
@@ -107,6 +113,13 @@ func (d *Daemon) Init() error {
 	if d.Network.ChainID == 0 {
 		d.Network = registry.Sepolia
 	}
+	if saved.Pay != nil && saved.Pay.Enabled {
+		if k, ok, err := d.Store.LoadHederaKey(); err != nil {
+			return err
+		} else if ok {
+			d.hedera = &k
+		}
+	}
 	d.id, d.pub, d.saved = id, pub, saved
 	d.rpc = d.newRPC(saved.RPCURLs)
 	d.forwards = map[string]*forward{}
@@ -139,6 +152,7 @@ func (d *Daemon) Run(ctx context.Context) {
 	d.mu.Lock()
 	d.ping = ping
 	d.mu.Unlock()
+	go d.payLoop(ctx)
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
@@ -264,7 +278,7 @@ func (d *Daemon) nodeArgsLocked() []string {
 	if d.saved.RelayFirst {
 		args = append(args, "-relay-first")
 	}
-	return args
+	return append(args, d.payArgsLocked()...)
 }
 
 func (d *Daemon) ensureNodeLocked(ctx context.Context) {

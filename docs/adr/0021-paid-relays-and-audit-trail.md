@@ -1,6 +1,6 @@
 # ADR 0021 — Paid relays over x402 and an HCS audit trail on Hedera, both opt-in
 
-**Kind:** Explanation. **Status:** Proposed, 10 Nov 2026. The maintainer decided that Hedera returns as the payment rail and the audit chain, that both features are opt-in, and that the node may hold its own Hedera key. Nothing here is built. Amends [ADR 0019](0019-user-driven-tailnets.md), which retired x402 metering and the HCS audit trail from the main tree. Evidence labels: **Verified** (ran it), **Read from source** (read the code or docs, did not run it) and **Open** (undecided or untested).
+**Kind:** Explanation. **Status:** Proposed, 10 Nov 2026. The maintainer decided that Hedera returns as the payment rail and the audit chain, that both features are opt-in, and that the node may hold its own Hedera key. Paid relays, the node's opt-in key and the HCS receipt log are built; gateway access decisions on HCS are not. Amends [ADR 0019](0019-user-driven-tailnets.md), which retired x402 metering and the HCS audit trail from the main tree. Evidence labels: **Verified** (ran it), **Read from source** (read the code or docs, did not run it) and **Open** (undecided or untested).
 
 ## Context
 
@@ -156,3 +156,13 @@ Each step is tested before the next starts. This ADR describes none of it as wor
 - An opting-in node holds a Hedera key and needs a funded Hedera account. A node that does not opt in is unchanged.
 - The relay depends on the Blocky402 facilitator. If it goes away, the relay needs another facilitator or its own.
 - Audit records exist only for events a poster chooses to post. They are not a complete log.
+
+
+## Implementation status, 10 Nov 2026
+
+- **Node:** `-hedera-account` and `-hedera-key` turn payment on (`brambled/pay.go`). A free relay always wins; a relay that charges is used only when no free one can serve, and its status reply (not the directory's price text) gives the price. The node trims a session to fit `-pay-max-session` and `-pay-max-day` (defaults 0.5 and 2 USDC), refuses any asset but testnet USDC and any network but `hedera:testnet`, and keeps spent totals and recent payments in memory only. **Verified** offline against real paid relays with a stub facilitator (`brambled/pay_test.go`).
+- **Daemon and UI:** Settings, "Paying relays" makes the device's own ECDSA key (`hedera.json`, mode 0600) when the user opts in. Funding the printed 0x address creates the account (auto-creation); the daemon finds the account ID and balances through the public mirror node and restarts the node with payment on. The Relays page shows each relay's price and receipt topic. **Verified** in a real browser, light and dark; the live funded path is **Open**.
+- **HCS receipts (relay):** with a paid relay, `RELAY_HEDERA_ACCOUNT`, `RELAY_HEDERA_KEY` and optionally `RELAY_HCS_TOPIC`, each sold session writes a receipt (`tx`, `bytes`, `amount`, `asset`, `network`, `at`) to a topic only the relay can write to. Receipts hold no payer or peer, and a slow Hedera never blocks a session. **Verified live** on testnet: topic created, receipt read back from the mirror node.
+- **Size:** linking the SDK takes the `bramble` binary from 11.3 MB to 27.9 MB (stripped, `CGO_ENABLED=0`, darwin/arm64). **Verified** by building both.
+- **Directory price:** a relay may publish `price` as `0` or `paid`. It is advisory; a node that does not pay skips any relay whose status shows a price.
+- **Not done:** gateway access decisions on HCS (needs a topic record in the tailnet and HBAR on each node); a USDC payment on the live facilitator; mainnet.

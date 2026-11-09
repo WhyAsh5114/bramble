@@ -70,6 +70,8 @@ type PaidStatus struct {
 	Asset       string `json:"asset"`
 	PayTo       string `json:"payTo"`
 	PricePerMiB int64  `json:"pricePerMiB"`
+	// AuditTopic is the HCS topic that holds the relay's receipts, if it publishes them.
+	AuditTopic string `json:"auditTopic,omitempty"`
 }
 
 // ErrRelayUnreachable marks failures that are the relay's fault (no answer,

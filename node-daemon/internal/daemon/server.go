@@ -131,6 +131,22 @@ func (s *Server) Handler() http.Handler {
 		}
 		reply(w, d.State(), d.SetSettings(body.RelayFirst, body.RPCURLs))
 	})
+	mux.HandleFunc("GET /api/pay", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, d.Pay()) })
+	mux.HandleFunc("PUT /api/pay", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled    bool  `json:"enabled"`
+			MaxSession int64 `json:"maxSession"`
+			MaxDay     int64 `json:"maxDay"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := d.SetPay(body.Enabled, body.MaxSession, body.MaxDay); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		writeJSON(w, 200, d.Pay())
+	})
 	mux.HandleFunc("GET /api/peers/{label}/services", func(w http.ResponseWriter, r *http.Request) {
 		list, err := d.PeerServices(r.PathValue("label"))
 		reply(w, list, err)

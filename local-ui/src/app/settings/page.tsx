@@ -6,6 +6,7 @@ import { Card } from '../../components/ui/card'
 import { Label } from '../../components/ui/label'
 import { useApp } from '../../components/app-state'
 import { CopyButton, PageHeader, Problem, Section, errorText } from '../../components/bits'
+import { PayCard } from '../../components/pay'
 import { LeaveCard } from '../../components/setup'
 import { api } from '../../lib/api'
 
@@ -110,6 +111,9 @@ export default function SettingsPage() {
           </div>
           {error && <Problem>{error}</Problem>}
         </Card>
+      </Section>
+      <Section id="pay" title="Paying relays" hint="Optional, Hedera testnet">
+        <PayCard />
       </Section>
       <Section id="chain" title="Chain">
         <Card className="gap-3 px-5">

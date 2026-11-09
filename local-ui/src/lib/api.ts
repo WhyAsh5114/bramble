@@ -115,8 +115,37 @@ export interface RelayInfo {
     peers: number
     sessions: number
     free: boolean
+    /** Set when the relay charges for data sessions. pricePerMiB is in the asset's smallest unit. */
+    paid?: { network: string; asset: string; payTo: string; pricePerMiB: number; auditTopic?: string }
     budget: { dayBytes: number; dayLimit: number; monthBytes: number; monthLimit: number; forwardingPaused: boolean }
   }
+}
+
+export interface Payment {
+  relay: string
+  amount: number
+  asset: string
+  bytes: number
+  transaction: string
+  at: string
+}
+
+/** Paying relays that charge for data sessions (ADR 0021). Amounts are USDC's smallest unit (six decimals). */
+export interface PayInfo {
+  enabled: boolean
+  network: string
+  asset: string
+  evmAddress?: string
+  account?: string
+  hbarTinybar: number
+  usdc: number
+  active: boolean
+  maxSession: number
+  maxDay: number
+  spentToday: number
+  recent: Payment[]
+  keyFile?: string
+  error?: string
 }
 
 export interface ActivityEvent {
@@ -166,7 +195,16 @@ export const api = {
   openForward: (peer: string, service: string) => call<Forward>('POST', '/api/forwards', { peer, service }),
   closeForward: (port: number) => call<Forward[]>('DELETE', `/api/forwards/${port}`),
   activity: () => call<ActivityEvent[]>('GET', '/api/activity'),
+  pay: () => call<PayInfo>('GET', '/api/pay'),
+  setPay: (enabled: boolean, maxSession: number, maxDay: number) =>
+    call<PayInfo>('PUT', '/api/pay', { enabled, maxSession, maxDay }),
   relays: () => call<RelayInfo[]>('GET', '/api/relays'),
+}
+
+/** Testnet USDC has six decimals. */
+export function usdc(units: number) {
+  const v = units / 1e6
+  return `${v.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`
 }
 
 export function shortAddress(a?: string) {

@@ -27,7 +27,7 @@ func TestChooseRelaysPrefersTheTailnetRecordThenTheOldest(t *testing.T) {
 	unpinned.Pin = ""
 	dir = append(dir, paid, unpinned)
 
-	rdv, data, _ := chooseRelays(dir, []string{"mine", "unknown"})
+	rdv, data, _ := chooseRelays(dir, []string{"mine", "unknown"}, false)
 	var labels []string
 	for _, r := range rdv {
 		labels = append(labels, r.Label)
@@ -43,6 +43,18 @@ func TestChooseRelaysPrefersTheTailnetRecordThenTheOldest(t *testing.T) {
 	}
 }
 
+func TestChooseRelaysTakesAPaidRelayOnlyWhenTheNodePays(t *testing.T) {
+	paid := dirRelay("paid", 1)
+	paid.Price = "5"
+	dir := []registry.Relay{dirRelay("a", 10), paid}
+	if _, data, _ := chooseRelays(dir, nil, false); len(data) != 1 {
+		t.Fatalf("a node with payments off took %v", data)
+	}
+	if _, data, _ := chooseRelays(dir, nil, true); len(data) != 2 {
+		t.Fatalf("a paying node took %v, want both", data)
+	}
+}
+
 func TestChooseRelaysSkipsRelaysThatKeepFailing(t *testing.T) {
 	dir := []registry.Relay{dirRelay("junk1", 1), dirRelay("junk2", 2), dirRelay("good", 9)}
 	for i := 0; i < healthStrikes; i++ {
@@ -51,7 +63,7 @@ func TestChooseRelaysSkipsRelaysThatKeepFailing(t *testing.T) {
 	}
 	defer health.ok("junk1")
 	defer health.ok("junk2")
-	rdv, _, _ := chooseRelays(dir, nil)
+	rdv, _, _ := chooseRelays(dir, nil, false)
 	if len(rdv) != 1 || rdv[0].Label != "good" {
 		t.Fatalf("set %v", rdv)
 	}
