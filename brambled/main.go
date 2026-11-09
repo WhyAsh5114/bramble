@@ -504,63 +504,42 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		peerAddrByLabel[p.Label] = p.AllowedIP.Addr()
 	}
 
-	// Real ENS-based relay discovery (docs/adr/0003's Consequence section,
-	// resolved) — -rendezvous/-data-relay stay as explicit overrides
-	// (static config wins outright, same precedent as admission.Peer.Endpoint
-	// overriding EndpointResolver): only queried when the corresponding flag
-	// was left unset. A relay registry that's unconfigured or unreachable
-	// just yields empty lists here (m.Relays()'s own documented behavior),
-	// which is indistinguishable from "no relays available" — non-fatal,
-	// same fail-open-on-discovery posture the rest of this file already has.
-	rendezvousRelays := staticRendezvousRelays(*rendezvousAddr)
-	discoveryFailed := false
-	var directorySTUN []string
-	discover := func() ([]rendezvous.Relay, dataRelayFlag, error) {
+	// Relay discovery (docs/adr/0003, docs/adr/0020). -rendezvous,
+	// -data-relay and -stun-servers/-no-stun override the directory for their
+	// own set; a set left unset comes from the directory and is refreshed
+	// while the node runs, so a relay registered after startup is picked up
+	// without a restart. An unreachable or empty directory is not fatal.
+	usesDirectory := *rendezvousAddr == "" || len(dataRelays) == 0
+	relays := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		dir, err := m.Relays()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		rdv, data, stun := chooseRelays(dir, m.PreferredRelays())
-		if directorySTUN == nil {
-			directorySTUN = stun
-		}
-		return rdv, data, nil
-	}
-	if len(dataRelays) == 0 || len(rendezvousRelays) == 0 {
-		rdv, data, relErr := discover()
-		if relErr != nil {
-			discoveryFailed = true
+		return rdv, data, stun, nil
+	}, relaySets{
+		Rendezvous: staticRendezvousRelays(*rendezvousAddr), FixedRendezvous: *rendezvousAddr != "",
+		Data: dataRelays, FixedData: len(dataRelays) > 0,
+		STUN: splitServers(*stunServers), FixedSTUN: *noSTUN || *stunServers != "" || !usesDirectory,
+	})
+	if usesDirectory {
+		if relErr := relays.refresh(); relErr != nil {
 			fmt.Fprintf(os.Stderr, "relay discovery: %v (will retry)\n", relErr)
 		}
-		if len(rendezvousRelays) == 0 {
-			rendezvousRelays = rdv
-		}
-		if len(dataRelays) == 0 {
-			for k, v := range data {
-				dataRelays[k] = v
-			}
-		}
-		if len(rendezvousRelays) == 0 {
-			discoveryFailed = true
-		}
-		tracef("relays: rendezvous %v, data %v", rendezvousRelays, relayAddresses(dataRelays))
+		rdv, _ := relays.Rendezvous()
+		tracef("relays: rendezvous %v, data %v, stun %v", rdv, relayAddresses(relays.DataRelays()), relays.STUN())
 	}
-	if len(relayPeers) > 0 && len(dataRelays) == 0 {
+	if len(relayPeers) > 0 && len(relays.DataRelays()) == 0 {
 		return fmt.Errorf("-relay-peer requires at least one data relay, from -data-relay or discovery")
 	}
 
-	var discoveryServers []string
-	if *stunServers == "" && !*noSTUN {
-		// The chosen relays' STUN servers; never the whole open directory.
-		discoveryServers = append(discoveryServers, directorySTUN...)
-	}
-	for _, server := range strings.Split(*stunServers, ",") {
-		if server = strings.TrimSpace(server); server != "" {
-			discoveryServers = append(discoveryServers, server)
-		}
-	}
+	// STUN is on unless -no-stun is set or every relay set came from flags
+	// with no -stun-servers. It is decided once, from flags, so a peer never
+	// switches between traversal and the static resolver mid-run; the server
+	// list itself is read live by RunSTUN.
+	stunEnabled := !*noSTUN && (*stunServers != "" || usesDirectory)
 	node, err := wgnode.New(wgnode.Config{
-		EnableSTUN:    len(discoveryServers) > 0,
+		EnableSTUN:    stunEnabled,
 		PrivateKeyHex: *privateKeyHex,
 		ListenPort:    uint16(*listenPort),
 		LocalAddress:  prefix.Addr(),
@@ -585,14 +564,14 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// dashboard's source for everything ENS/Hedera state alone can't show.
 	// It has no write path of its own: OnAdmissionEvent/OnGatewayDecision
 	// only ever record what the admission loop and gateway already decided.
-	status := &statusapi.Server{PeerTable: node, EndpointSource: node, DataRelays: relayAddresses(dataRelays)}
+	status := &statusapi.Server{PeerTable: node, EndpointSource: node, DataRelays: func() map[string]string { return relayAddresses(relays.DataRelays()) }}
 
 	tracker := newPeerTracker(*ownLabel, prefix.Addr(), peers)
 	useTraversal := func(p admission.Peer) bool {
-		return len(discoveryServers) > 0 && p.Endpoint == nil && !relayPeers[p.Label]
+		return stunEnabled && p.Endpoint == nil && !relayPeers[p.Label]
 	}
 	paths := &peerTraversal{
-		ctx: ctx, node: node, own: ownPubkey, relaySet: nil, sessions: sessions, pool: dataRelays,
+		ctx: ctx, node: node, own: ownPubkey, relaySet: nil, sessions: sessions, pool: relays.DataRelays,
 		sessionBytes: *relaySessionBytes, exchangeTimeout: *ttl,
 		eligible: func(label string) bool {
 			tracker.mu.Lock()
@@ -646,29 +625,25 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		},
 	}
 
-	// relaySet is what every consumer of the rendezvous set reads: the resolver below and both
-	// data-relay watchers. A start-up discovery failure that the pool later recovers from is
-	// therefore seen by the failover and adopt paths too, not only by the first connect.
-	pool := newRendezvousPool(rendezvousRelays, func() ([]rendezvous.Relay, error) {
-		rdv, _, err := discover()
-		return rdv, err
-	}, rendezvousDiscoveryRetry)
-	relaySet := rendezvousSource(pool.Get)
+	// relaySet is what every consumer of the rendezvous set reads: the
+	// resolver below, traversal and both data-relay watchers. It reads the
+	// live directory, so a relay found after startup reaches all of them.
+	relaySet := rendezvousSource(relays.Rendezvous)
 	paths.relaySet = relaySet
-	if len(rendezvousRelays) > 0 || discoveryFailed {
+	{
 		backoff := newExchangeBackoff(*ttl, exchangeBackoffMax)
 		own, defaultCandidate := ownPubkey, *myCandidate
 		initialSessions := make(map[string]struct {
 			pubkey  string
 			session *dataRelaySession
 		})
-		resolve := func(relays []rendezvous.Relay, p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
+		resolve := func(rdv []rendezvous.Relay, p admission.Peer, peerPubkey string) (*netip.AddrPort, error) {
 			if relayPeers[p.Label] {
 				cached := initialSessions[p.Label]
 				if cached.pubkey != peerPubkey {
 					cached.session = nil
 				}
-				endpoint, session, err := relayRoutedEndpoint(node, sessions, dataRelays, *relaySessionBytes, relays, own, peerPubkey, *ttl, cached.session)
+				endpoint, session, err := relayRoutedEndpoint(node, sessions, relays.DataRelays(), *relaySessionBytes, rdv, own, peerPubkey, *ttl, cached.session)
 				cached.pubkey, cached.session = peerPubkey, session
 				initialSessions[p.Label] = cached
 				if err == nil {
@@ -681,7 +656,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 			// place that ever learns one.
 			relState.setPubkey(p.Label, peerPubkey)
 
-			candidate, _, err := exchangeAny(relays, own, peerPubkey, defaultCandidate, *ttl)
+			candidate, _, err := exchangeAny(rdv, own, peerPubkey, defaultCandidate, *ttl)
 			if err != nil {
 				return nil, err
 			}
@@ -699,7 +674,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 			if useTraversal(p) {
 				return nil, nil
 			}
-			relays, err := pool.Get()
+			rdv, err := relaySet()
 			if err != nil {
 				return nil, err
 			}
@@ -708,7 +683,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 			if wait := backoff.Wait(peerPubkey); wait > 0 {
 				return nil, fmt.Errorf("skipping rendezvous with %s for %s: it did not answer the last attempt", p.Label, wait.Round(time.Second))
 			}
-			endpoint, err := resolve(relays, p, peerPubkey)
+			endpoint, err := resolve(rdv, p, peerPubkey)
 			if err != nil {
 				backoff.Fail(peerPubkey)
 			} else {
@@ -718,8 +693,11 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		}
 	}
 
-	if len(discoveryServers) > 0 {
-		go node.RunSTUN(ctx, discoveryServers, status.OnEndpointEvent)
+	if stunEnabled {
+		go node.RunSTUN(ctx, relays.STUN, status.OnEndpointEvent)
+	}
+	if usesDirectory {
+		go relays.run(ctx, relayRefreshInterval, os.Stderr)
 	}
 
 	// tracker is the live tracked set the gateway maps tunnel addresses
@@ -733,7 +711,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 			continue
 		}
 		p := p
-		go watchDataRelayFailover(ctx, node, sessions, relState, p.Label, dataRelays, *relaySessionBytes, relaySet, ownPubkey, *ttl)
+		go watchDataRelayFailover(ctx, node, sessions, relState, p.Label, relays.DataRelays, *relaySessionBytes, relaySet, ownPubkey, *ttl)
 	}
 
 	// The other half of Gate 4.3: every tracked peer that ISN'T a
@@ -743,11 +721,14 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// into data-relay routing at all (a data-relay pool + rendezvous set),
 	// so a plain direct-peer setup with no relay involved anywhere keeps
 	// its old behavior exactly (no extra re-exchange traffic on an
-	// ordinary idle connection).
-	adoptWatching := len(dataRelays) > 0 && (len(rendezvousRelays) > 0 || discoveryFailed)
+	// ordinary idle connection). The pool is read live: a watcher waits
+	// until discovery has found a data relay.
 	startAdoptWatcher := func(p admission.Peer) {
-		if !adoptWatching || relayPeers[p.Label] || useTraversal(p) {
+		if relayPeers[p.Label] || useTraversal(p) {
 			return
+		}
+		if !usesDirectory && len(relays.DataRelays()) == 0 {
+			return // relays all come from flags and there is no data relay: nothing to adopt, ever
 		}
 		go func() {
 			for {
@@ -755,6 +736,12 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 				case <-ctx.Done():
 					return
 				case <-time.After(time.Second):
+				}
+				if len(relays.DataRelays()) == 0 {
+					continue
+				}
+				if _, err := relaySet(); err != nil {
+					continue
 				}
 				pubkey, ok := relState.getPubkey(p.Label)
 				if !ok {
@@ -872,6 +859,17 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitServers splits a comma-separated host:port list, dropping empty entries.
+func splitServers(list string) []string {
+	var out []string
+	for _, server := range strings.Split(list, ",") {
+		if server = strings.TrimSpace(server); server != "" {
+			out = append(out, server)
+		}
+	}
+	return out
 }
 
 // relayAddresses reports the data-relay pool as label -> rendezvous address for the status API.

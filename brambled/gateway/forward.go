@@ -87,9 +87,12 @@ func (f *Forwarder) handle(local net.Conn) {
 		f.logf("forward: %s: reading gateway response for %q failed: %v", local.RemoteAddr(), f.Service, err)
 		return
 	}
+	// A gateway that sends OK, a short reply and then closes can close before
+	// this runs, and some conns refuse deadline changes once closed. The reply
+	// is already buffered in reader, so proxy it anyway; a dead tunnel ends
+	// the proxy on its own.
 	if err := tunnel.SetReadDeadline(time.Time{}); err != nil {
-		f.logf("forward: %s: clearing read deadline failed: %v", local.RemoteAddr(), err)
-		return
+		f.logf("forward: %s: clearing read deadline failed, proxying what is buffered: %v", local.RemoteAddr(), err)
 	}
 
 	if strings.TrimSpace(status) != "OK" {

@@ -18,6 +18,9 @@ import (
 const (
 	maxRendezvousRelays = 4
 	maxDataRelays       = 5
+	// maxSTUNServers matches maxRendezvousRelays: chooseRelays takes at most
+	// one STUN server from each rendezvous relay it picks.
+	maxSTUNServers = maxRendezvousRelays
 	// directoryFallback is how many of the oldest directory relays every node adds.
 	directoryFallback = 3
 )
@@ -32,7 +35,7 @@ func usableRelay(r registry.Relay) bool {
 }
 
 // chooseRelays picks the rendezvous set and the data-relay pool from the directory.
-func chooseRelays(directory []registry.Relay, preferred []string) (rdv []rendezvous.Relay, data dataRelayFlag, stun []string) {
+func chooseRelays(directory []registry.Relay, preferred []string) (rdv []rendezvous.Relay, data dataRelayFlag, stun []stunServer) {
 	byLabel := map[string]registry.Relay{}
 	var usable []registry.Relay
 	for _, r := range directory {
@@ -81,7 +84,7 @@ func chooseRelays(directory []registry.Relay, preferred []string) (rdv []rendezv
 			data[r.Label] = rr
 		}
 		if r.STUN != "" {
-			stun = append(stun, r.STUN)
+			stun = append(stun, stunServer{Relay: r.Label, Addr: r.STUN})
 		}
 	}
 	return rdv, data, stun

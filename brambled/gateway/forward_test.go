@@ -232,3 +232,53 @@ func TestForwarder_PlainClientProxiedThroughACL(t *testing.T) {
 		}
 	})
 }
+
+// closedAfterReply makes clearing the read deadline fail, as net.Pipe does
+// once the gateway side has closed: the gateway sent OK and its whole
+// response, then hung up before the forwarder cleared the deadline.
+type closedAfterReply struct{ net.Conn }
+
+func (c closedAfterReply) SetReadDeadline(t time.Time) error {
+	if t.IsZero() {
+		return io.ErrClosedPipe
+	}
+	return c.Conn.SetReadDeadline(t)
+}
+
+func TestForwarderDeliversReplyWhenGatewayClosesFirst(t *testing.T) {
+	localLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localLn.Close()
+	fwd := &Forwarder{
+		Listener: localLn,
+		DialTunnel: func() (net.Conn, error) {
+			forward, gateway := net.Pipe()
+			go func() {
+				defer gateway.Close()
+				if _, err := bufio.NewReader(gateway).ReadString('\n'); err != nil {
+					return
+				}
+				_, _ = io.WriteString(gateway, "OK\nhealth response")
+			}()
+			return closedAfterReply{forward}, nil
+		},
+		Service: "web",
+		Logf:    t.Logf,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go fwd.Serve(ctx)
+
+	conn, err := net.Dial("tcp", localLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, _ := io.ReadAll(conn)
+	if string(got) != "health response" {
+		t.Fatalf("forwarded response = %q, want health response", got)
+	}
+}

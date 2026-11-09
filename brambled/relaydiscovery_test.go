@@ -1,59 +1,15 @@
 package brambled
 
 import (
+	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
-
-func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
-	now := time.Unix(1000, 0)
-	calls := 0
-	fetch := func() ([]rendezvous.Relay, error) {
-		calls++
-		if calls == 1 {
-			return nil, errors.New("sidecar returned 502: Invalid parameters")
-		}
-		return []rendezvous.Relay{{Label: "relay1", Address: "203.0.113.5:9420", Pin: "sha256/x"}}, nil
-	}
-	pool := newRendezvousPool(nil, fetch, 10*time.Second)
-	pool.now = func() time.Time { return now }
-
-	if _, err := pool.Get(); err == nil {
-		t.Fatal("first Get: want the discovery error, got nil")
-	}
-	// Inside the retry gap the pool does not query again.
-	now = now.Add(5 * time.Second)
-	if _, err := pool.Get(); err == nil || calls != 1 {
-		t.Fatalf("Get inside retry gap: err=%v calls=%d, want an error and 1 call", err, calls)
-	}
-	now = now.Add(6 * time.Second)
-	relays, err := pool.Get()
-	if err != nil || len(relays) != 1 || relays[0].Label != "relay1" || relays[0].Pin == "" {
-		t.Fatalf("Get after gap: relays=%v err=%v, want relay1", relays, err)
-	}
-	// Once found, the pool stops querying.
-	if _, err := pool.Get(); err != nil || calls != 2 {
-		t.Fatalf("Get after success: err=%v calls=%d, want no error and 2 calls", err, calls)
-	}
-}
-
-func TestRendezvousPoolKeepsStartupRelays(t *testing.T) {
-	fetch := func() ([]rendezvous.Relay, error) { t.Fatal("fetch must not run"); return nil, nil }
-	pool := newRendezvousPool([]rendezvous.Relay{{Label: "static", Address: "x:1"}}, fetch, time.Second)
-	if relays, err := pool.Get(); err != nil || len(relays) != 1 {
-		t.Fatalf("relays=%v err=%v", relays, err)
-	}
-}
-
-func TestRendezvousPoolEmptyRegistryIsAnError(t *testing.T) {
-	pool := newRendezvousPool(nil, func() ([]rendezvous.Relay, error) { return nil, nil }, time.Second)
-	if _, err := pool.Get(); err == nil {
-		t.Fatal("want an error when discovery finds no rendezvous relay")
-	}
-}
 
 func TestExchangeBackoffDoublesAndResets(t *testing.T) {
 	now := time.Unix(1000, 0)
@@ -85,5 +41,250 @@ func TestExchangeBackoffDoublesAndResets(t *testing.T) {
 	b.Fail("peer")
 	if got := b.Wait("peer"); got != 30*time.Second {
 		t.Fatalf("after reset the first failure waits %s, want 30s", got)
+	}
+}
+
+func liveRelay(label string) rendezvous.Relay {
+	return rendezvous.Relay{Label: label, Address: label + ".example:9420", Pin: "sha256/" + label}
+}
+
+func TestRelayDirectoryAddsRelaysThatAppearLater(t *testing.T) {
+	var found []rendezvous.Relay
+	data := dataRelayFlag{}
+	var stun []stunServer
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) { return found, data, stun, nil }
+	dir := newRelayDirectory(fetch, relaySets{})
+
+	if err := dir.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.Rendezvous(); err == nil {
+		t.Fatal("Rendezvous with an empty directory: want an error")
+	}
+	if len(dir.DataRelays()) != 0 || len(dir.STUN()) != 0 {
+		t.Fatalf("empty directory gave data=%v stun=%v", dir.DataRelays(), dir.STUN())
+	}
+
+	found = []rendezvous.Relay{liveRelay("mumbai")}
+	data = dataRelayFlag{"mumbai": liveRelay("mumbai")}
+	stun = []stunServer{{Relay: "mumbai", Addr: "mumbai.example:3478"}}
+	if err := dir.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	rdv, err := dir.Rendezvous()
+	if err != nil || len(rdv) != 1 || rdv[0].Label != "mumbai" {
+		t.Fatalf("Rendezvous after relay appeared: %v %v", rdv, err)
+	}
+	if got := dir.DataRelays(); len(got) != 1 || got["mumbai"].Address == "" {
+		t.Fatalf("DataRelays after relay appeared: %v", got)
+	}
+	if got := dir.STUN(); len(got) != 1 || got[0] != "mumbai.example:3478" {
+		t.Fatalf("STUN after relay appeared: %v", got)
+	}
+}
+
+func TestRelayDirectoryNeverRemovesAndDedupes(t *testing.T) {
+	found := []rendezvous.Relay{liveRelay("a")}
+	stun := []stunServer{{Relay: "a", Addr: "a:3478"}}
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return found, dataRelayFlag{}, stun, nil
+	}
+	dir := newRelayDirectory(fetch, relaySets{})
+	_ = dir.refresh()
+	found = []rendezvous.Relay{liveRelay("b"), liveRelay("a")}
+	stun = []stunServer{{Relay: "b", Addr: "b:3478"}, {Relay: "a", Addr: "a:3478"}}
+	_ = dir.refresh()
+	found, stun = nil, nil
+	_ = dir.refresh()
+
+	rdv, _ := dir.Rendezvous()
+	if len(rdv) != 2 || rdv[0].Label != "a" || rdv[1].Label != "b" {
+		t.Fatalf("Rendezvous = %v, want [a b] in the order found", rdv)
+	}
+	if got := dir.STUN(); len(got) != 2 || got[0] != "a:3478" || got[1] != "b:3478" {
+		t.Fatalf("STUN = %v, want [a:3478 b:3478]", got)
+	}
+}
+
+func TestRelayDirectoryCapsEachSet(t *testing.T) {
+	var found []rendezvous.Relay
+	data := dataRelayFlag{}
+	var stun []stunServer
+	for i := 0; i < 10; i++ {
+		r := liveRelay(string(rune('a' + i)))
+		found = append(found, r)
+		data[r.Label] = r
+		stun = append(stun, stunServer{Relay: r.Label, Addr: r.Label + ":3478"})
+	}
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return found, data, stun, nil
+	}, relaySets{})
+	_ = dir.refresh()
+	rdv, _ := dir.Rendezvous()
+	if len(rdv) != maxRendezvousRelays || len(dir.DataRelays()) != maxDataRelays || len(dir.STUN()) != maxRendezvousRelays {
+		t.Fatalf("sizes rdv=%d data=%d stun=%d, want %d %d %d", len(rdv), len(dir.DataRelays()), len(dir.STUN()), maxRendezvousRelays, maxDataRelays, maxRendezvousRelays)
+	}
+}
+
+func TestRelayDirectoryLeavesFixedSetsAlone(t *testing.T) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("dir")}, dataRelayFlag{"dir": liveRelay("dir")}, []stunServer{{Relay: "dir", Addr: "dir:3478"}}, nil
+	}
+	static := relaySets{
+		Rendezvous: []rendezvous.Relay{liveRelay("flag")}, FixedRendezvous: true,
+		Data: dataRelayFlag{"flag": liveRelay("flag")}, FixedData: true,
+		STUN: nil, FixedSTUN: true, // -no-stun
+	}
+	dir := newRelayDirectory(fetch, static)
+	_ = dir.refresh()
+	rdv, _ := dir.Rendezvous()
+	if len(rdv) != 1 || rdv[0].Label != "flag" {
+		t.Fatalf("Rendezvous = %v, want only the -rendezvous flag", rdv)
+	}
+	if got := dir.DataRelays(); len(got) != 1 || got["flag"].Label != "flag" {
+		t.Fatalf("DataRelays = %v, want only the -data-relay flag", got)
+	}
+	if got := dir.STUN(); len(got) != 0 {
+		t.Fatalf("STUN = %v, want none with -no-stun", got)
+	}
+}
+
+func TestRelayDirectoryKeepsStateWhenFetchFails(t *testing.T) {
+	fail := false
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		if fail {
+			return nil, nil, nil, errors.New("registry unreachable")
+		}
+		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []stunServer{{Relay: "a", Addr: "a:3478"}}, nil
+	}
+	dir := newRelayDirectory(fetch, relaySets{})
+	_ = dir.refresh()
+	fail = true
+	if err := dir.refresh(); err == nil {
+		t.Fatal("refresh: want the fetch error")
+	}
+	if rdv, err := dir.Rendezvous(); err != nil || len(rdv) != 1 {
+		t.Fatalf("Rendezvous after a failed refresh = %v %v, want [a]", rdv, err)
+	}
+	if len(dir.DataRelays()) != 1 || len(dir.STUN()) != 1 {
+		t.Fatal("a failed refresh dropped data relays or STUN servers")
+	}
+}
+
+func TestRelayDirectoryReturnsCopies(t *testing.T) {
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []stunServer{{Relay: "a", Addr: "a:3478"}}, nil
+	}, relaySets{})
+	_ = dir.refresh()
+	dir.DataRelays()["evil"] = liveRelay("evil")
+	dir.STUN()[0] = "evil:1"
+	if _, ok := dir.DataRelays()["evil"]; ok || dir.STUN()[0] != "a:3478" {
+		t.Fatal("caller mutation reached the directory")
+	}
+}
+
+func TestRelayDirectoryRunRefreshesUntilCancelled(t *testing.T) {
+	calls := make(chan struct{}, 10)
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		calls <- struct{}{}
+		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{}, nil, nil
+	}, relaySets{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { dir.run(ctx, 5*time.Millisecond, io.Discard); close(done) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("run did not refresh")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not stop on cancel")
+	}
+}
+
+// fakeHealth blocks the labels in its set, standing in for relayHealth.
+type fakeHealth map[string]bool
+
+func (f fakeHealth) blocked(label string) bool { return f[label] }
+
+func TestRelayDirectoryReplacesABlockedRelay(t *testing.T) {
+	found := []string{"a", "b", "c", "d"}
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		var rdv []rendezvous.Relay
+		data := dataRelayFlag{}
+		var stun []stunServer
+		for _, l := range found {
+			rdv = append(rdv, liveRelay(l))
+			data[l] = liveRelay(l)
+			stun = append(stun, stunServer{Relay: l, Addr: l + ":3478"})
+		}
+		return rdv, data, stun, nil
+	}
+	h := fakeHealth{}
+	dir := newRelayDirectory(fetch, relaySets{})
+	dir.blocked = h.blocked
+	_ = dir.refresh() // full: a b c d
+
+	h["b"] = true
+	found = []string{"a", "c", "d", "e"} // chooseRelays skips a blocked relay
+	_ = dir.refresh()
+
+	rdv, _ := dir.Rendezvous()
+	var labels []string
+	for _, r := range rdv {
+		labels = append(labels, r.Label)
+	}
+	if strings.Join(labels, ",") != "a,c,d,e" {
+		t.Fatalf("Rendezvous = %v, want b replaced by e", labels)
+	}
+	if _, ok := dir.DataRelays()["b"]; ok {
+		t.Fatal("blocked data relay b kept")
+	}
+	if _, ok := dir.DataRelays()["e"]; !ok {
+		t.Fatal("data relay e not added")
+	}
+	if got := strings.Join(dir.STUN(), ","); got != "a:3478,c:3478,d:3478,e:3478" {
+		t.Fatalf("STUN = %s, want b's server replaced by e's", got)
+	}
+}
+
+func TestRelayDirectoryKeepsABlockedRelayWhenItIsTheOnlyOne(t *testing.T) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("only")}, dataRelayFlag{"only": liveRelay("only")}, []stunServer{{Relay: "only", Addr: "only:3478"}}, nil
+	}
+	h := fakeHealth{}
+	dir := newRelayDirectory(fetch, relaySets{})
+	dir.blocked = h.blocked
+	_ = dir.refresh()
+	h["only"] = true
+	_ = dir.refresh()
+	if rdv, err := dir.Rendezvous(); err != nil || len(rdv) != 1 {
+		t.Fatalf("Rendezvous = %v %v, want the only relay kept", rdv, err)
+	}
+	if len(dir.DataRelays()) != 1 || len(dir.STUN()) != 1 {
+		t.Fatal("the only data relay or STUN server was dropped")
+	}
+}
+
+func TestRelayDirectoryNeverEvictsFixedRelays(t *testing.T) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("dir")}, dataRelayFlag{"dir": liveRelay("dir")}, nil, nil
+	}
+	dir := newRelayDirectory(fetch, relaySets{
+		Rendezvous: []rendezvous.Relay{liveRelay("flag")}, FixedRendezvous: true,
+		Data: dataRelayFlag{"flag": liveRelay("flag")}, FixedData: true,
+	})
+	dir.blocked = fakeHealth{"flag": true}.blocked
+	_ = dir.refresh()
+	if rdv, _ := dir.Rendezvous(); len(rdv) != 1 || rdv[0].Label != "flag" {
+		t.Fatalf("Rendezvous = %v, want the flag relay", rdv)
+	}
+	if _, ok := dir.DataRelays()["flag"]; !ok {
+		t.Fatal("flag data relay evicted")
 	}
 }

@@ -141,8 +141,9 @@ type Server struct {
 	// DataRelays is the data-relay pool this node uses, label to relay
 	// sidecar URL, from -data-relay flags and ENS discovery alike. A caller
 	// that sees a peer's WireGuard endpoint on one of these hosts knows the
-	// path is relayed. Set once at startup; not modified afterwards.
-	DataRelays map[string]string
+	// path is relayed. It is called on every request, because discovery can
+	// add relays while the node runs.
+	DataRelays func() map[string]string
 
 	admission admissionCache
 	activity  activityBuffer
@@ -352,7 +353,11 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, state)
 	})
 	mux.HandleFunc("GET /relays", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]map[string]string{"dataRelays": s.DataRelays})
+		pool := map[string]string{}
+		if s.DataRelays != nil {
+			pool = s.DataRelays()
+		}
+		writeJSON(w, map[string]map[string]string{"dataRelays": pool})
 	})
 	mux.HandleFunc("/peers", s.handlePeers)
 	mux.HandleFunc("/activity", s.handleActivity)

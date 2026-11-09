@@ -62,14 +62,27 @@ func (n *Node) DiscoverEndpoint(ctx context.Context, servers []string) (netip.Ad
 }
 
 // RunSTUN refreshes the observation every 30 seconds after each discovery pass.
-// The caller cancels ctx before closing the node.
-func (n *Node) RunSTUN(ctx context.Context, servers []string, onStatus ...func(EndpointStatus)) {
+// servers is called before every pass, so STUN servers found after startup
+// are used. While it returns none, the status is "unavailable" and the pass
+// is retried on the same schedule. The caller cancels ctx before closing the
+// node.
+func (n *Node) RunSTUN(ctx context.Context, servers func() []string, onStatus ...func(EndpointStatus)) {
+	n.runSTUN(ctx, servers, 30*time.Second, onStatus...)
+}
+
+func (n *Node) runSTUN(ctx context.Context, servers func() []string, every time.Duration, onStatus ...func(EndpointStatus)) {
 	for ctx.Err() == nil {
-		_, _ = n.DiscoverEndpoint(ctx, servers)
+		if list := servers(); len(list) > 0 {
+			_, _ = n.DiscoverEndpoint(ctx, list)
+		} else {
+			n.discovery.mu.Lock()
+			n.discovery.status = EndpointStatus{State: "unavailable", Error: "no STUN servers known yet"}
+			n.discovery.mu.Unlock()
+		}
 		for _, notify := range onStatus {
 			notify(n.EndpointStatus())
 		}
-		timer := time.NewTimer(30 * time.Second)
+		timer := time.NewTimer(every)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

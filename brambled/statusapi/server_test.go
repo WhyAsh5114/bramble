@@ -188,7 +188,7 @@ func TestPingRealLoopback(t *testing.T) {
 }
 
 func TestRelaysReportsTheDataRelayPool(t *testing.T) {
-	s := &Server{DataRelays: map[string]string{"relay-eu": "http://203.0.113.9:8080"}}
+	s := &Server{DataRelays: func() map[string]string { return map[string]string{"relay-eu": "http://203.0.113.9:8080"} }}
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/relays", nil))
 	var got struct {

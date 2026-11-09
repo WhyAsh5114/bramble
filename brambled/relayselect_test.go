@@ -129,3 +129,78 @@ func TestJunkRelaysInTheDirectoryDoNotStallAConnect(t *testing.T) {
 	}
 	t.Fatal("dead directory relays stalled the connection")
 }
+
+// ADR 0020: a node started before any relay was listed must pick up the first
+// relay without a restart. With no relay at startup, neither node has a data
+// relay or a rendezvous relay; loopback candidates are refused outside tests,
+// so the only way the two can connect is through the relay listed later.
+func TestRelayListedAfterStartIsUsedWithoutRestart(t *testing.T) {
+	old := relayRefreshInterval
+	relayRefreshInterval = 200 * time.Millisecond
+	t.Cleanup(func() { relayRefreshInterval = old })
+
+	chain := registrytest.New(t, "late.net.bramble.eth")
+	ping, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ping.Close()
+	go func() {
+		for {
+			c, err := ping.Accept()
+			if err != nil {
+				return
+			}
+			io.WriteString(c, "pong")
+			c.Close()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handles := map[string]chan *Handle{}
+	keys := map[string]string{}
+	for i, label := range []string{"laptop", "server"} {
+		priv, pub, _ := wgnode.GenerateKeyPair()
+		keys[label] = priv
+		chain.Enroll(label, map[string]string{registry.KeyPubkey: pub, registry.KeyMeshIP: fmt.Sprintf("10.150.0.%d/24", i+1)})
+	}
+	for _, label := range []string{"laptop", "server"} {
+		tn, err := registry.NewTailnet(chain.Config(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tn.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		go tn.Run(ctx)
+		args := []string{"-label", label, "-private-key", keys[label], "-netstack", "-status-port", "0",
+			"-listen-port", strconv.Itoa(int(testport.FreeUDP(t))), "-ttl", "2s"}
+		if label == "server" {
+			args = append(args, "-service", fmt.Sprintf("ping=%d/open", ping.Addr().(*net.TCPAddr).Port))
+		}
+		ch := make(chan *Handle, 1)
+		handles[label] = ch
+		go func() { _ = Serve(ctx, tn, args, func(h *Handle) { ch <- h }) }()
+	}
+	laptop := <-handles["laptop"]
+	<-handles["server"]
+
+	if c, err := laptop.Dial("server", "ping"); err == nil {
+		c.Close()
+		t.Fatal("connected with no relay listed; the test no longer exercises a late relay")
+	}
+
+	relay, _ := startRelay(t, "late")
+	chain.EnrollRelay("late", map[string]string{registry.KeyRendezvous: relay.Address, registry.KeyPin: relay.Pin, registry.KeyDataRelay: "on", registry.KeyPrice: "0"})
+	start := time.Now()
+	for time.Since(start) < 45*time.Second {
+		if c, err := laptop.Dial("server", "ping"); err == nil {
+			body, _ := io.ReadAll(c)
+			c.Close()
+			if string(body) != "pong" {
+				t.Fatalf("ping answered %q", body)
+			}
+			t.Logf("connected through a relay listed after startup, %s after listing it", time.Since(start).Round(10*time.Millisecond))
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("a relay listed after startup was never used")
+}
