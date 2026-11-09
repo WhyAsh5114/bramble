@@ -144,31 +144,37 @@ export class JoinService {
     const chain = this.requireChain()
     try {
       const facts = await chain.members()
-      return facts
-        .filter((member) => member.expiry > this.clock.now() / 1000)
-        // Demo hygiene: APPROVAL_HIDE_LABEL_PREFIXES="dryrun-" keeps rehearsal devices out of the console.
-        .filter((member) => !hiddenLabelPrefixes().some((prefix) => member.label.startsWith(prefix)))
-        .map((member) => {
-          const row = [...this.rows.values()].find(
-            (row) =>
-              row.label === member.label &&
-              (row.status === 'approved' || row.status === 'revoked' || this.progress.has(row.id))
-          )
-          return {
-            ...(row
-              ? structuredClone(row)
-              : {
-                  id: `member:${member.label}`,
-                  label: member.label,
-                  tailnet: this.tailnet!,
-                  createdAt: '',
-                  pubkey: member.pubkey ?? '',
-                }),
-            status:
-              member.revoked || row?.revokeTransaction ? 'revoked' : row?.status === 'pending' ? 'pending' : 'approved',
-            ...(member.meshIp ? { meshIp: member.meshIp.split('/')[0] } : {}),
-          }
-        })
+      return (
+        facts
+          .filter((member) => member.expiry > this.clock.now() / 1000)
+          // Demo hygiene: APPROVAL_HIDE_LABEL_PREFIXES="dryrun-" keeps rehearsal devices out of the console.
+          .filter((member) => !hiddenLabelPrefixes().some((prefix) => member.label.startsWith(prefix)))
+          .map((member) => {
+            const row = [...this.rows.values()].find(
+              (row) =>
+                row.label === member.label &&
+                (row.status === 'approved' || row.status === 'revoked' || this.progress.has(row.id))
+            )
+            return {
+              ...(row
+                ? structuredClone(row)
+                : {
+                    id: `member:${member.label}`,
+                    label: member.label,
+                    tailnet: this.tailnet!,
+                    createdAt: '',
+                    pubkey: member.pubkey ?? '',
+                  }),
+              status:
+                member.revoked || row?.revokeTransaction
+                  ? 'revoked'
+                  : row?.status === 'pending'
+                    ? 'pending'
+                    : 'approved',
+              ...(member.meshIp ? { meshIp: member.meshIp.split('/')[0] } : {}),
+            }
+          })
+      )
     } catch (error) {
       if (error instanceof ApiError) throw error
       throw new ApiError(502, 'members_unavailable', 'ENS membership is temporarily unavailable.')
