@@ -16,7 +16,7 @@ import (
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
-// These tests do nothing unless deploy/nat-lab/docker-lab.sh sets
+// These tests do nothing unless docs/archive/hackathon/nat-lab/docker-lab.sh sets
 // BRAMBLE_NETLAB_ROLE. The script compiles this package's test binary and
 // runs one role per network namespace, so each node's UDP leaves through its
 // own NAT. They use throwaway keys the script generates for the run.

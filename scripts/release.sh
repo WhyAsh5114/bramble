@@ -36,7 +36,7 @@ for target in "${targets[@]}"; do
   mkdir -p "$dir"
   (cd node-daemon && CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
     -ldflags "-s -w -X main.version=$version" -o "$dir/bramble" .)
-  tar -C "$dir" -czf "$out/bramble_${os}_${arch}.tar.gz" bramble
+  tar --no-xattrs -C "$dir" -czf "$out/bramble_${os}_${arch}.tar.gz" bramble
 done
 rm -rf "$stage"
 (cd "$out" && if command -v sha256sum >/dev/null; then sha256sum ./*.tar.gz; else shasum -a 256 ./*.tar.gz; fi | sed 's#\./##' > SHA256SUMS)
