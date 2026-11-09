@@ -38,7 +38,7 @@ interface IResolver {
 contract OpenRegistrarTest {
     Vm constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    // ENSv2 Sepolia deployment (docs/reference/ens-deployments.md).
+    // ENSv2 Sepolia deployment (docs/archive/hackathon/reference/ens-deployments.md).
     address constant FACTORY = 0xDa70306C98E97eCe36F997a21368e53298572991;
     address constant USER_REGISTRY_IMPL = 0x9BD8a88719068D09ecee662f36C0E3856708366a;
     address constant RESOLVER_IMPL = 0x115eb53F0c60696633855F90b138178Fb40b2b2C;
