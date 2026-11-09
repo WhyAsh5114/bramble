@@ -5,8 +5,6 @@ const config: NextConfig = {
   output: 'export',
   poweredByHeader: false,
   images: { unoptimized: true },
-  // Shares the approval console's Button and stylesheet instead of copying them.
-  experimental: { externalDir: true },
 }
 
 export default config

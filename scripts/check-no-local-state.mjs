@@ -27,8 +27,13 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const SCAN_DIRS = [
-  { dir: 'brambled', extensions: new Set(['.go']), exclude: (rel) => rel.endsWith('_test.go') },
-  { dir: 'sidecar/src', extensions: new Set(['.ts']), exclude: () => false },
+  // ADR 0019 relaxed this for one file: the registry cache saves its confirmed
+  // state so a restart does not rescan the chain. Anything else is still flagged.
+  {
+    dir: 'brambled',
+    extensions: new Set(['.go']),
+    exclude: (rel) => rel.endsWith('_test.go') || rel === 'brambled/registry/cache.go',
+  },
 ]
 const EXCLUDE_SEGMENTS = new Set(['node_modules', '.git', 'dist'])
 

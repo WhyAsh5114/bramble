@@ -26,20 +26,20 @@ docker exec bramble-relay /relay pin
 
 ## Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `RELAY_PUBLIC_HOST` | (required) | Public IP or DNS name peers reach data sessions at |
-| `RELAY_ADDR` | `:9420` | Rendezvous listener (TLS) |
-| `RELAY_STUN_ADDR` | `:3478` | STUN listener; empty disables it |
-| `RELAY_PORT_MIN`, `RELAY_PORT_MAX` | `40000`, `40999` | UDP ports for data sessions |
-| `RELAY_MAX_BYTES_PER_DAY` | 3 GiB | Data relay budget per UTC day; `0` is unlimited |
-| `RELAY_MAX_BYTES_PER_MONTH` | 80 GiB | Data relay budget per UTC month; `0` is unlimited |
-| `RELAY_SESSION_BYTES` | 512 MiB | Cap of one session |
-| `RELAY_SESSION_TTL_SECONDS` | `1800` | Lifetime of one session |
-| `RELAY_MAX_SESSIONS` | `256` | Concurrent sessions |
-| `RELAY_SESSIONS_PER_IP_PER_HOUR` | `60` | New sessions one source IP may open per hour |
-| `RELAY_RENDEZVOUS_ONLY` | unset | `1` turns the data relay off |
-| `RELAY_STATE_DIR` | `/state` | TLS key and byte counters |
+| Variable                           | Default          | Meaning                                            |
+| ---------------------------------- | ---------------- | -------------------------------------------------- |
+| `RELAY_PUBLIC_HOST`                | (required)       | Public IP or DNS name peers reach data sessions at |
+| `RELAY_ADDR`                       | `:9420`          | Rendezvous listener (TLS)                          |
+| `RELAY_STUN_ADDR`                  | `:3478`          | STUN listener; empty disables it                   |
+| `RELAY_PORT_MIN`, `RELAY_PORT_MAX` | `40000`, `40999` | UDP ports for data sessions                        |
+| `RELAY_MAX_BYTES_PER_DAY`          | 3 GiB            | Data relay budget per UTC day; `0` is unlimited    |
+| `RELAY_MAX_BYTES_PER_MONTH`        | 80 GiB           | Data relay budget per UTC month; `0` is unlimited  |
+| `RELAY_SESSION_BYTES`              | 512 MiB          | Cap of one session                                 |
+| `RELAY_SESSION_TTL_SECONDS`        | `1800`           | Lifetime of one session                            |
+| `RELAY_MAX_SESSIONS`               | `256`            | Concurrent sessions                                |
+| `RELAY_SESSIONS_PER_IP_PER_HOUR`   | `60`             | New sessions one source IP may open per hour       |
+| `RELAY_RENDEZVOUS_ONLY`            | unset            | `1` turns the data relay off                       |
+| `RELAY_STATE_DIR`                  | `/state`         | TLS key and byte counters                          |
 
 When the day or month budget is used up, the relay stops forwarding data until the period rolls over. Rendezvous and STUN keep working, so peers that can hole-punch still connect.
 

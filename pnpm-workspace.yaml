@@ -1,16 +1,6 @@
 packages:
-  - sidecar
   - brambled
   - node-daemon
   - relay
-  - rpc-proxy
-  - scripts/provision-dev-tailnet
-  - scripts/demo
-  - admincli
-  - agent-mcp
-  - dashboard
-  - hedera-audit
-  - approval
-  - join-ui
   - local-ui
   - contracts

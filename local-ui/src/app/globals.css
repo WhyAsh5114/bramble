@@ -1,5 +1,4 @@
-@import '../../../approval/src/app/globals.css';
-@source '../../../approval/src';
+@import './console.css';
 
 /* Local UI additions. The palette, nav, cards and summary row come from the approval console. */
 .lead {

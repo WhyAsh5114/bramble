@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Button } from '@approval/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { ApiFailure, leaveNetwork, requestAccess, testConnection } from '../lib/api'
 import type { BrambleState, Peer } from '../lib/contract'
 import { describeTest, pathCopy, relativeTime } from '../lib/format'

@@ -23,3 +23,6 @@ approval/
 # The local-ui package formats itself via its own format scripts.
 local-ui/
 .vercel/
+contracts/out/
+contracts/cache/
+release/

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { Button } from '@approval/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { formatFingerprint } from '../lib/format'
 
 export function Notice({

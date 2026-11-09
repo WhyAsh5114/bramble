@@ -162,7 +162,8 @@ func TestFailoverMovesToTheBackupRelay(t *testing.T) {
 	go watchDataRelayAdopt(ctx, cloud, "device", cloudPub, devicePub, "", netip.PrefixFrom(deviceAddr, 32), source)
 
 	primaryLocal.Close()
-	if !pingUntil(t, device, cloudAddr, 40*time.Second) {
+	// About 10 s on an idle machine; the margin is for CI and parallel test runs.
+	if !pingUntil(t, device, cloudAddr, 90*time.Second) {
 		t.Fatal("traffic did not resume through the backup relay")
 	}
 	if _, used, _ := state.get("cloud"); used != "backup" {

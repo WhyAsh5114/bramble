@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, type FormEvent } from 'react'
-import { Button } from '@approval/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { ApiFailure, joinNetwork, leaveNetwork, setupDevice } from '../lib/api'
 import type { BrambleState } from '../lib/contract'
 import { checkDeviceName, checkNetworkName } from '../lib/format'

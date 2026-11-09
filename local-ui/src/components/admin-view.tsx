@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Button } from '@approval/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { ApiFailure, decideJoin } from '../lib/api'
 import type { JoinRecord } from '../lib/contract'
 import { shortKey } from '../lib/format'

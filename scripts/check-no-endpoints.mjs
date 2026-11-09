@@ -30,14 +30,9 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const SCAN_DIRS = ['sidecar/src', 'scripts/provision-dev-tailnet', 'brambled', 'admincli']
+const SCAN_DIRS = ['brambled', 'node-daemon', 'local-ui/src']
 const EXCLUDE_SEGMENTS = new Set(['node_modules', '.git', 'dist'])
-const EXCLUDE_PREFIXES = [
-  'scripts/gate0.3-eac-check',
-  'relay',
-  'admincli/src/setup-relay-registry.ts',
-  'admincli/src/register-relay.ts',
-]
+const EXCLUDE_PREFIXES = ['relay']
 const SCAN_EXTENSIONS = new Set(['.ts', '.go'])
 
 const BANNED_KEYS = /^(endpoint|address|addr|ip|host|port|url)$/i
