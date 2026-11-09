@@ -14,7 +14,7 @@ printf 'BRAMBLE_PRIVATE_KEY=\nPUBLIC_SETTING=kept\n' > "$stage/node.env"
 chmod 644 "$stage/node.env"
 
 output="$(bash "$here/gen-node-key.sh" "$stage/node.env" "$stage/brambled")"
-[ "$(stat -c %a "$stage/node.env")" = 600 ] || { echo 'FAIL: generated key file is not mode 600' >&2; exit 1; }
+[ "$(stat -c %a "$stage/node.env" 2>/dev/null || stat -f %Lp "$stage/node.env")" = 600 ] || { echo 'FAIL: generated key file is not mode 600' >&2; exit 1; }
 [ "$output" = 'public key (give this to the admin for enroll.ts): synthetic-public-fixture' ] || { echo 'FAIL: unexpected public output' >&2; exit 1; }
 grep -q '^BRAMBLE_PRIVATE_KEY=synthetic-private-fixture$' "$stage/node.env"
 grep -q '^PUBLIC_SETTING=kept$' "$stage/node.env"

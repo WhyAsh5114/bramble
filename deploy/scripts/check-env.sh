@@ -16,7 +16,7 @@ case "$role" in
 esac
 
 [ -r "$file" ] || { echo "cannot read $file" >&2; exit 1; }
-mode="$(stat -c %a "$file")"
+mode="$(stat -c %a "$file" 2>/dev/null || stat -f %Lp "$file")"
 bad=0
 case "$mode" in 600|400) ;; *) echo "FAIL  $file mode is $mode, expected 600"; bad=1;; esac
 for name in $req; do
