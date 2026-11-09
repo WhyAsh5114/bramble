@@ -92,6 +92,8 @@ type Node struct {
 }
 
 type Config struct {
+	// Bind overrides the UDP transport for rootless NAT integration tests.
+	Bind conn.Bind
 	// EnableSTUN shares the WireGuard bind with endpoint discovery.
 	EnableSTUN bool
 	// PrivateKeyHex is the node's own WireGuard private key, hex-encoded.
@@ -115,7 +117,10 @@ type Config struct {
 }
 
 func New(cfg Config) (*Node, error) {
-	bind := conn.NewDefaultBind()
+	bind := cfg.Bind
+	if bind == nil {
+		bind = conn.NewDefaultBind()
+	}
 	var stunBind *stun.Bind
 	if cfg.EnableSTUN {
 		stunBind = stun.NewBind(bind)

@@ -232,7 +232,7 @@ func runDemoDataRelay(args []string) error {
 			bobErr = err
 			return
 		}
-		addr, err := netip.ParseAddrPort(candidate)
+		addr, err := peerEndpointFromCandidate(candidate)
 		if err != nil {
 			bobErr = fmt.Errorf("parsing alice's candidate %q: %w", candidate, err)
 			return

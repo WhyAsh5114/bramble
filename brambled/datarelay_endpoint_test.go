@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/brambled/sidecar"
 	"github.com/WhyAsh5114/bramble/brambled/sponsor"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
@@ -641,7 +642,7 @@ func testDataRelayFailover(t *testing.T, watcherSource func([]sidecar.Rendezvous
 			bobErr = err
 			return
 		}
-		addr, err := netip.ParseAddrPort(candidate)
+		addr, err := peerEndpointFromCandidate(candidate)
 		if err != nil {
 			bobErr = fmt.Errorf("parsing alice's candidate %q: %w", candidate, err)
 			return
@@ -809,8 +810,8 @@ func testSponsoredRelayBootstrap(t *testing.T, expireFirst, depletedBudget bool)
 	if err := <-errCh; err != nil {
 		t.Fatal(err)
 	}
-	if candidate != endpoint.String() {
-		t.Fatalf("initial endpoints differ: %s vs %s", endpoint, candidate)
+	if announced, err := announcedAddr(candidate); err != nil || announced != *endpoint {
+		t.Fatalf("initial endpoints differ: %s vs %s (%v)", endpoint, candidate, err)
 	}
 	if err := device.AddPeer(cloudPub, netip.PrefixFrom(cloudIP, 32), endpoint); err != nil {
 		t.Fatal(err)
@@ -1032,4 +1033,17 @@ func TestDataRelayEndpointUpdatePreservesAdmission(t *testing.T) {
 	if len(peers) != 0 {
 		t.Fatalf("transport update restored a revoked peer: %+v", peers)
 	}
+}
+
+// announcedAddr returns the first address of a published candidate, which is
+// an "ep1:" announcement since automatic hole punching (ETH-39).
+func announcedAddr(candidate string) (netip.AddrPort, error) {
+	announcement, err := rendezvous.ParseAnnouncement(candidate)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if len(announcement) == 0 {
+		return netip.AddrPort{}, fmt.Errorf("empty announcement")
+	}
+	return announcement[0].Addr, nil
 }

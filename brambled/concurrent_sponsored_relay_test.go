@@ -91,7 +91,7 @@ func TestSponsoredRelay_ConcurrentGatewayExchangesReachFreshDevice(t *testing.T)
 			cloudResult <- adoptedEndpoint{err: fmt.Errorf("wrong offer type or sender")}
 			return
 		}
-		endpoint, err := netip.ParseAddrPort(offer.Candidate)
+		endpoint, err := announcedAddr(offer.Candidate)
 		if err == nil {
 			err = json.NewEncoder(cloudConn).Encode(wireMessage{Type: "offer", To: devicePub})
 		}

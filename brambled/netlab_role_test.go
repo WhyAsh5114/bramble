@@ -107,7 +107,7 @@ func TestNetlabRole(t *testing.T) {
 			candidate, _, err = exchangeAnyMetered(relays, payer, ownPub, peerPub, "", 40*time.Second)
 			if err == nil {
 				var addr netip.AddrPort
-				if addr, err = netip.ParseAddrPort(candidate); err == nil {
+				if addr, err = peerEndpointFromCandidate(candidate); err == nil {
 					endpoint = &addr
 					err = node.SetPersistentKeepalive(peerPub, dataRelayKeepaliveSeconds)
 				}
