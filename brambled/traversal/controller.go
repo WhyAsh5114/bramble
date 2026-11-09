@@ -84,7 +84,7 @@ func (c *Controller) Run(ctx context.Context) {
 	}
 	emit("probing")
 	deadline := time.Now().Add(c.HandshakeTimeout)
-	var baselineHandshake, baselineRx int64
+	var baselineRx int64
 	var nextProbe, nextRelay time.Time
 	lastRx := int64(-1)
 	lastReceive := time.Now()
@@ -125,7 +125,6 @@ func (c *Controller) Run(ctx context.Context) {
 	}
 	begin := func(p wgnode.PeerInfo) {
 		target = direct
-		baselineHandshake = p.LastHandshakeUnixNs
 		baselineRx = p.RxBytes
 		deadline = time.Now().Add(c.HandshakeTimeout)
 		if c.Node.SetPeerPath(c.Peer, target) == nil {
@@ -167,7 +166,12 @@ func (c *Controller) Run(ctx context.Context) {
 				if !target.IsValid() && direct.IsValid() {
 					begin(p)
 				}
-				if target.IsValid() && p.LastHandshakeUnixNs > baselineHandshake && p.RxBytes > baselineRx && p.Endpoint == target.String() {
+				// WireGuard moves the endpoint to the source of every
+				// authenticated packet, so new bytes with the endpoint still on
+				// target prove the direct path. A fresh handshake is not
+				// required: WireGuard drops initiations within 5s of the last
+				// one, which the relay fallback has usually just sent.
+				if target.IsValid() && p.Handshaked() && p.RxBytes > baselineRx && p.Endpoint == target.String() {
 					lastRx = p.RxBytes
 					lastReceive = now
 					emit("direct")
