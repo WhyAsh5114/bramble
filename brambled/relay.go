@@ -578,12 +578,12 @@ const failoverMaxBackoff = 3 * time.Minute
 // so a long call could adopt a stale one.
 const dataRelayAdoptExchangeTimeout = 3 * time.Second
 
-const (
-	// relayRefreshInterval is how often serve re-reads the relay directory.
-	// The directory is read from the local registry cache, so a pass is cheap.
-	relayRefreshInterval = 15 * time.Second
-	exchangeBackoffMax   = 2 * time.Minute
-)
+// relayRefreshInterval is how often serve re-reads the relay directory. The
+// directory is read from the local registry cache, so a pass is cheap. A var
+// so tests can shorten it.
+var relayRefreshInterval = 15 * time.Second
+
+const exchangeBackoffMax = 2 * time.Minute
 
 // The adopt watcher polls only while the peer's traffic has stalled (the same
 // RxBytes signal the failover side acts on), so an idle healthy link costs
