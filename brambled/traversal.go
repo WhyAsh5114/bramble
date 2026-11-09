@@ -30,7 +30,7 @@ type peerTraversal struct {
 	local           func() rendezvous.Announcement
 	relaySet        rendezvousSource
 	sessions        sessionSource
-	pool            dataRelayFlag
+	pool            func() dataRelayFlag
 	sessionBytes    int64
 	exchangeTimeout time.Duration
 	onState         func(string, string, string)
@@ -133,7 +133,7 @@ func (m *peerTraversal) run(ctx context.Context, label, key string) {
 			if ctx.Err() != nil || !m.admitted(key) {
 				return netip.AddrPort{}, rendezvous.ErrNotAdmitted
 			}
-			session, err := buyDataRelaySession(m.sessions, m.pool, m.sessionBytes)
+			session, err := buyDataRelaySession(m.sessions, m.pool(), m.sessionBytes)
 			if err != nil {
 				return netip.AddrPort{}, err
 			}

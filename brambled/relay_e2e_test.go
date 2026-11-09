@@ -158,7 +158,7 @@ func TestFailoverMovesToTheBackupRelay(t *testing.T) {
 	state.set("cloud", cloudPub, session)
 	pool["backup"] = backup
 	source := staticRendezvous(relays)
-	go watchDataRelayFailover(ctx, device, freeSessions{}, state, "cloud", pool, 1<<20, source, devicePub, 3*time.Second)
+	go watchDataRelayFailover(ctx, device, freeSessions{}, state, "cloud", func() dataRelayFlag { return pool }, 1<<20, source, devicePub, 3*time.Second)
 	go watchDataRelayAdopt(ctx, cloud, "device", cloudPub, devicePub, "", netip.PrefixFrom(deviceAddr, 32), source)
 
 	primaryLocal.Close()

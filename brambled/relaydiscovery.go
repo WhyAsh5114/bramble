@@ -1,28 +1,145 @@
 package brambled
 
 import (
+	"context"
 	"fmt"
-	"os"
+	"io"
+	"slices"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
 
-// rendezvousPool is the set of rendezvous relays the endpoint resolver
-// uses. It starts from what start-up discovery found. If start-up discovery
-// failed (the RPC pool rejected the relay registry scan, found live on the
-// cloud nodes on 6 Nov 2026), the pool asks again on a later call instead of
-// staying empty for the life of the process. Without this, one failed scan
-// left the worker with no resolver at all: it never posted its candidate, so
-// no gateway could reach it.
-type rendezvousPool struct {
-	mu         sync.Mutex
-	relays     []rendezvous.Relay
-	fetch      func() ([]rendezvous.Relay, error)
-	now        func() time.Time
-	retryAfter time.Duration
-	lastTry    time.Time
+// relaySets is the relays a node uses: the rendezvous set, the data-relay
+// pool and the STUN servers. A Fixed set came from a flag (-rendezvous,
+// -data-relay, -stun-servers or -no-stun) and the directory never changes it.
+type relaySets struct {
+	Rendezvous      []rendezvous.Relay
+	Data            dataRelayFlag
+	STUN            []string
+	FixedRendezvous bool
+	FixedData       bool
+	FixedSTUN       bool
+}
+
+// relayDirectory is the live view of the relays a node uses. serve reads it on
+// every use instead of keeping a copy from start-up, so a relay registered
+// after the node started is used without a restart (docs/adr/0020).
+//
+// Each refresh merges what chooseRelays picked into the sets that are not
+// Fixed. Relays are added, never removed: a live session may be using one, and
+// relayHealth already steers new work away from a failing relay. Each set is
+// capped at the size chooseRelays itself returns.
+type relayDirectory struct {
+	mu    sync.Mutex
+	fetch func() ([]rendezvous.Relay, dataRelayFlag, []string, error)
+	sets  relaySets
+}
+
+func newRelayDirectory(fetch func() ([]rendezvous.Relay, dataRelayFlag, []string, error), initial relaySets) *relayDirectory {
+	sets := initial
+	sets.Rendezvous = append([]rendezvous.Relay(nil), initial.Rendezvous...)
+	sets.Data = copyDataRelays(initial.Data)
+	sets.STUN = append([]string(nil), initial.STUN...)
+	return &relayDirectory{fetch: fetch, sets: sets}
+}
+
+// refresh asks the directory once and merges the result. On an error the
+// current sets stay as they are.
+func (d *relayDirectory) refresh() error {
+	rdv, data, stun, err := d.fetch()
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.sets.FixedRendezvous {
+		have := map[string]bool{}
+		for _, r := range d.sets.Rendezvous {
+			have[r.Label] = true
+		}
+		for _, r := range rdv {
+			if !have[r.Label] && len(d.sets.Rendezvous) < maxRendezvousRelays {
+				have[r.Label] = true
+				d.sets.Rendezvous = append(d.sets.Rendezvous, r)
+				tracef("relays: rendezvous relay %s added", r.Label)
+			}
+		}
+	}
+	if !d.sets.FixedData {
+		labels := make([]string, 0, len(data))
+		for label := range data {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		for _, label := range labels {
+			if _, ok := d.sets.Data[label]; !ok && len(d.sets.Data) < maxDataRelays {
+				d.sets.Data[label] = data[label]
+				tracef("relays: data relay %s added", label)
+			}
+		}
+	}
+	if !d.sets.FixedSTUN {
+		for _, server := range stun {
+			if !slices.Contains(d.sets.STUN, server) && len(d.sets.STUN) < maxRendezvousRelays {
+				d.sets.STUN = append(d.sets.STUN, server)
+				tracef("relays: STUN server %s added", server)
+			}
+		}
+	}
+	return nil
+}
+
+// run refreshes every interval until ctx ends. A failed refresh is logged and
+// retried on the next tick.
+func (d *relayDirectory) run(ctx context.Context, interval time.Duration, logw io.Writer) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if err := d.refresh(); err != nil {
+			fmt.Fprintf(logw, "relay discovery: %v (will retry)\n", err)
+		}
+	}
+}
+
+// Rendezvous returns the rendezvous relays known now, or an error when there
+// are none yet. It is a rendezvousSource.
+func (d *relayDirectory) Rendezvous() ([]rendezvous.Relay, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.sets.Rendezvous) == 0 {
+		return nil, fmt.Errorf("no rendezvous relays known yet; relay discovery retries every %s", relayRefreshInterval)
+	}
+	return append([]rendezvous.Relay(nil), d.sets.Rendezvous...), nil
+}
+
+// DataRelays returns a copy of the data-relay pool.
+func (d *relayDirectory) DataRelays() dataRelayFlag {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return copyDataRelays(d.sets.Data)
+}
+
+// STUN returns a copy of the STUN server list.
+func (d *relayDirectory) STUN() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.sets.STUN...)
+}
+
+func copyDataRelays(pool dataRelayFlag) dataRelayFlag {
+	out := make(dataRelayFlag, len(pool))
+	for label, r := range pool {
+		out[label] = r
+	}
+	return out
 }
 
 // rendezvousSource returns the rendezvous relays known right now, or an error
@@ -33,35 +150,6 @@ type rendezvousSource func() ([]rendezvous.Relay, error)
 // staticRendezvous is a rendezvousSource over a fixed set.
 func staticRendezvous(relays []rendezvous.Relay) rendezvousSource {
 	return func() ([]rendezvous.Relay, error) { return relays, nil }
-}
-
-func newRendezvousPool(initial []rendezvous.Relay, fetch func() ([]rendezvous.Relay, error), retryAfter time.Duration) *rendezvousPool {
-	return &rendezvousPool{relays: initial, fetch: fetch, now: time.Now, retryAfter: retryAfter}
-}
-
-// Get returns the known relays. When there are none, it queries discovery
-// again, at most once per retryAfter. The caller treats an error as "retry on
-// the next sync".
-func (p *rendezvousPool) Get() ([]rendezvous.Relay, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.relays) > 0 {
-		return p.relays, nil
-	}
-	if !p.lastTry.IsZero() && p.now().Sub(p.lastTry) < p.retryAfter {
-		return nil, fmt.Errorf("no rendezvous relays known; discovery was retried less than %s ago", p.retryAfter)
-	}
-	p.lastTry = p.now()
-	resp, err := p.fetch()
-	if err != nil {
-		return nil, fmt.Errorf("relay discovery retry: %w", err)
-	}
-	p.relays = append(p.relays, resp...)
-	if len(p.relays) == 0 {
-		return nil, fmt.Errorf("relay discovery retry found no rendezvous relays")
-	}
-	fmt.Fprintf(os.Stderr, "relay discovery: retry found %d rendezvous relay(s)\n", len(p.relays))
-	return p.relays, nil
 }
 
 // exchangeBackoff spaces repeated failed rendezvous exchanges with the same

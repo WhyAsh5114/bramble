@@ -40,7 +40,7 @@ func TestAdmissionTraversalSharesOneRelayAndStopsOnRevoke(t *testing.T) {
 		if err := nodes[i].AddPeer(keys[peer], netip.PrefixFrom(addresses[peer], 32), nil); err != nil {
 			t.Fatal(err)
 		}
-		managers[i] = &peerTraversal{ctx: ctx, node: nodes[i], own: keys[i], sessions: payer, pool: dataRelayFlag{"test": relay}, sessionBytes: 10000, exchangeTimeout: time.Second, allowLoopback: true,
+		managers[i] = &peerTraversal{ctx: ctx, node: nodes[i], own: keys[i], sessions: payer, pool: func() dataRelayFlag { return dataRelayFlag{"test": relay} }, sessionBytes: 10000, exchangeTimeout: time.Second, allowLoopback: true,
 			local:    func() rendezvous.Announcement { return nil }, // no manual peer endpoint
 			relaySet: func() ([]rendezvous.Relay, error) { return []rendezvous.Relay{relay}, nil },
 		}

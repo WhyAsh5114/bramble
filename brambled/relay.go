@@ -453,7 +453,7 @@ func relayPeerSnapshot(node *wgnode.Node, pubkey string) (wgnode.PeerInfo, bool)
 // session. Before traffic confirms a session, it re-shares the same one until
 // expiry. With every relay stalled, it starts a new round over the whole pool.
 // Failed attempts back off (failoverBackoff).
-func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m sessionSource, state *relayState, peerLabel string, pool dataRelayFlag, sessionBytes int64, relaySet rendezvousSource, ownPubkey string, ttl time.Duration) {
+func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m sessionSource, state *relayState, peerLabel string, pool func() dataRelayFlag, sessionBytes int64, relaySet rendezvousSource, ownPubkey string, ttl time.Duration) {
 	excluded := map[string]bool{}
 	failures := 0
 	var observed *dataRelaySession
@@ -492,14 +492,15 @@ func watchDataRelayFailover(ctx context.Context, node *wgnode.Node, m sessionSou
 		if !reuse {
 			fmt.Fprintf(os.Stderr, "data-relay: %s via %s stalled — failing over\n", peerLabel, usedLabel)
 			excluded[usedLabel] = true
-			for label, r := range pool {
+			all := pool()
+			for label, r := range all {
 				if !excluded[label] {
 					remaining[label] = r
 				}
 			}
 			if len(remaining) == 0 {
 				excluded = map[string]bool{}
-				for label, r := range pool {
+				for label, r := range all {
 					remaining[label] = r
 				}
 			}
@@ -578,8 +579,10 @@ const failoverMaxBackoff = 3 * time.Minute
 const dataRelayAdoptExchangeTimeout = 3 * time.Second
 
 const (
-	rendezvousDiscoveryRetry = 10 * time.Second
-	exchangeBackoffMax       = 2 * time.Minute
+	// relayRefreshInterval is how often serve re-reads the relay directory.
+	// The directory is read from the local registry cache, so a pass is cheap.
+	relayRefreshInterval = 15 * time.Second
+	exchangeBackoffMax   = 2 * time.Minute
 )
 
 // The adopt watcher polls only while the peer's traffic has stalled (the same
