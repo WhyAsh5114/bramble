@@ -2,7 +2,7 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY *.go ./
 COPY relaysrv ./relaysrv
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /relay . \

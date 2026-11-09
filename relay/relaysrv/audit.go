@@ -180,3 +180,42 @@ func (a *HCSAuditor) send(ctx context.Context, r Receipt) {
 
 // Wait returns once Run has stopped (tests).
 func (a *HCSAuditor) Wait() { a.wg.Wait() }
+
+const hederaKeyFile = "hedera.key"
+
+// LoadHederaKey returns the operator key saved in stateDir, or "".
+func LoadHederaKey(stateDir string) string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, hederaKeyFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// HederaAddress makes the relay's own operator key in stateDir if it has none
+// and returns its 0x address. Sending test HBAR to that address creates the
+// account, so the key never has to leave this host. Only the address is
+// returned; the key is never printed.
+func HederaAddress(stateDir string) (string, error) {
+	var key hiero.PrivateKey
+	if saved := LoadHederaKey(stateDir); saved != "" {
+		k, err := hiero.PrivateKeyFromStringECDSA(saved)
+		if err != nil {
+			return "", errors.New("the saved Hedera key is not a valid ECDSA key")
+		}
+		key = k
+	} else {
+		k, err := hiero.PrivateKeyGenerateEcdsa()
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, hederaKeyFile), []byte(k.StringRaw()+"\n"), 0o600); err != nil {
+			return "", err
+		}
+		key = k
+	}
+	return "0x" + key.PublicKey().ToEvmAddress(), nil
+}

@@ -51,6 +51,15 @@ func Main(args []string, version string) int {
 		return 0
 	}
 
+	if len(args) > 0 && args[0] == "hedera-address" {
+		addr, err := HederaAddress(envStr("RELAY_STATE_DIR", "./state"))
+		if err != nil {
+			fail(err)
+		}
+		fmt.Println(addr)
+		return 0
+	}
+
 	addr := fs.String("addr", envStr("RELAY_ADDR", ":9420"), "TCP address for rendezvous (TLS)")
 	stunAddr := fs.String("stun", envStr("RELAY_STUN_ADDR", ":3478"), "UDP address for STUN; empty disables it")
 	publicHost := fs.String("public-host", os.Getenv("RELAY_PUBLIC_HOST"), "public IP or DNS name peers reach data sessions at (required for the data relay)")
@@ -71,7 +80,7 @@ func Main(args []string, version string) int {
 	x402Facilitator := fs.String("x402-facilitator", envStr("RELAY_X402_FACILITATOR", "https://api.testnet.blocky402.com"), "x402 facilitator base URL")
 	x402PublicURL := fs.String("x402-public-url", os.Getenv("RELAY_X402_PUBLIC_URL"), "https URL of this relay, named in 402 responses")
 	hcsAccount := fs.String("hedera-account", os.Getenv("RELAY_HEDERA_ACCOUNT"), "Hedera testnet account that pays to write receipts; with -hedera-key and paid mode it turns on the HCS audit log (ADR 0021)")
-	hcsKey := fs.String("hedera-key", os.Getenv("RELAY_HEDERA_KEY"), "hex ECDSA private key of -hedera-account; never printed or logged")
+	hcsKey := fs.String("hedera-key", os.Getenv("RELAY_HEDERA_KEY"), "hex ECDSA private key of -hedera-account; never printed or logged. Empty reads hedera.key from the state directory (see the hedera-address command)")
 	hcsTopic := fs.String("hcs-topic", os.Getenv("RELAY_HCS_TOPIC"), "HCS topic for receipts; empty creates one that only this account can write to and remembers it in the state directory")
 	noData := fs.Bool("rendezvous-only", os.Getenv("RELAY_RENDEZVOUS_ONLY") == "1", "offer rendezvous and STUN only, no data relay")
 	if err := fs.Parse(args); err != nil {
@@ -122,8 +131,12 @@ func Main(args []string, version string) int {
 		if err != nil {
 			fail(err)
 		}
-		if *hcsAccount != "" && *hcsKey != "" {
-			auditor, err = NewHCSAuditor(*hcsAccount, *hcsKey, *hcsTopic, *stateDir)
+		key := *hcsKey
+		if key == "" {
+			key = LoadHederaKey(*stateDir)
+		}
+		if *hcsAccount != "" && key != "" {
+			auditor, err = NewHCSAuditor(*hcsAccount, key, *hcsTopic, *stateDir)
 			if err != nil {
 				fail(err)
 			}

@@ -1,0 +1,41 @@
+# A paid bramble relay on its own small host (ADR 0021): x402 payment on Hedera
+# testnet, HCS receipts. Plain `docker compose`; the free relay on the projects
+# host is separate.
+#
+#   RELAY_PUBLIC_HOST       public IP or name devices reach data sessions at
+#   RELAY_HEDERA_ACCOUNT    this relay's Hedera testnet account (0.0.N). Its key is
+#                           made on the host by `relay hedera-address` and never leaves it.
+#   RELAY_X402_PRICE_PER_MIB  price of 1 MiB in USDC's smallest unit (six decimals)
+name: bramble-paid-relay
+services:
+  relay:
+    build:
+      context: ../../relay
+      args:
+        VERSION: ${RELAY_VERSION:-dev}
+    image: bramble-relay:${RELAY_VERSION:-dev}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 512m
+    environment:
+      RELAY_PUBLIC_HOST: ${RELAY_PUBLIC_HOST:?set RELAY_PUBLIC_HOST}
+      RELAY_X402_PAY_TO: ${RELAY_HEDERA_ACCOUNT:-}
+      RELAY_HEDERA_ACCOUNT: ${RELAY_HEDERA_ACCOUNT:-}
+      RELAY_X402_PRICE_PER_MIB: ${RELAY_X402_PRICE_PER_MIB:-1000}
+      RELAY_X402_PUBLIC_URL: ${RELAY_X402_PUBLIC_URL:-}
+      RELAY_MAX_BYTES_PER_DAY: ${RELAY_MAX_BYTES_PER_DAY:-3221225472}
+      RELAY_MAX_BYTES_PER_MONTH: ${RELAY_MAX_BYTES_PER_MONTH:-85899345920}
+      RELAY_TRACE: ${RELAY_TRACE:-0}
+    ports:
+      - '9420:9420/tcp'
+      - '3478:3478/udp'
+      - '40000-40999:40000-40999/udp'
+    volumes:
+      - state:/state
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: '3' }
+volumes:
+  state:

@@ -150,3 +150,18 @@ func TestAFullQueueDropsInsteadOfBlocking(t *testing.T) {
 		t.Fatal("Submit blocked on a full queue")
 	}
 }
+
+func TestHederaAddressMakesAKeyOnceAndNeverReturnsIt(t *testing.T) {
+	dir := t.TempDir()
+	a, err := HederaAddress(dir)
+	if err != nil || len(a) != 42 || !strings.HasPrefix(a, "0x") {
+		t.Fatalf("address %q, %v", a, err)
+	}
+	b, err := HederaAddress(dir)
+	if err != nil || b != a {
+		t.Fatalf("a second call changed the key: %q, %v", b, err)
+	}
+	if key := LoadHederaKey(dir); key == "" || strings.Contains(a, key) {
+		t.Fatal("key missing or leaked into the address")
+	}
+}
