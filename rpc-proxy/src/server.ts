@@ -89,6 +89,8 @@ export interface ProxyServer {
 export function createProxyServer(config: Config): ProxyServer {
   const log = new MemoryLog(config.logCapacity)
   const limiter = new RateLimiter(config.rateLimitPerMinute)
+  const upstreams = [config.upstreamUrl, ...(process.env.UPSTREAM_FALLBACK_URLS ?? '').split(',').filter(Boolean)]
+  let upstreamCursor = 0
   const secrets = secretsFromUrl(config.upstreamUrl)
 
   function record(ip: string, call: unknown): string {
@@ -145,14 +147,37 @@ export function createProxyServer(config: Config): ProxyServer {
     }
 
     try {
-      const callUpstream = (body: string) =>
-        fetch(config.upstreamUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body,
-          redirect: 'error',
-          signal: AbortSignal.timeout(config.upstreamTimeoutMs),
-        })
+      // Rotates across upstreams and moves on when one is rate limiting or failing.
+      const callUpstream = async (body: string) => {
+        const start = upstreamCursor++
+        let last: Response | undefined
+        let failure: unknown
+        for (let i = 0; i < upstreams.length; i++) {
+          try {
+            const response = await fetch(upstreams[(start + i) % upstreams.length], {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body,
+              redirect: 'error',
+              signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+            })
+            const text = await response.text()
+            last = new Response(text, {
+              status: response.status,
+              headers: { 'content-type': response.headers.get('content-type') ?? '' },
+            })
+            const limited =
+              response.status === 429 ||
+              response.status >= 500 ||
+              /exceeds defined limit|rate limit|too many requests/i.test(text)
+            if (!limited) return last
+          } catch (err) {
+            failure = err
+          }
+        }
+        if (last) return last
+        throw failure
+      }
       let upstream = await callUpstream(raw)
       let text = await upstream.text()
       // The upstream is a load-balanced pool. A getLogs whose toBlock is the head that eth_blockNumber just
