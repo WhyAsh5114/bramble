@@ -727,6 +727,9 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		if relayPeers[p.Label] || useTraversal(p) {
 			return
 		}
+		if !usesDirectory && len(relays.DataRelays()) == 0 {
+			return // relays all come from flags and there is no data relay: nothing to adopt, ever
+		}
 		go func() {
 			for {
 				select {

@@ -115,7 +115,7 @@ func (d *relayDirectory) Rendezvous() ([]rendezvous.Relay, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(d.sets.Rendezvous) == 0 {
-		return nil, fmt.Errorf("no rendezvous relays known yet; relay discovery retries every %s", relayRefreshInterval)
+		return nil, fmt.Errorf("no rendezvous relays known yet; relay discovery keeps retrying")
 	}
 	return append([]rendezvous.Relay(nil), d.sets.Rendezvous...), nil
 }
