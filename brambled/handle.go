@@ -42,11 +42,38 @@ func (h *Handle) dialGateway(peerLabel string) (net.Conn, error) {
 		return nil, fmt.Errorf("%s is not a tracked peer", peerLabel)
 	}
 	target := netip.AddrPortFrom(p.AllowedIP.Addr(), h.gatewayPort)
-	if h.netstack {
-		return h.node.DialTCP(target)
+	if !h.netstack {
+		return net.DialTimeout("tcp", net.JoinHostPort(target.Addr().String(), strconv.Itoa(int(target.Port()))), dialTimeout)
 	}
-	return net.DialTimeout("tcp", net.JoinHostPort(target.Addr().String(), strconv.Itoa(int(target.Port()))), 10*time.Second)
+	// Netstack dials have no timeout of their own; a peer that revoked us
+	// would hold the call for the TCP connect timeout (about 2 minutes).
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		c, err := h.node.DialTCP(target)
+		if err != nil {
+			ch <- result{nil, err} // DialTCP returns a typed nil on error
+			return
+		}
+		ch <- result{c, nil}
+	}()
+	select {
+	case r := <-ch:
+		return r.c, r.err
+	case <-time.After(dialTimeout):
+		go func() {
+			if r := <-ch; r.c != nil {
+				r.c.Close()
+			}
+		}()
+		return nil, fmt.Errorf("%s did not answer within %s", peerLabel, dialTimeout)
+	}
 }
+
+const dialTimeout = 5 * time.Second
 
 // Services asks peerLabel's gateway which of its services this node may use.
 func (h *Handle) Services(peerLabel string) ([]gateway.ServiceInfo, error) {

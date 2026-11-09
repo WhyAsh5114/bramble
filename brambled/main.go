@@ -624,6 +624,9 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 				}
 			}
 			status.OnAdmissionEvent(e)
+			if e.Authorized && relayPeers[e.Label] {
+				status.OnPathEvent(e.Label, e.PublicKey, "relay")
+			}
 			paths.Handle(e)
 		},
 	}
