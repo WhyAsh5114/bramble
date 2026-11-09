@@ -23,6 +23,8 @@ jobs:
           go-version-file: brambled/go.mod
           cache-dependency-path: brambled/go.sum
 
+      - uses: foundry-rs/foundry-toolchain@v1
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm verify
