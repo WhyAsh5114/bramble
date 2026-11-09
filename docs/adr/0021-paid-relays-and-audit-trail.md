@@ -36,6 +36,17 @@ The archived designs are in the `archive/hackathon` tag: [ADR 0007](0007-rendezv
 4. The relay prices each request. A data-relay session costs by the byte count in the request, as in ADR 0008.
 5. A relay advertises its price and pay-to account. A node picks among relays by price and latency, as in the archived selection. **Open:** where the price and account live in the relay record, and the exact ordering against the free relay.
 
+### Transport
+
+The relay serves the paid route over HTTP on its existing TLS port. It looks at the first bytes of each connection: a `POST ` or `GET ` request line goes to the x402 routes, and anything else is the rendezvous protocol. No new port opens, so the security group, `compose.yml` and `ufw` stay as they are. The node reaches the route with an HTTP client that checks the relay's TLS key against its published pin, so a payment goes only to a relay that was listed. The route is `POST /x402/session?bytes=N`, answered with `402`, then a single-use token that the node presents in the rendezvous `session` message.
+
+### Built and tested on 10 Nov 2026 (offline)
+
+- **Relay (Go), Verified:** `relay/relaysrv/x402.go`. It builds its own requirements and sends only those to the facilitator, rejects a client's changed `accepted` copy, settles before it mints, and issues a token that works once and expires after 10 minutes. Paid mode is off by default and the free path is unchanged. The tests use a fake facilitator.
+- **Node (Go), Verified:** `brambled/hederapay`. The transaction layout follows the reference client (`@x402/hedera` 2.25.0) and was checked against the spec's verification rules: the transaction ID belongs to the fee payer, net token transfers are zero, `payTo` is credited exactly `amount`, the fee payer is never debited, and one signature (the payer's) is present. A spend cap and a testnet-only rule are enforced.
+- **Whole flow, Verified:** the real relay, the real client and the pin-checked HTTP client, with a facilitator stand-in that applies the spec's rules and refuses a repeated transaction ID. A payment signed by the wrong key buys nothing.
+- **Not verified:** a payment through the live Blocky402 facilitator. The stand-in applies the spec as written. It does not prove Blocky402 accepts the same bytes. That needs a funded testnet account and its key.
+
 ### Verified on 10 Nov 2026
 
 The Blocky402 testnet facilitator at `api.testnet.blocky402.com` answers `/supported` with the `exact` scheme on `hedera:testnet`, x402 version 2, fee payer `0.0.7162784`, and two executor accounts.
