@@ -61,7 +61,7 @@ Set `RELAY_X402_PAY_TO` to charge for data sessions. Rendezvous and STUN stay fr
 
 The relay builds the payment requirements itself and sends only those to the facilitator. It issues a token only after settlement succeeds. A token works once and expires after 10 minutes. The token secret is saved in `RELAY_STATE_DIR`, so a restart does not void a token that was already paid for. A used-token list is kept in memory, so a restart inside the 10 minutes would accept a spent token again.
 
-**Verified:** these behaviors against a fake facilitator in `relay/relaysrv/x402_test.go`. **Open:** a payment against the live Blocky402 testnet facilitator, which needs the client side and a funded account.
+**Verified:** these behaviors against a fake facilitator in `relay/relaysrv/x402_test.go`, and one settled HBAR payment against the live Blocky402 testnet facilitator on 10 Nov 2026. **Open:** a payment in USDC.
 
 ## What a relay operator can and cannot do
 

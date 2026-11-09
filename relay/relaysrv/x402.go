@@ -103,10 +103,12 @@ type verifyResponse struct {
 
 type supportedResponse struct {
 	Kinds []struct {
-		X402Version int               `json:"x402Version"`
-		Scheme      string            `json:"scheme"`
-		Network     string            `json:"network"`
-		Extra       map[string]string `json:"extra"`
+		X402Version int    `json:"x402Version"`
+		Scheme      string `json:"scheme"`
+		Network     string `json:"network"`
+		// A facilitator puts more than strings in extra (Blocky402 lists
+		// executors and transfer methods as arrays), so keep it loose.
+		Extra map[string]any `json:"extra"`
 	} `json:"kinds"`
 }
 
@@ -175,8 +177,8 @@ func (f *Facilitator) FeePayer(ctx context.Context, network string) (string, err
 		return "", err
 	}
 	for _, k := range s.Kinds {
-		if k.Scheme == schemeExact && k.Network == network && k.Extra["feePayer"] != "" {
-			f.feePayer, f.fetchedAt = k.Extra["feePayer"], time.Now()
+		if payer, _ := k.Extra["feePayer"].(string); k.Scheme == schemeExact && k.Network == network && payer != "" {
+			f.feePayer, f.fetchedAt = payer, time.Now()
 			return f.feePayer, nil
 		}
 	}

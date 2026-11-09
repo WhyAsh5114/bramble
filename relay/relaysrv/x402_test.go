@@ -1,6 +1,7 @@
 package relaysrv
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"io"
@@ -387,5 +388,23 @@ func TestRendezvousStillWorksOnAPaidRelay(t *testing.T) {
 	a.send(t, message{Type: "offer", To: "idB", Candidate: "sealed-blob"})
 	if m := b.recv(t); m.Type != "offer" || m.Candidate != "sealed-blob" {
 		t.Fatalf("b got %+v", m)
+	}
+}
+
+// TestFeePayerReadsTheRealSupportedReply uses the shape Blocky402 returned on
+// 10 Nov 2026: extra holds arrays as well as strings. An earlier decoder
+// accepted strings only and failed against the live facilitator.
+func TestFeePayerReadsTheRealSupportedReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"kinds":[`+
+			`{"x402Version":2,"scheme":"exact","network":"eip155:80002"},`+
+			`{"x402Version":2,"scheme":"exact","network":"solana:abc","extra":{"feePayer":"SolanaKey","transactionVersions":[0]}},`+
+			`{"x402Version":2,"scheme":"exact","network":"hedera:testnet","extra":{"feePayer":"0.0.7162784","assetTransferMethods":["cryptoTransfer","transferExecutor"],"executors":["0.0.11141171","0.0.11223704"]}}],`+
+			`"extensions":[],"signers":{"hedera:*":["0.0.7162784"]}}`)
+	}))
+	defer srv.Close()
+	got, err := (&Facilitator{BaseURL: srv.URL}).FeePayer(context.Background(), "hedera:testnet")
+	if err != nil || got != "0.0.7162784" {
+		t.Fatalf("fee payer %q err %v", got, err)
 	}
 }

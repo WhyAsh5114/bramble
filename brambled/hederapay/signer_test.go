@@ -104,6 +104,9 @@ func TestPartialTransferLayout(t *testing.T) {
 		t.Fatal("the fee payer must never be debited")
 	}
 
+	if n := len(tx.GetNodeAccountIDs()); n < 1 || n > maxNodes {
+		t.Fatalf("frozen for %d nodes; the facilitator rejects a large list (max %d)", n, maxNodes)
+	}
 	if !key.PublicKey().VerifyTransaction(tx) {
 		t.Fatal("the payer's signature does not verify")
 	}
@@ -176,5 +179,35 @@ func TestBadKeyErrorNeverEchoesTheKey(t *testing.T) {
 	}
 	if _, err := NewSigner("nope", secret); err == nil {
 		t.Fatal("accepted a bad account")
+	}
+}
+
+func TestHBARPaymentIsOffUnlessAllowed(t *testing.T) {
+	s, key := testSigner(t)
+	r := testRequirements()
+	r.Asset = "0.0.0"
+	if _, err := s.PartialTransfer(r); err == nil {
+		t.Fatal("paid in HBAR without the allowance")
+	}
+	s.AllowHBAR = true
+	b64, err := s.PartialTransfer(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := decode(t, b64)
+	if len(tx.GetTokenTransfers()) != 0 {
+		t.Fatal("an HBAR payment carries token transfers")
+	}
+	got := map[string]int64{}
+	var net int64
+	for acct, amt := range tx.GetHbarTransfers() {
+		got[acct.String()] += amt.AsTinybar()
+		net += amt.AsTinybar()
+	}
+	if net != 0 || got[testPayer] != -500 || got[testPayTo] != 500 || len(got) != 2 {
+		t.Fatalf("hbar transfers %v net %d", got, net)
+	}
+	if tx.GetTransactionID().AccountID.String() != testFeePayer || !key.PublicKey().VerifyTransaction(tx) {
+		t.Fatal("fee payer or payer signature wrong")
 	}
 }
