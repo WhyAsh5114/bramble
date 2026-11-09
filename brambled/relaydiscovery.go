@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -24,29 +23,39 @@ type relaySets struct {
 	FixedSTUN       bool
 }
 
+// stunServer is a STUN server and the relay that lists it, so the server is
+// dropped along with a relay that keeps failing.
+type stunServer struct{ Relay, Addr string }
+
+// relayFetch reads the directory once and returns what chooseRelays picked.
+type relayFetch func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error)
+
 // relayDirectory is the live view of the relays a node uses. serve reads it on
 // every use instead of keeping a copy from startup, so a relay registered
 // after the node started is used without a restart (docs/adr/0020).
 //
-// Each refresh merges what chooseRelays picked into the sets that are not
-// Fixed. A refresh adds relays and never removes one: a live session may be
-// using it, and relayHealth already steers new work away from a failing relay. Each set is
-// capped at the size chooseRelays itself returns.
+// Each refresh updates the sets that are not Fixed. It first drops relays that
+// relayHealth has blocked (3 unreachable attempts in a row), unless that would
+// leave a set with nothing usable, then adds what chooseRelays picked up to
+// the cap chooseRelays itself uses. A relay that is not blocked is never
+// dropped: a live session may be using it.
 type relayDirectory struct {
-	mu    sync.Mutex
-	fetch func() ([]rendezvous.Relay, dataRelayFlag, []string, error)
-	sets  relaySets
+	mu      sync.Mutex
+	fetch   relayFetch
+	blocked func(label string) bool
+	sets    relaySets
+	stun    []stunServer // the STUN set with owners, when it is not Fixed
 }
 
-func newRelayDirectory(fetch func() ([]rendezvous.Relay, dataRelayFlag, []string, error), initial relaySets) *relayDirectory {
+func newRelayDirectory(fetch relayFetch, initial relaySets) *relayDirectory {
 	sets := initial
 	sets.Rendezvous = append([]rendezvous.Relay(nil), initial.Rendezvous...)
 	sets.Data = copyDataRelays(initial.Data)
 	sets.STUN = append([]string(nil), initial.STUN...)
-	return &relayDirectory{fetch: fetch, sets: sets}
+	return &relayDirectory{fetch: fetch, blocked: health.blocked, sets: sets}
 }
 
-// refresh asks the directory once and merges the result. On an error the
+// refresh asks the directory once and updates the sets. On an error the
 // current sets stay as they are.
 func (d *relayDirectory) refresh() error {
 	rdv, data, stun, err := d.fetch()
@@ -56,40 +65,69 @@ func (d *relayDirectory) refresh() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.sets.FixedRendezvous {
-		have := map[string]bool{}
-		for _, r := range d.sets.Rendezvous {
-			have[r.Label] = true
-		}
-		for _, r := range rdv {
-			if !have[r.Label] && len(d.sets.Rendezvous) < maxRendezvousRelays {
-				have[r.Label] = true
-				d.sets.Rendezvous = append(d.sets.Rendezvous, r)
-				tracef("relays: rendezvous relay %s added", r.Label)
-			}
-		}
+		label := func(r rendezvous.Relay) string { return r.Label }
+		d.sets.Rendezvous = mergeRelays("rendezvous relay", d.sets.Rendezvous, rdv, label, label, d.blocked, maxRendezvousRelays)
 	}
 	if !d.sets.FixedData {
-		labels := make([]string, 0, len(data))
-		for label := range data {
-			labels = append(labels, label)
-		}
-		sort.Strings(labels)
-		for _, label := range labels {
-			if _, ok := d.sets.Data[label]; !ok && len(d.sets.Data) < maxDataRelays {
-				d.sets.Data[label] = data[label]
-				tracef("relays: data relay %s added", label)
-			}
+		label := func(r rendezvous.Relay) string { return r.Label }
+		merged := mergeRelays("data relay", sortedRelays(d.sets.Data), sortedRelays(data), label, label, d.blocked, maxDataRelays)
+		d.sets.Data = dataRelayFlag{}
+		for _, r := range merged {
+			d.sets.Data[r.Label] = r
 		}
 	}
 	if !d.sets.FixedSTUN {
-		for _, server := range stun {
-			if !slices.Contains(d.sets.STUN, server) && len(d.sets.STUN) < maxSTUNServers {
-				d.sets.STUN = append(d.sets.STUN, server)
-				tracef("relays: STUN server %s added", server)
-			}
+		addr := func(s stunServer) string { return s.Addr }
+		owner := func(s stunServer) string { return s.Relay }
+		d.stun = mergeRelays("STUN server", d.stun, stun, addr, owner, d.blocked, maxSTUNServers)
+		d.sets.STUN = d.sets.STUN[:0]
+		for _, s := range d.stun {
+			d.sets.STUN = append(d.sets.STUN, s.Addr)
 		}
 	}
 	return nil
+}
+
+// mergeRelays drops blocked entries from have, unless none of have or found
+// would be left usable, then appends entries of found that are new and not
+// blocked, up to max. id identifies an entry; owner is the relay label that
+// blocked is asked about.
+func mergeRelays[T any](kind string, have, found []T, id, owner func(T) string, blocked func(string) bool, max int) []T {
+	usable := false
+	for _, e := range append(append([]T(nil), have...), found...) {
+		if !blocked(owner(e)) {
+			usable = true
+			break
+		}
+	}
+	out := make([]T, 0, max)
+	seen := map[string]bool{}
+	for _, e := range have {
+		if usable && blocked(owner(e)) {
+			tracef("relays: %s %s dropped after repeated failures", kind, id(e))
+			continue
+		}
+		seen[id(e)] = true
+		out = append(out, e)
+	}
+	for _, e := range found {
+		if seen[id(e)] || blocked(owner(e)) || len(out) >= max {
+			continue
+		}
+		seen[id(e)] = true
+		out = append(out, e)
+		tracef("relays: %s %s added", kind, id(e))
+	}
+	return out
+}
+
+func sortedRelays(pool dataRelayFlag) []rendezvous.Relay {
+	out := make([]rendezvous.Relay, 0, len(pool))
+	for _, r := range pool {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
+	return out
 }
 
 // run refreshes every interval until ctx ends. A failed refresh is logged and

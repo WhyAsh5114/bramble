@@ -510,7 +510,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// while the node runs, so a relay registered after startup is picked up
 	// without a restart. An unreachable or empty directory is not fatal.
 	usesDirectory := *rendezvousAddr == "" || len(dataRelays) == 0
-	relays := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
+	relays := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		dir, err := m.Relays()
 		if err != nil {
 			return nil, nil, nil, err

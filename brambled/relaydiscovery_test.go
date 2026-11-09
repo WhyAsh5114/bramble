@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,8 +51,8 @@ func liveRelay(label string) rendezvous.Relay {
 func TestRelayDirectoryAddsRelaysThatAppearLater(t *testing.T) {
 	var found []rendezvous.Relay
 	data := dataRelayFlag{}
-	var stun []string
-	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []string, error) { return found, data, stun, nil }
+	var stun []stunServer
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) { return found, data, stun, nil }
 	dir := newRelayDirectory(fetch, relaySets{})
 
 	if err := dir.refresh(); err != nil {
@@ -66,7 +67,7 @@ func TestRelayDirectoryAddsRelaysThatAppearLater(t *testing.T) {
 
 	found = []rendezvous.Relay{liveRelay("mumbai")}
 	data = dataRelayFlag{"mumbai": liveRelay("mumbai")}
-	stun = []string{"mumbai.example:3478"}
+	stun = []stunServer{{Relay: "mumbai", Addr: "mumbai.example:3478"}}
 	if err := dir.refresh(); err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +85,14 @@ func TestRelayDirectoryAddsRelaysThatAppearLater(t *testing.T) {
 
 func TestRelayDirectoryNeverRemovesAndDedupes(t *testing.T) {
 	found := []rendezvous.Relay{liveRelay("a")}
-	stun := []string{"a:3478"}
-	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
+	stun := []stunServer{{Relay: "a", Addr: "a:3478"}}
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		return found, dataRelayFlag{}, stun, nil
 	}
 	dir := newRelayDirectory(fetch, relaySets{})
 	_ = dir.refresh()
 	found = []rendezvous.Relay{liveRelay("b"), liveRelay("a")}
-	stun = []string{"b:3478", "a:3478"}
+	stun = []stunServer{{Relay: "b", Addr: "b:3478"}, {Relay: "a", Addr: "a:3478"}}
 	_ = dir.refresh()
 	found, stun = nil, nil
 	_ = dir.refresh()
@@ -108,14 +109,14 @@ func TestRelayDirectoryNeverRemovesAndDedupes(t *testing.T) {
 func TestRelayDirectoryCapsEachSet(t *testing.T) {
 	var found []rendezvous.Relay
 	data := dataRelayFlag{}
-	var stun []string
+	var stun []stunServer
 	for i := 0; i < 10; i++ {
 		r := liveRelay(string(rune('a' + i)))
 		found = append(found, r)
 		data[r.Label] = r
-		stun = append(stun, r.Label+":3478")
+		stun = append(stun, stunServer{Relay: r.Label, Addr: r.Label + ":3478"})
 	}
-	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		return found, data, stun, nil
 	}, relaySets{})
 	_ = dir.refresh()
@@ -126,8 +127,8 @@ func TestRelayDirectoryCapsEachSet(t *testing.T) {
 }
 
 func TestRelayDirectoryLeavesFixedSetsAlone(t *testing.T) {
-	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
-		return []rendezvous.Relay{liveRelay("dir")}, dataRelayFlag{"dir": liveRelay("dir")}, []string{"dir:3478"}, nil
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("dir")}, dataRelayFlag{"dir": liveRelay("dir")}, []stunServer{{Relay: "dir", Addr: "dir:3478"}}, nil
 	}
 	static := relaySets{
 		Rendezvous: []rendezvous.Relay{liveRelay("flag")}, FixedRendezvous: true,
@@ -150,11 +151,11 @@ func TestRelayDirectoryLeavesFixedSetsAlone(t *testing.T) {
 
 func TestRelayDirectoryKeepsStateWhenFetchFails(t *testing.T) {
 	fail := false
-	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		if fail {
 			return nil, nil, nil, errors.New("registry unreachable")
 		}
-		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []string{"a:3478"}, nil
+		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []stunServer{{Relay: "a", Addr: "a:3478"}}, nil
 	}
 	dir := newRelayDirectory(fetch, relaySets{})
 	_ = dir.refresh()
@@ -171,8 +172,8 @@ func TestRelayDirectoryKeepsStateWhenFetchFails(t *testing.T) {
 }
 
 func TestRelayDirectoryReturnsCopies(t *testing.T) {
-	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
-		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []string{"a:3478"}, nil
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{"a": liveRelay("a")}, []stunServer{{Relay: "a", Addr: "a:3478"}}, nil
 	}, relaySets{})
 	_ = dir.refresh()
 	dir.DataRelays()["evil"] = liveRelay("evil")
@@ -184,7 +185,7 @@ func TestRelayDirectoryReturnsCopies(t *testing.T) {
 
 func TestRelayDirectoryRunRefreshesUntilCancelled(t *testing.T) {
 	calls := make(chan struct{}, 10)
-	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
+	dir := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
 		calls <- struct{}{}
 		return []rendezvous.Relay{liveRelay("a")}, dataRelayFlag{}, nil, nil
 	}, relaySets{})
@@ -203,5 +204,87 @@ func TestRelayDirectoryRunRefreshesUntilCancelled(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not stop on cancel")
+	}
+}
+
+// fakeHealth blocks the labels in its set, standing in for relayHealth.
+type fakeHealth map[string]bool
+
+func (f fakeHealth) blocked(label string) bool { return f[label] }
+
+func TestRelayDirectoryReplacesABlockedRelay(t *testing.T) {
+	found := []string{"a", "b", "c", "d"}
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		var rdv []rendezvous.Relay
+		data := dataRelayFlag{}
+		var stun []stunServer
+		for _, l := range found {
+			rdv = append(rdv, liveRelay(l))
+			data[l] = liveRelay(l)
+			stun = append(stun, stunServer{Relay: l, Addr: l + ":3478"})
+		}
+		return rdv, data, stun, nil
+	}
+	h := fakeHealth{}
+	dir := newRelayDirectory(fetch, relaySets{})
+	dir.blocked = h.blocked
+	_ = dir.refresh() // full: a b c d
+
+	h["b"] = true
+	found = []string{"a", "c", "d", "e"} // chooseRelays skips a blocked relay
+	_ = dir.refresh()
+
+	rdv, _ := dir.Rendezvous()
+	var labels []string
+	for _, r := range rdv {
+		labels = append(labels, r.Label)
+	}
+	if strings.Join(labels, ",") != "a,c,d,e" {
+		t.Fatalf("Rendezvous = %v, want b replaced by e", labels)
+	}
+	if _, ok := dir.DataRelays()["b"]; ok {
+		t.Fatal("blocked data relay b kept")
+	}
+	if _, ok := dir.DataRelays()["e"]; !ok {
+		t.Fatal("data relay e not added")
+	}
+	if got := strings.Join(dir.STUN(), ","); got != "a:3478,c:3478,d:3478,e:3478" {
+		t.Fatalf("STUN = %s, want b's server replaced by e's", got)
+	}
+}
+
+func TestRelayDirectoryKeepsABlockedRelayWhenItIsTheOnlyOne(t *testing.T) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("only")}, dataRelayFlag{"only": liveRelay("only")}, []stunServer{{Relay: "only", Addr: "only:3478"}}, nil
+	}
+	h := fakeHealth{}
+	dir := newRelayDirectory(fetch, relaySets{})
+	dir.blocked = h.blocked
+	_ = dir.refresh()
+	h["only"] = true
+	_ = dir.refresh()
+	if rdv, err := dir.Rendezvous(); err != nil || len(rdv) != 1 {
+		t.Fatalf("Rendezvous = %v %v, want the only relay kept", rdv, err)
+	}
+	if len(dir.DataRelays()) != 1 || len(dir.STUN()) != 1 {
+		t.Fatal("the only data relay or STUN server was dropped")
+	}
+}
+
+func TestRelayDirectoryNeverEvictsFixedRelays(t *testing.T) {
+	fetch := func() ([]rendezvous.Relay, dataRelayFlag, []stunServer, error) {
+		return []rendezvous.Relay{liveRelay("dir")}, dataRelayFlag{"dir": liveRelay("dir")}, nil, nil
+	}
+	dir := newRelayDirectory(fetch, relaySets{
+		Rendezvous: []rendezvous.Relay{liveRelay("flag")}, FixedRendezvous: true,
+		Data: dataRelayFlag{"flag": liveRelay("flag")}, FixedData: true,
+	})
+	dir.blocked = fakeHealth{"flag": true}.blocked
+	_ = dir.refresh()
+	if rdv, _ := dir.Rendezvous(); len(rdv) != 1 || rdv[0].Label != "flag" {
+		t.Fatalf("Rendezvous = %v, want the flag relay", rdv)
+	}
+	if _, ok := dir.DataRelays()["flag"]; !ok {
+		t.Fatal("flag data relay evicted")
 	}
 }
