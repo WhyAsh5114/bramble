@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -154,4 +155,20 @@ func (n Network) registrationBlock(ctx context.Context, rpc *RPC, label string) 
 		return 0, fmt.Errorf("%s.%s: no registration found", label, n.NetSuffix)
 	}
 	return found, nil
+}
+
+// HasRootRoles reports whether account holds roleBitmap on registry's root resource (EAC).
+func (r *RPC) HasRootRoles(ctx context.Context, registry string, roleBitmap uint64, account string) (bool, error) {
+	data := append([]byte(nil), Keccak256([]byte("hasRootRoles(uint256,address)"))[:4]...)
+	data = append(data, leftPad(new(big.Int).SetUint64(roleBitmap).Bytes())...)
+	addr, err := hexDecode(account)
+	if err != nil || len(addr) != 20 {
+		return false, fmt.Errorf("invalid address %q", account)
+	}
+	data = append(data, leftPad(addr)...)
+	out, err := r.Call(ctx, registry, data)
+	if err != nil {
+		return false, err
+	}
+	return len(out) >= 32 && out[31] == 1, nil
 }

@@ -1,66 +1,81 @@
+// Package daemon is the bramble background process: it keeps this device's
+// key, watches its tailnet on-chain through a local registry cache, runs the
+// node once the device is enrolled, and serves the local web UI's API.
+//
+// Nothing here talks to a Bramble server. Creating a tailnet, enrolling a
+// device and granting access are wallet transactions the UI sends from the
+// browser; the daemon only reads the chain and computes values that need this
+// device's key (ADR 0019).
 package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/WhyAsh5114/bramble/brambled"
+	"github.com/WhyAsh5114/bramble/brambled/gateway"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
+	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
+	"github.com/WhyAsh5114/bramble/brambled/statusapi"
 )
 
-// Daemon is the running `bramble up`: one device, one state machine, at most
-// one brambled child.
+// Phases of this device.
+const (
+	PhaseSetup   = "setup"   // no tailnet chosen
+	PhaseSyncing = "syncing" // reading the tailnet from the chain for the first time
+	PhaseWaiting = "waiting" // chosen, but this device is not enrolled with its key yet
+	PhaseMember  = "member"  // enrolled; the node runs
+	PhaseRevoked = "revoked" // the tailnet revoked this device or its record expired
+)
+
+// Daemon is the background process. Fields above mu are set before Run.
 type Daemon struct {
-	Store     *Store
-	ConfigURL string
-	Brambled  string
-	TUN       bool
-	Logger    *log.Logger
+	Store      *Store
+	Network    registry.Network
+	Logger     *log.Logger
+	Version    string
+	ListenPort uint16 // WireGuard UDP port; 0 picks 41641
+	TUN        bool   // real interface instead of userspace networking
+	// RPCOverride replaces every RPC endpoint (tests).
+	RPCOverride []string
 
-	// Intervals; zero means the default.
-	PendingPoll  time.Duration // join status while pending (default 2 s)
-	ApprovedPoll time.Duration // join status after approval (default 10 s)
-	HealthPoll   time.Duration // node status API (default 1 s)
-	// StartupGrace is how long a fresh node may stay silent before the UI
-	// reports a problem. The sidecar waits for Tor first: up to 390 s
-	// (brambled/sidecar.DefaultTorReadyTimeout).
-	StartupGrace time.Duration
-	// startNode is replaced in tests.
-	startNode func(NodeSpec) (nodeHandle, error)
-
-	mu sync.Mutex
-	// joinEpoch counts Leave calls; joining is set while a join request is
-	// in flight. Together they stop a slow request from changing the state
-	// after the person has left, and stop two requests overlapping.
-	joinEpoch uint64
-	joining   bool
-	m         *Machine
-	id        Identity
-	pubkey    string
-	cfg       *NodeConfig
-	node      nodeHandle
-	nodeSince time.Time
-	retryAt   time.Time
-	backoff   time.Duration
-	lastPoll  time.Time
-	wake      chan struct{}
+	mu       sync.Mutex
+	id       Identity
+	pub      string
+	saved    Saved
+	rpc      *registry.RPC
+	tn       *registry.Tailnet
+	tnCancel context.CancelFunc
+	tnRef    string
+	node     *nodeRun
+	phase    string
+	problem  string
+	ping     *pingServer
+	forwards map[string]*forward
+	wake     chan struct{}
+	relayMu  sync.Mutex
+	relayAt  time.Time
+	relayOut []RelayInfo
 }
 
-// nodeHandle is the part of *RunningNode the daemon uses.
-type nodeHandle interface {
-	Done() <-chan struct{}
-	ExitSummary() string
-	Stop(timeout time.Duration)
-	FetchPeers(ctx context.Context, now time.Time) ([]Peer, error)
-	ForwardPort(peer, service string) (int, bool)
-}
-
-// ForwardPort returns the loopback port forwarded to peer's service.
-func (n *RunningNode) ForwardPort(peer, service string) (int, bool) {
-	p, ok := n.Ports.Forwards[ServiceKey(peer, service)]
-	return p, ok
+type nodeRun struct {
+	key    string
+	cancel context.CancelFunc
+	done   chan struct{}
+	handle *brambled.Handle
+	err    error
 }
 
 func (d *Daemon) logf(format string, args ...any) {
@@ -69,15 +84,8 @@ func (d *Daemon) logf(format string, args ...any) {
 	}
 }
 
-func durOr(v, def time.Duration) time.Duration {
-	if v > 0 {
-		return v
-	}
-	return def
-}
-
-// Init loads (or creates) the identity and restores the state machine.
-func (d *Daemon) Init(ctx context.Context) error {
+// Init loads the key and saved state.
+func (d *Daemon) Init() error {
 	if err := d.Store.Ensure(); err != nil {
 		return err
 	}
@@ -89,24 +97,30 @@ func (d *Daemon) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	join, err := d.Store.LoadJoin()
+	saved, err := d.Store.LoadSaved()
 	if err != nil {
 		return err
 	}
-	d.id, d.pubkey = id, pub
-	d.m = NewMachine(id.Name, join)
+	if _, err := rendezvous.RegisterIdentity(id.PrivateKeyHex); err != nil {
+		return err
+	}
+	if d.Network.ChainID == 0 {
+		d.Network = registry.Sepolia
+	}
+	d.id, d.pub, d.saved = id, pub, saved
+	d.rpc = d.newRPC(saved.RPCURLs)
+	d.forwards = map[string]*forward{}
 	d.wake = make(chan struct{}, 1)
-	if d.startNode == nil {
-		d.startNode = func(s NodeSpec) (nodeHandle, error) { return StartNode(s) }
-	}
-	if d.ConfigURL != "" {
-		if cfg, err := FetchNodeConfig(ctx, d.ConfigURL); err == nil {
-			d.cfg = cfg
-		} else {
-			d.logf("node config: %v", err)
-		}
-	}
+	d.phase = PhaseSetup
 	return nil
+}
+
+// newRPC puts the user's endpoints first and the public ones after.
+func (d *Daemon) newRPC(user []string) *registry.RPC {
+	if len(d.RPCOverride) > 0 {
+		return registry.NewRPC(d.RPCOverride)
+	}
+	return registry.NewRPC(append(append([]string(nil), user...), registry.DefaultRPCURLs...))
 }
 
 func (d *Daemon) poke() {
@@ -116,65 +130,261 @@ func (d *Daemon) poke() {
 	}
 }
 
-// Run drives join polling and node supervision until ctx ends, then stops
-// the node.
+// Run keeps the device in step with the chain until ctx ends.
 func (d *Daemon) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); d.pollLoop(ctx) }()
-	go func() { defer wg.Done(); d.nodeLoop(ctx) }()
-	wg.Wait()
+	ping, err := startPing(d)
+	if err != nil {
+		d.logf("ping service: %v", err)
+	}
 	d.mu.Lock()
-	node := d.node
-	d.node = nil
+	d.ping = ping
 	d.mu.Unlock()
-	if node != nil {
-		node.Stop(10 * time.Second)
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		d.reconcile(ctx)
+		select {
+		case <-ctx.Done():
+			d.mu.Lock()
+			d.stopNodeLocked()
+			d.stopCacheLocked()
+			for _, f := range d.forwards {
+				f.ln.Close()
+			}
+			d.mu.Unlock()
+			if ping != nil {
+				ping.ln.Close()
+			}
+			return
+		case <-t.C:
+		case <-d.wake:
+		}
 	}
 }
 
-// State is GET /api/state's response (ETH-177 contract v1). PublicKey and
-// DefaultTailnet are additions: the admin compares the key, and the UI can
-// prefill the tailnet this install was set up for.
+func (d *Daemon) stopCacheLocked() {
+	if d.tnCancel != nil {
+		d.tnCancel()
+	}
+	d.tn, d.tnCancel, d.tnRef = nil, nil, ""
+}
+
+func (d *Daemon) stopNodeLocked() {
+	if d.node == nil {
+		return
+	}
+	n := d.node
+	d.node = nil
+	n.cancel()
+	d.mu.Unlock()
+	select {
+	case <-n.done:
+	case <-time.After(5 * time.Second):
+	}
+	d.mu.Lock()
+}
+
+func (d *Daemon) reconcile(ctx context.Context) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ref := d.saved.Tailnet
+	if ref == nil {
+		d.stopNodeLocked()
+		d.stopCacheLocked()
+		d.phase, d.problem = PhaseSetup, ""
+		return
+	}
+	key := fmt.Sprintf("%s@%s#%d", ref.Name, ref.Registry, ref.Start)
+	if d.tn == nil || d.tnRef != key {
+		d.stopNodeLocked()
+		d.stopCacheLocked()
+		tn, err := registry.NewTailnet(registry.TailnetConfig{
+			RPC: d.rpc, Name: ref.Name, Registry: ref.Registry, RegistryStart: ref.Start,
+			RelayRegistry: d.Network.RelayRegistry, RelayRegistryStart: d.Network.RelayStart, RelaySuffix: d.Network.RelaySuffix,
+			Path: d.Store.CachePath(),
+		})
+		if err != nil {
+			d.phase, d.problem = PhaseSyncing, err.Error()
+			return
+		}
+		cctx, cancel := context.WithCancel(ctx)
+		d.tn, d.tnCancel, d.tnRef = tn, cancel, key
+		go tn.Run(cctx)
+	}
+	st := d.tn.Status()
+	if st.LastSync.IsZero() {
+		d.phase = PhaseSyncing
+		d.problem = st.Error
+		return
+	}
+	rec, err := d.tn.ResolveDevice(d.saved.Label)
+	switch {
+	case err != nil || rec.Pubkey == nil || *rec.Pubkey != d.pub:
+		d.stopNodeLocked()
+		d.phase, d.problem = PhaseWaiting, ""
+		if err == nil && rec.Pubkey != nil && *rec.Pubkey != d.pub {
+			d.problem = fmt.Sprintf("%s is enrolled with a different key. Pick another device name, or ask the admin to replace it.", d.saved.Label)
+		}
+		return
+	case rec.Revoked || expired(rec.Expiry):
+		d.stopNodeLocked()
+		d.phase, d.problem = PhaseRevoked, ""
+		return
+	}
+	d.phase = PhaseMember
+	d.ensureNodeLocked(ctx)
+}
+
+func expired(expiry string) bool {
+	n, err := strconv.ParseInt(expiry, 10, 64)
+	return err != nil || n <= time.Now().Unix()
+}
+
+// nodeArgs builds brambled serve flags. The private key stays in-process.
+func (d *Daemon) nodeArgsLocked() []string {
+	port := d.ListenPort
+	if port == 0 {
+		port = 41641
+	}
+	args := []string{"-label", d.saved.Label, "-private-key", d.id.PrivateKeyHex, "-listen-port", strconv.Itoa(int(port)),
+		"-status-port", "0", "-ttl", "5s", "-max-stale", "2m"}
+	if !d.TUN {
+		args = append(args, "-netstack")
+	}
+	if d.ping != nil && !d.saved.NoPing {
+		args = append(args, "-service", fmt.Sprintf("%s=%d/open", PingService, d.ping.port))
+	}
+	for _, s := range d.saved.Services {
+		v := fmt.Sprintf("%s=%d", s.Name, s.Port)
+		if s.Open {
+			v += "/open"
+		}
+		args = append(args, "-service", v)
+	}
+	if d.saved.RelayFirst {
+		args = append(args, "-relay-first")
+	}
+	var stun []string
+	if relays, err := d.tn.Relays(); err == nil {
+		for _, r := range relays {
+			if r.STUN != "" {
+				stun = append(stun, r.STUN)
+			}
+		}
+	}
+	if len(stun) > 0 {
+		args = append(args, "-stun-servers", strings.Join(stun, ","))
+	}
+	return args
+}
+
+func (d *Daemon) ensureNodeLocked(ctx context.Context) {
+	args := d.nodeArgsLocked()
+	key := strings.Join(args, "\x00")
+	if d.node != nil && d.node.key == key {
+		select {
+		case <-d.node.done:
+			// It exited: restart below after recording why.
+			d.problem = fmt.Sprintf("the node stopped: %v; restarting", d.node.err)
+			d.node = nil
+		default:
+			return
+		}
+	}
+	d.stopNodeLocked()
+	nctx, cancel := context.WithCancel(ctx)
+	n := &nodeRun{key: key, cancel: cancel, done: make(chan struct{})}
+	d.node = n
+	tn := d.tn
+	d.logf("starting the node as %s", d.saved.Label)
+	go func() {
+		defer close(n.done)
+		n.err = brambled.Serve(nctx, tn, args, func(h *brambled.Handle) {
+			d.mu.Lock()
+			n.handle = h
+			d.mu.Unlock()
+		})
+		if n.err != nil {
+			d.logf("node stopped: %v", n.err)
+		}
+	}()
+}
+
+// ---- State ----
+
+// State is what the UI polls.
 type State struct {
-	Phase          Phase  `json:"phase"`
-	Name           string `json:"name"`
-	Fingerprint    string `json:"fingerprint"`
-	PublicKey      string `json:"publicKey"`
-	Tailnet        string `json:"tailnet,omitempty"`
-	DefaultTailnet string `json:"defaultTailnet,omitempty"`
-	JoinID         string `json:"joinId,omitempty"`
-	MeshIP         string `json:"meshIp,omitempty"`
-	IsAdmin        bool   `json:"isAdmin"`
-	Peers          []Peer `json:"peers"`
-	// Services lists the tailnet services this device can open in a
-	// browser, once it is approved. Each URL is its loopback forward.
-	Services []ServiceLink `json:"services,omitempty"`
-	Error    *ErrorInfo    `json:"error,omitempty"`
+	Version     string        `json:"version"`
+	Phase       string        `json:"phase"`
+	Problem     string        `json:"problem,omitempty"`
+	PublicKey   string        `json:"publicKey"`
+	Fingerprint string        `json:"fingerprint"`
+	Label       string        `json:"label,omitempty"`
+	Tailnet     *TailnetRef   `json:"tailnet,omitempty"`
+	JoinCode    string        `json:"joinCode,omitempty"`
+	Chain       *ChainInfo    `json:"chain,omitempty"`
+	Node        *NodeInfo     `json:"node,omitempty"`
+	Network     NetworkInfo   `json:"network"`
+	Settings    SettingsInfo  `json:"settings"`
+	Services    []ServiceInfo `json:"services"`
 }
 
-// ServiceLink is one service from the node config and the loopback URL
-// that reaches it. A link only says where the forward listens; the gateway
-// still decides each connection.
-type ServiceLink struct {
-	Peer    string `json:"peer"`
-	Service string `json:"service"`
-	URL     string `json:"url"`
+// ChainInfo is the registry cache's freshness.
+type ChainInfo struct {
+	Head      uint64    `json:"head"`
+	Confirmed uint64    `json:"confirmed"`
+	LastSync  time.Time `json:"lastSync"`
+	Error     string    `json:"error,omitempty"`
+	Endpoints []string  `json:"endpoints"`
 }
 
-// Fingerprint is the first 16 hex digits of the public key in groups of
-// four, so a person can compare it with the key the admin sees.
-func Fingerprint(pubkeyHex string) string {
-	s := pubkeyHex
-	if len(s) > 16 {
-		s = s[:16]
+// NodeInfo describes the running node.
+type NodeInfo struct {
+	Running  bool   `json:"running"`
+	Address  string `json:"address,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	STUN     string `json:"stun,omitempty"`
+}
+
+// NetworkInfo is what the UI needs to send wallet transactions.
+type NetworkInfo struct {
+	ChainID          uint64 `json:"chainId"`
+	NetSuffix        string `json:"netSuffix"`
+	NetRegistry      string `json:"netRegistry"`
+	NetRegistrar     string `json:"netRegistrar"`
+	RelaySuffix      string `json:"relaySuffix"`
+	RelayRegistry    string `json:"relayRegistry"`
+	RelayRegistrar   string `json:"relayRegistrar"`
+	ETHRegistry      string `json:"ethRegistry"`
+	ExplorerTx       string `json:"explorerTx"`
+	ExplorerAddress  string `json:"explorerAddress"`
+	UserRegistryImpl string `json:"userRegistryImpl"`
+	ResolverImpl     string `json:"resolverImpl"`
+}
+
+// SettingsInfo is the user-editable configuration.
+type SettingsInfo struct {
+	Ping       bool     `json:"ping"`
+	RelayFirst bool     `json:"relayFirst"`
+	RPCURLs    []string `json:"rpcUrls"`
+}
+
+// ServiceInfo is a service this device exposes.
+type ServiceInfo struct {
+	Name    string `json:"name"`
+	Port    uint16 `json:"port"`
+	Open    bool   `json:"open"`
+	BuiltIn bool   `json:"builtIn,omitempty"`
+}
+
+func (d *Daemon) networkInfo() NetworkInfo {
+	n := d.Network
+	return NetworkInfo{
+		ChainID: n.ChainID, NetSuffix: n.NetSuffix, NetRegistry: n.NetRegistry, NetRegistrar: n.NetRegistrar,
+		RelaySuffix: n.RelaySuffix, RelayRegistry: n.RelayRegistry, RelayRegistrar: n.RelayRegistrar, ETHRegistry: n.ETHRegistry,
+		ExplorerTx: "https://sepolia.etherscan.io/tx/", ExplorerAddress: "https://sepolia.etherscan.io/address/",
+		UserRegistryImpl: n.UserRegistryImpl, ResolverImpl: n.ResolverImpl,
 	}
-	var groups []string
-	for len(s) > 4 {
-		groups = append(groups, s[:4])
-		s = s[4:]
-	}
-	return strings.Join(append(groups, s), " ")
 }
 
 // State returns the current state.
@@ -182,437 +392,559 @@ func (d *Daemon) State() State {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	st := State{
-		Phase:       d.m.Phase(),
-		Name:        d.m.Name(),
-		Fingerprint: Fingerprint(d.pubkey),
-		PublicKey:   d.pubkey,
-		Tailnet:     d.m.Tailnet(),
-		JoinID:      d.m.JoinID(),
-		MeshIP:      d.m.MeshIP(),
-		IsAdmin:     d.Store.AdminToken() != "",
-		Peers:       d.m.Peers(),
-		Error:       d.m.Reason(),
+		Version: d.Version, Phase: d.phase, Problem: d.problem, PublicKey: d.pub, Fingerprint: Fingerprint(d.pub),
+		Label: d.saved.Label, Tailnet: d.saved.Tailnet, Network: d.networkInfo(),
+		Settings: SettingsInfo{Ping: !d.saved.NoPing, RelayFirst: d.saved.RelayFirst, RPCURLs: append([]string{}, d.saved.RPCURLs...)},
+		Services: d.servicesLocked(),
 	}
-	if d.cfg != nil {
-		st.DefaultTailnet = d.cfg.Tailnet
+	if d.saved.Tailnet != nil && d.saved.Label != "" {
+		st.JoinCode = JoinCode{Tailnet: d.saved.Tailnet.Name, Label: d.saved.Label, Pubkey: d.pub}.Encode()
 	}
-	if base := d.m.Base(); (base == PhaseConnected || base == PhaseApproved) && d.node != nil && d.cfg != nil {
-		for _, s := range d.cfg.Services {
-			if s.Peer == st.Name {
-				continue
-			}
-			if port, ok := d.node.ForwardPort(s.Peer, s.Service); ok {
-				st.Services = append(st.Services, ServiceLink{Peer: s.Peer, Service: s.Service, URL: fmt.Sprintf("http://127.0.0.1:%d%s", port, s.Path)})
-			}
+	if d.tn != nil {
+		cs := d.tn.Status()
+		st.Chain = &ChainInfo{Head: cs.Head, Confirmed: cs.Confirmed, LastSync: cs.LastSync, Error: cs.Error, Endpoints: cs.Endpoints}
+	}
+	if d.node != nil {
+		ni := &NodeInfo{}
+		select {
+		case <-d.node.done:
+		default:
+			ni.Running = d.node.handle != nil
 		}
+		if h := d.node.handle; h != nil {
+			ni.Address = h.Address.String()
+			ep := h.Endpoint()
+			ni.STUN = ep.State
+			ni.Endpoint = ep.Endpoint
+		}
+		st.Node = ni
 	}
 	return st
 }
 
-// Setup sets the device name.
-func (d *Daemon) Setup(name string) error {
-	name = strings.TrimSpace(name)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := d.m.Setup(name); err != nil {
-		return err
+func (d *Daemon) servicesLocked() []ServiceInfo {
+	out := []ServiceInfo{}
+	if !d.saved.NoPing && d.ping != nil {
+		out = append(out, ServiceInfo{Name: PingService, Port: uint16(d.ping.port), Open: true, BuiltIn: true})
 	}
-	d.id.Name = name
-	if err := d.Store.SaveIdentity(d.id); err != nil {
-		return &ErrorInfo{Message: "Bramble could not save the device name: " + err.Error(), NextStep: "Check that " + d.Store.Dir + " is writable, then try again."}
+	for _, s := range d.saved.Services {
+		out = append(out, ServiceInfo{Name: s.Name, Port: s.Port, Open: s.Open})
 	}
-	return nil
+	return out
 }
 
-// config returns the node config, fetching it if needed.
-func (d *Daemon) config(ctx context.Context, refresh bool) (*NodeConfig, error) {
-	d.mu.Lock()
-	cfg, src := d.cfg, d.ConfigURL
-	d.mu.Unlock()
-	if cfg != nil && !refresh {
-		return cfg, nil
+// ---- Tailnet selection ----
+
+// Lookup resolves a tailnet name on-chain. A bare label means <label>.<net suffix>.
+func (d *Daemon) Lookup(ctx context.Context, name string, start uint64) (*TailnetRef, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil, errors.New("enter a tailnet name")
 	}
-	if src == "" {
-		return nil, &ErrorInfo{
-			Message:  "Bramble does not know where to find the tailnet's settings.",
-			NextStep: "Restart it with `bramble up -config https://<install host>`, using the host you installed from.",
-		}
+	if !strings.Contains(name, ".") {
+		name += "." + d.Network.NetSuffix
 	}
-	fresh, err := FetchNodeConfig(ctx, src)
+	r, err := d.Network.ResolveTailnet(ctx, d.rpc, name, start)
 	if err != nil {
-		if cfg != nil {
-			d.logf("node config refresh failed, keeping the last one: %v", err)
-			return cfg, nil
-		}
-		return nil, &ErrorInfo{
-			Message:  "Bramble could not load the tailnet's settings from " + src + ".",
-			NextStep: "Check the internet connection and the install host, then try again.",
-		}
+		return nil, err
 	}
-	d.mu.Lock()
-	d.cfg = fresh
-	d.mu.Unlock()
-	return fresh, nil
+	return &TailnetRef{Name: r.Name, Registry: r.Registry, Resolver: r.Resolver, Owner: r.Owner, Start: r.Start}, nil
 }
 
-// errJoinCancelled is returned to a Join whose request was overtaken by Leave.
-var errJoinCancelled = &ErrorInfo{
-	Message:  "The join request was cancelled because this device left the tailnet.",
-	NextStep: "Press Join again if you still want to join.",
-}
-
-// Join sends a join request for tailnet.
-func (d *Daemon) Join(ctx context.Context, tailnet string) error {
-	tailnet = strings.ToLower(strings.TrimSpace(tailnet))
-	d.mu.Lock()
-	err := d.m.CanJoin()
-	if err == nil && d.joining {
-		err = busy("A join request is already being sent.", "Wait a moment, then check the status.")
+// Select makes this device a member (or would-be member) of a tailnet under label.
+func (d *Daemon) Select(ctx context.Context, name, label string, start uint64) error {
+	if !LabelRE.MatchString(label) {
+		return errors.New("a device name uses lowercase letters, digits and hyphens, up to 32 characters")
 	}
-	name, epoch := d.m.Name(), d.joinEpoch
-	if err == nil {
-		d.joining = true
-	}
-	d.mu.Unlock()
+	ref, err := d.Lookup(ctx, name, start)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		d.mu.Lock()
-		d.joining = false
-		d.mu.Unlock()
-	}()
-	cfg, err := d.config(ctx, true)
-	if err != nil {
-		return d.failIf(epoch, err)
-	}
-	if tailnet == "" {
-		tailnet = cfg.Tailnet
-	}
-	if tailnet != cfg.Tailnet {
-		return &ErrorInfo{
-			Message:  fmt.Sprintf("This install is set up for %s, not %s.", cfg.Tailnet, tailnet),
-			NextStep: fmt.Sprintf("Check the spelling, or install Bramble from the host that runs %s.", tailnet),
-		}
-	}
-	jc := &JoinClient{BaseURL: cfg.JoinAPI}
-	j, err := jc.Request(ctx, name, d.pubkey, tailnet)
-	if err != nil {
-		var apiErr *JoinAPIError
-		switch {
-		case errors.As(err, &apiErr) && apiErr.Status == 429:
-			return d.failIf(epoch, &ErrorInfo{Message: "The approval service is getting too many requests.", NextStep: "Wait a minute, then press Join again."})
-		case errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500:
-			return d.failIf(epoch, &ErrorInfo{Message: "The approval service refused the request: " + apiErr.Message, NextStep: "Check the device name, or ask the tailnet admin."})
-		default:
-			return d.failIf(epoch, &ErrorInfo{Message: "Bramble could not reach the approval service at " + cfg.JoinAPI + ".", NextStep: "Check the internet connection, then press Join again."})
-		}
-	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.joinEpoch != epoch {
-		// Leave ran while the request was in flight. The approval service
-		// may still hold a pending request; the admin can deny it.
-		return errJoinCancelled
+	if d.saved.Tailnet == nil || d.saved.Tailnet.Registry != ref.Registry {
+		d.Store.ClearCache()
 	}
-	if err := d.Store.SaveJoin(JoinRecord{Tailnet: tailnet, JoinID: j.ID}); err != nil {
-		d.logf("saving join id: %v", err)
-	}
-	d.m.JoinSent(tailnet, j.ID)
-	d.m.JoinUpdate(*j)
-	d.lastPoll = time.Now()
+	d.saved.Tailnet, d.saved.Label = ref, label
+	err = d.Store.SaveSaved(d.saved)
+	d.mu.Unlock()
 	d.poke()
-	return nil
-}
-
-// failIf records err as the current problem, unless Leave has run since
-// epoch (the failure then belongs to a request nobody is waiting on), and
-// returns it.
-func (d *Daemon) failIf(epoch uint64, err error) error {
-	var info *ErrorInfo
-	if errors.As(err, &info) {
-		d.mu.Lock()
-		if d.joinEpoch == epoch {
-			d.m.SetProblem(*info)
-		}
-		d.mu.Unlock()
-	}
 	return err
 }
 
-// fail records err as the current problem and returns it.
-func (d *Daemon) fail(err error) error {
-	var info *ErrorInfo
-	if errors.As(err, &info) {
-		d.mu.Lock()
-		d.m.SetProblem(*info)
-		d.mu.Unlock()
-	}
+// Leave forgets the tailnet. The device key stays.
+func (d *Daemon) Leave() error {
+	d.mu.Lock()
+	d.saved.Tailnet, d.saved.Label = nil, ""
+	err := d.Store.SaveSaved(d.saved)
+	d.Store.ClearCache()
+	d.mu.Unlock()
+	d.poke()
 	return err
 }
 
-// Leave stops the node and forgets the tailnet.
-func (d *Daemon) Leave() {
-	d.mu.Lock()
-	d.joinEpoch++
-	d.m.Leave()
-	node := d.node
-	d.node = nil
-	if err := d.Store.ClearJoin(); err != nil {
-		d.logf("forgetting join id: %v", err)
-	}
-	d.mu.Unlock()
-	if node != nil {
-		node.Stop(10 * time.Second)
-	}
+// ---- Devices ----
+
+// Device is one enrolled device as the UI shows it.
+type Device struct {
+	Label       string   `json:"label"`
+	Name        string   `json:"name"`
+	Self        bool     `json:"self"`
+	Pubkey      string   `json:"pubkey,omitempty"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	MeshIP      string   `json:"meshIp,omitempty"`
+	Revoked     bool     `json:"revoked"`
+	Expired     bool     `json:"expired"`
+	Expiry      string   `json:"expiry"`
+	Owner       string   `json:"owner"`
+	Grants      int      `json:"grants"`
+	ACL         []string `json:"acl"`
+	Granters    []string `json:"granters"`
+	Block       uint64   `json:"block"`
+	// Live state from the node, when this device is a member.
+	Connected bool   `json:"connected"`
+	Path      string `json:"path,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	LastSeen  int64  `json:"lastSeen,omitempty"`
 }
 
-func (d *Daemon) pollLoop(ctx context.Context) {
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		d.mu.Lock()
-		want, id, base, last := d.m.WantsPolling(), d.m.JoinID(), d.m.Base(), d.lastPoll
-		d.mu.Unlock()
-		if !want {
-			continue
-		}
-		every := durOr(d.PendingPoll, 2*time.Second)
-		if base != PhasePending {
-			every = durOr(d.ApprovedPoll, 10*time.Second)
-		}
-		if time.Since(last) < every {
-			continue
-		}
-		cfg, err := d.config(ctx, false)
-		if err != nil {
-			d.fail(err)
-			d.mu.Lock()
-			d.lastPoll = time.Now()
-			d.mu.Unlock()
-			continue
-		}
-		j, err := (&JoinClient{BaseURL: cfg.JoinAPI}).Get(ctx, id)
-		d.mu.Lock()
-		d.lastPoll = time.Now()
-		switch {
-		case d.m.JoinID() != id:
-			// Left, or joined again, while the request was in flight.
-		case errors.Is(err, ErrJoinNotFound):
-			d.m.JoinLost()
-		case err != nil:
-			if d.m.Base() == PhasePending {
-				d.m.SetProblem(ErrorInfo{
-					Message:  "Bramble cannot reach the approval service to check on the request.",
-					NextStep: "Check the internet connection. Bramble keeps trying on its own.",
-				})
-			} else {
-				d.logf("join status: %v", err)
-			}
-		default:
-			d.m.JoinUpdate(*j)
-		}
-		if d.m.JoinID() == "" {
-			if err := d.Store.ClearJoin(); err != nil {
-				d.logf("forgetting join id: %v", err)
-			}
-		}
-		d.mu.Unlock()
-		d.poke()
-	}
-}
-
-func (d *Daemon) nodeLoop(ctx context.Context) {
-	tick := time.NewTicker(durOr(d.HealthPoll, time.Second))
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		case <-d.wake:
-		}
-		d.reconcileNode(ctx)
-	}
-}
-
-func (d *Daemon) reconcileNode(ctx context.Context) {
-	d.mu.Lock()
-	want, node := d.m.WantsNode(), d.node
-	d.mu.Unlock()
-
-	switch {
-	case !want && node != nil:
-		d.mu.Lock()
-		d.node = nil
-		d.mu.Unlock()
-		node.Stop(10 * time.Second)
-	case want && node == nil:
-		d.mu.Lock()
-		wait := time.Now().Before(d.retryAt)
-		d.mu.Unlock()
-		if !wait {
-			d.launch(ctx)
-		}
-	case want && node != nil:
-		select {
-		case <-node.Done():
-			d.nodeFailed(ErrorInfo{
-				Message:  "The connection stopped: " + node.ExitSummary(),
-				NextStep: "Bramble restarts it on its own. If this keeps happening, run `bramble down`, then `bramble up`, and tell the tailnet admin.",
-			})
-			return
-		default:
-		}
-		peers, err := node.FetchPeers(ctx, time.Now())
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if d.node != node {
-			return
-		}
-		if err == nil {
-			d.backoff = 0
-			d.m.PeersUpdate(peers)
-			return
-		}
-		if time.Since(d.nodeSince) > durOr(d.StartupGrace, 8*time.Minute) {
-			d.m.NodeDown(ErrorInfo{
-				Message:  "The connection is not answering.",
-				NextStep: "Wait a minute. If it stays like this, run `bramble down` and `bramble up` again.",
-			})
-		}
-	}
-}
-
-func (d *Daemon) nodeFailed(info ErrorInfo) {
+func (d *Daemon) cacheAndHandle() (*registry.Tailnet, *brambled.Handle) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.node = nil
-	d.m.NodeDown(info)
-	d.backoff = min(max(2*d.backoff, 5*time.Second), time.Minute)
-	d.retryAt = time.Now().Add(d.backoff)
-	d.logf("node stopped: %s (retry in %s)", info.Message, d.backoff)
+	var h *brambled.Handle
+	if d.node != nil {
+		h = d.node.handle
+	}
+	return d.tn, h
 }
 
-func (d *Daemon) launch(ctx context.Context) {
-	cfg, err := d.config(ctx, true)
-	if err != nil {
-		var info *ErrorInfo
-		if errors.As(err, &info) {
-			d.nodeFailed(*info)
+// Devices lists the tailnet's devices.
+func (d *Daemon) Devices() ([]Device, error) {
+	tn, h := d.cacheAndHandle()
+	if tn == nil {
+		return nil, errors.New("no tailnet yet")
+	}
+	live := map[string]statusapi.PeerStatus{}
+	if h != nil {
+		if peers, err := h.Peers(); err == nil {
+			for _, p := range peers {
+				live[p.Label] = p
+			}
 		}
-		return
 	}
 	d.mu.Lock()
-	spec := NodeSpec{Brambled: d.Brambled, Label: d.id.Name, PrivateKeyHex: d.id.PrivateKeyHex, Config: cfg, TUN: d.TUN}
+	self := d.saved.Label
 	d.mu.Unlock()
-	node, err := d.startNode(spec)
+	out := []Device{}
+	for _, r := range tn.Devices() {
+		label := strings.SplitN(r.Fullname, ".", 2)[0]
+		dev := Device{Label: label, Name: r.Fullname, Self: label == self, Revoked: r.Revoked, Expired: expired(r.Expiry),
+			Expiry: r.Expiry, Owner: r.Owner, Grants: len(r.ACL), ACL: r.ACL, Granters: r.ACLGranters, Block: r.Block}
+		if r.Pubkey != nil {
+			dev.Pubkey, dev.Fingerprint = *r.Pubkey, Fingerprint(*r.Pubkey)
+		}
+		if r.MeshIP != nil {
+			dev.MeshIP = *r.MeshIP
+		}
+		if p, ok := live[label]; ok {
+			dev.Connected = p.Authorized && p.Handshaked && time.Since(time.Unix(0, p.LastHandshakeUnixNs)) < 3*time.Minute
+			dev.Path, dev.Endpoint, dev.LastSeen = p.Path, p.Endpoint, p.LastHandshakeUnixNs/1e6
+		}
+		out = append(out, dev)
+	}
+	return out, nil
+}
+
+// NextMeshIP picks the lowest free address in the tailnet's 10.77.0.0/24.
+func (d *Daemon) NextMeshIP() (string, error) {
+	devs, err := d.Devices()
 	if err != nil {
-		d.nodeFailed(ErrorInfo{Message: "Bramble could not start the connection: " + err.Error(), NextStep: "Reinstall Bramble, then run `bramble up` again."})
-		return
+		return "10.77.0.1/24", nil
+	}
+	used := map[string]bool{}
+	for _, dv := range devs {
+		if p, err := netip.ParsePrefix(dv.MeshIP); err == nil {
+			used[p.Addr().String()] = true
+		}
+	}
+	for i := 1; i < 255; i++ {
+		a := fmt.Sprintf("10.77.0.%d", i)
+		if !used[a] {
+			return a + "/24", nil
+		}
+	}
+	return "", errors.New("the tailnet's 254 addresses are all in use")
+}
+
+// JoinRequest is a parsed join code, checked against the tailnet.
+type JoinRequest struct {
+	JoinCode
+	Fingerprint string `json:"fingerprint"`
+	MeshIP      string `json:"meshIp"`
+	// Existing is set when the label is already enrolled.
+	Existing *Device `json:"existing,omitempty"`
+	Name     string  `json:"name"`
+}
+
+// ParseJoin decodes a join code an admin pasted.
+func (d *Daemon) ParseJoin(code string) (*JoinRequest, error) {
+	j, err := ParseJoinCode(code)
+	if err != nil {
+		return nil, err
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.m.WantsNode() {
-		go node.Stop(10 * time.Second)
-		return
+	ref := d.saved.Tailnet
+	d.mu.Unlock()
+	if ref == nil {
+		return nil, errors.New("this device is not in a tailnet")
 	}
-	d.node = node
-	d.nodeSince = time.Now()
-	d.logf("node started for %s on %s", spec.Label, cfg.Tailnet)
+	if j.Tailnet != "" && j.Tailnet != ref.Name {
+		return nil, fmt.Errorf("this code is for %s, but this device manages %s", j.Tailnet, ref.Name)
+	}
+	req := &JoinRequest{JoinCode: j, Fingerprint: Fingerprint(j.Pubkey), Name: j.Label + "." + ref.Name}
+	devs, _ := d.Devices()
+	for i := range devs {
+		if devs[i].Label == j.Label {
+			req.Existing = &devs[i]
+			req.MeshIP = devs[i].MeshIP
+		}
+	}
+	if req.MeshIP == "" {
+		if req.MeshIP, err = d.NextMeshIP(); err != nil {
+			return nil, err
+		}
+	}
+	return req, nil
 }
 
-// TestResult is POST /api/test's response.
-type TestResult struct {
-	OK      bool       `json:"ok"`
-	Status  int        `json:"status"`
-	MS      int64      `json:"ms"`
-	Peer    string     `json:"peer,omitempty"`
-	Service string     `json:"service,omitempty"`
-	Error   *ErrorInfo `json:"error,omitempty"`
+// GrantDigest computes the ACL digest this device (as granter) vouches for:
+// device may use service on gateway (ADR 0005). It needs this device's key.
+func (d *Daemon) GrantDigest(device, gw, service string) (string, error) {
+	tn, _ := d.cacheAndHandle()
+	if tn == nil {
+		return "", errors.New("no tailnet yet")
+	}
+	if !ServiceRE.MatchString(service) {
+		return "", errors.New("a service name uses lowercase letters, digits, - and _")
+	}
+	dev, err := tn.ResolveDevice(device)
+	if err != nil || dev.Pubkey == nil {
+		return "", fmt.Errorf("%s has no published key", device)
+	}
+	g, err := tn.ResolveDevice(gw)
+	if err != nil || g.Pubkey == nil {
+		return "", fmt.Errorf("%s has no published key", gw)
+	}
+	d.mu.Lock()
+	priv := d.id.PrivateKeyHex
+	d.mu.Unlock()
+	return gateway.ACLDigestECDH(priv, *g.Pubkey, *dev.Pubkey, service)
 }
 
-// testTimeout covers the gateway's ACL decision: it reads three ENS records
-// over Tor before it answers (brambled/gateway gatewayDecisionDeadline is
-// 90 s). A first request took 21.8 s on 6 Nov 2026 (Verified, dev tailnet).
-const testTimeout = 95 * time.Second
+// ---- Services ----
 
-// testTarget picks the configured service matching peer and service; empty
-// values match anything.
-func testTarget(cfg *NodeConfig, own, peer, service string) (Service, bool) {
-	if cfg == nil {
-		return Service{}, false
+// SetServices replaces the exposed services and ping setting.
+func (d *Daemon) SetServices(services []ServiceConfig, ping bool) error {
+	seen := map[string]bool{PingService: true}
+	for _, s := range services {
+		if !ServiceRE.MatchString(s.Name) {
+			return fmt.Errorf("%q: a service name uses lowercase letters, digits, - and _", s.Name)
+		}
+		if seen[s.Name] {
+			return fmt.Errorf("%q is used twice (ping is built in)", s.Name)
+		}
+		if s.Port == 0 {
+			return fmt.Errorf("%s needs a port", s.Name)
+		}
+		seen[s.Name] = true
 	}
-	for _, s := range cfg.Services {
-		if s.Peer == own {
+	d.mu.Lock()
+	d.saved.Services, d.saved.NoPing = services, !ping
+	err := d.Store.SaveSaved(d.saved)
+	d.mu.Unlock()
+	d.poke()
+	return err
+}
+
+// SetSettings changes relay routing and RPC endpoints.
+func (d *Daemon) SetSettings(relayFirst bool, rpcURLs []string) error {
+	var clean []string
+	for _, u := range rpcURLs {
+		u = strings.TrimSpace(u)
+		if u == "" {
 			continue
 		}
-		if (peer == "" || s.Peer == peer) && (service == "" || s.Service == service) {
-			return s, true
+		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://127.0.0.1") && !strings.HasPrefix(u, "http://localhost") {
+			return fmt.Errorf("%s: use an https:// endpoint", u)
 		}
+		clean = append(clean, u)
 	}
-	return Service{}, false
+	d.mu.Lock()
+	d.saved.RelayFirst, d.saved.RPCURLs = relayFirst, clean
+	d.rpc = d.newRPC(clean)
+	d.stopNodeLocked()
+	d.stopCacheLocked()
+	err := d.Store.SaveSaved(d.saved)
+	d.mu.Unlock()
+	d.poke()
+	return err
 }
 
-// Test fetches a tailnet service through the mesh via its loopback forward.
-// RequestAccess asks the operator for one configured service.
-func (d *Daemon) RequestAccess(ctx context.Context, peer, service string) error {
-	d.mu.Lock()
-	own, phase := d.m.Name(), d.m.Base()
-	d.mu.Unlock()
-	if phase != PhaseConnected && phase != PhaseApproved {
-		return &ErrorInfo{Message: "This device is not approved yet.", NextStep: "Wait for the owner to approve it, then try again."}
+// ---- Peers ----
+
+func (d *Daemon) handle() (*brambled.Handle, error) {
+	_, h := d.cacheAndHandle()
+	if h == nil {
+		return nil, errors.New("this device is not connected to the tailnet yet")
 	}
-	cfg, err := d.config(ctx, true)
+	return h, nil
+}
+
+// PeerServices lists the services peer lets this device use.
+func (d *Daemon) PeerServices(peer string) ([]gateway.ServiceInfo, error) {
+	h, err := d.handle()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, s := range cfg.Services {
-		if s.Peer == peer && s.Service == service {
-			if err := (&JoinClient{BaseURL: cfg.JoinAPI}).RequestAccess(ctx, own, peer, service); err != nil {
-				return &ErrorInfo{Message: "The access request did not go through.", NextStep: "Check your connection, then try again."}
-			}
-			return nil
-		}
-	}
-	return &ErrorInfo{Message: "This network does not offer that service.", NextStep: "Reload this page and try again."}
+	return h.Services(peer)
 }
 
-func (d *Daemon) Test(ctx context.Context, peer, service string, get func(ctx context.Context, url string) (int, error)) TestResult {
-	d.mu.Lock()
-	node, cfg, own, phase := d.node, d.cfg, d.m.Name(), d.m.Base()
-	d.mu.Unlock()
-	if phase != PhaseConnected && phase != PhaseApproved || node == nil {
-		return TestResult{Error: &ErrorInfo{Message: "This device is not connected yet.", NextStep: "Join a tailnet and wait until it shows Connected."}}
-	}
-	target, ok := testTarget(cfg, own, peer, service)
-	if !ok {
-		return TestResult{Peer: peer, Service: service, Error: &ErrorInfo{Message: "This tailnet offers no test service by that name.", NextStep: "Ask the tailnet admin which service to test."}}
-	}
-	port, ok := node.ForwardPort(target.Peer, target.Service)
-	if !ok {
-		return TestResult{Peer: target.Peer, Service: target.Service, Error: &ErrorInfo{Message: "The test service was added after the connection started.", NextStep: "Leave and join again, or restart Bramble."}}
+// PingResult is a round trip to a peer's ping service.
+type PingResult struct {
+	Peer    string          `json:"peer"`
+	Millis  float64         `json:"millis"`
+	Answer  json.RawMessage `json:"answer"`
+	Path    string          `json:"path,omitempty"`
+	Started time.Time       `json:"started"`
+}
+
+// Ping fetches peer's ping service through the tunnel and times it.
+func (d *Daemon) Ping(peer string) (*PingResult, error) {
+	h, err := d.handle()
+	if err != nil {
+		return nil, err
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, testTimeout)
-	defer cancel()
-	status, err := get(ctx, fmt.Sprintf("http://127.0.0.1:%d%s", port, target.Path))
-	res := TestResult{Status: status, MS: time.Since(start).Milliseconds(), Peer: target.Peer, Service: target.Service}
-	switch {
-	case err != nil:
-		res.Error = &ErrorInfo{
-			Message:  fmt.Sprintf("%s did not answer for %s.", target.Peer, target.Service),
-			NextStep: fmt.Sprintf("If the admin has not granted this device access to %s yet, ask for it. Otherwise wait until %s shows a path and try again.", target.Service, target.Peer),
-		}
-	case status >= 200 && status < 300:
-		res.OK = true
-	default:
-		res.Error = &ErrorInfo{Message: fmt.Sprintf("%s answered with HTTP %d.", target.Service, status), NextStep: "Ask the tailnet admin to check the service."}
+	conn, err := h.Dial(peer, PingService)
+	if err != nil {
+		return nil, err
 	}
-	return res
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(conn, "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", peer)
+	raw, err := io.ReadAll(io.LimitReader(conn, 8192))
+	if err != nil {
+		return nil, err
+	}
+	_, body, _ := strings.Cut(string(raw), "\r\n\r\n")
+	res := &PingResult{Peer: peer, Millis: float64(time.Since(start).Microseconds()) / 1000, Answer: json.RawMessage(strings.TrimSpace(body)), Started: start}
+	if !json.Valid(res.Answer) {
+		res.Answer = json.RawMessage("null")
+	}
+	if peers, err := h.Peers(); err == nil {
+		for _, p := range peers {
+			if p.Label == peer {
+				res.Path = p.Path
+			}
+		}
+	}
+	return res, nil
+}
+
+// Activity returns recent node events.
+func (d *Daemon) Activity() []statusapi.ActivityEvent {
+	_, h := d.cacheAndHandle()
+	if h == nil {
+		return []statusapi.ActivityEvent{}
+	}
+	return h.Activity()
+}
+
+// ---- Forwards ----
+
+type forward struct {
+	Peer    string `json:"peer"`
+	Service string `json:"service"`
+	Port    int    `json:"port"`
+	ln      net.Listener
+}
+
+// Forward opens (or reuses) a local port that carries traffic to peer's service.
+func (d *Daemon) Forward(peer, service string) (*forward, error) {
+	h, err := d.handle()
+	if err != nil {
+		return nil, err
+	}
+	key := peer + "/" + service
+	d.mu.Lock()
+	if f, ok := d.forwards[key]; ok {
+		d.mu.Unlock()
+		return f, nil
+	}
+	d.mu.Unlock()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	f := &forward{Peer: peer, Service: service, Port: ln.Addr().(*net.TCPAddr).Port, ln: ln}
+	d.mu.Lock()
+	d.forwards[key] = f
+	d.mu.Unlock()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				remote, err := h.Dial(peer, service)
+				if err != nil {
+					d.logf("forward %s: %v", key, err)
+					return
+				}
+				defer remote.Close()
+				done := make(chan struct{}, 2)
+				go func() { _, _ = io.Copy(remote, c); done <- struct{}{} }()
+				go func() { _, _ = io.Copy(c, remote); done <- struct{}{} }()
+				<-done
+			}()
+		}
+	}()
+	return f, nil
+}
+
+// Forwards lists open forwards.
+func (d *Daemon) Forwards() []*forward {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := []*forward{}
+	for _, f := range d.forwards {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
+	return out
+}
+
+// CloseForward closes the forward on port.
+func (d *Daemon) CloseForward(port int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k, f := range d.forwards {
+		if f.Port == port {
+			f.ln.Close()
+			delete(d.forwards, k)
+		}
+	}
+}
+
+// ---- Relays ----
+
+// RelayInfo is one relay from the directory with its live status.
+type RelayInfo struct {
+	registry.Relay
+	Name   string                  `json:"name"`
+	Status *rendezvous.RelayStatus `json:"status,omitempty"`
+	Error  string                  `json:"error,omitempty"`
+	Millis int64                   `json:"millis,omitempty"`
+}
+
+// Relays lists the relay directory with each relay's status (cached for 30 s).
+func (d *Daemon) Relays() ([]RelayInfo, error) {
+	d.relayMu.Lock()
+	defer d.relayMu.Unlock()
+	if time.Since(d.relayAt) < 30*time.Second && d.relayOut != nil {
+		return d.relayOut, nil
+	}
+	tn, _ := d.cacheAndHandle()
+	var relays []registry.Relay
+	var err error
+	if tn != nil {
+		relays, err = tn.Relays()
+	} else {
+		relays, err = d.directoryOnly()
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RelayInfo, len(relays))
+	var wg sync.WaitGroup
+	for i, r := range relays {
+		out[i] = RelayInfo{Relay: r, Name: r.Label + "." + d.Network.RelaySuffix}
+		wg.Add(1)
+		go func(i int, r registry.Relay) {
+			defer wg.Done()
+			start := time.Now()
+			st, err := rendezvous.Status(rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin}, 5*time.Second)
+			if err != nil {
+				out[i].Error = err.Error()
+				return
+			}
+			out[i].Status, out[i].Millis = st, time.Since(start).Milliseconds()
+		}(i, r)
+	}
+	wg.Wait()
+	d.relayAt, d.relayOut = time.Now(), out
+	return out, nil
+}
+
+// directoryOnly reads the relay directory without a tailnet (before setup).
+func (d *Daemon) directoryOnly() ([]registry.Relay, error) {
+	tn, err := registry.NewTailnet(registry.TailnetConfig{
+		RPC: d.rpc, Name: "directory." + d.Network.Parent, Registry: d.Network.RelayRegistry, RegistryStart: d.Network.RelayStart,
+		RelayRegistry: d.Network.RelayRegistry, RelayRegistryStart: d.Network.RelayStart, RelaySuffix: d.Network.RelaySuffix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := tn.Sync(ctx); err != nil {
+		return nil, err
+	}
+	return tn.Relays()
+}
+
+// IsAdmin reports whether address holds the registrar role on the tailnet registry.
+func (d *Daemon) IsAdmin(ctx context.Context, address string) (bool, error) {
+	d.mu.Lock()
+	ref := d.saved.Tailnet
+	d.mu.Unlock()
+	if ref == nil {
+		return false, nil
+	}
+	addr, err := registry.NormalizeAddress(address)
+	if err != nil {
+		return false, err
+	}
+	return d.rpc.HasRootRoles(ctx, ref.Registry, 1, addr)
+}
+
+// ---- Ping service ----
+
+type pingServer struct {
+	ln   net.Listener
+	port int
+}
+
+// startPing serves this device's built-in ping service on loopback; the
+// gateway exposes it to the tailnet as "ping".
+func startPing(d *Daemon) (*pingServer, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		d.mu.Lock()
+		label, tailnet := d.saved.Label, ""
+		if d.saved.Tailnet != nil {
+			tailnet = d.saved.Tailnet.Name
+		}
+		d.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"pong": label, "tailnet": tailnet, "time": time.Now().UTC().Format(time.RFC3339Nano), "version": d.Version,
+		})
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	return &pingServer{ln: ln, port: ln.Addr().(*net.TCPAddr).Port}, nil
 }

@@ -7,52 +7,38 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
 
-// Store owns every file the daemon keeps under its data directory
-// (default ~/.bramble, mode 0700). It holds identity only: the device key,
-// the chosen name, the pending join id and the admin token. Peer
-// authorization, ACLs and grants never touch disk; brambled reads them from
-// ENS on every sync (invariant 3, docs/adr/0010).
+// Store is the daemon's directory (default ~/.bramble). Files holding a key
+// are mode 0600 and the directory is 0700.
 type Store struct {
 	Dir string
 }
 
-// Identity is this device's own key and name.
+// Identity is this device's WireGuard key. It never leaves the device.
 type Identity struct {
-	Name          string    `json:"name,omitempty"`
 	PrivateKeyHex string    `json:"privateKey"`
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
-// PublicKeyHex derives the WireGuard public key from the stored private key.
-func (i Identity) PublicKeyHex() (string, error) {
-	return wgnode.PublicKeyFromPrivateHex(i.PrivateKeyHex)
-}
-
-// JoinRecord remembers which join request this device is waiting on. Its
-// status is never stored: the daemon asks the join API again after every
-// restart.
-type JoinRecord struct {
-	Tailnet string `json:"tailnet"`
-	JoinID  string `json:"joinId"`
-}
+// PublicKeyHex derives the public key.
+func (i Identity) PublicKeyHex() (string, error) { return wgnode.PublicKeyFromPrivateHex(i.PrivateKeyHex) }
 
 const (
-	identityFile   = "identity.json"
-	joinFile       = "join.json"
-	adminTokenFile = "admin.token"
-	configURLFile  = "config.url"
-	uiURLFile      = "ui.url"
-	pidFile        = "bramble.pid"
-	logDir         = "logs"
+	identityFile = "identity.json"
+	stateFile    = "state.json"
+	uiURLFile    = "ui.url"
+	pidFile      = "bramble.pid"
+	logDir       = "logs"
+	cacheFile    = "registry-cache.json"
 )
 
-// DefaultDir is $BRAMBLE_HOME, or ~/.bramble.
+// DefaultDir is $BRAMBLE_HOME or ~/.bramble.
 func DefaultDir() (string, error) {
 	if v := os.Getenv("BRAMBLE_HOME"); v != "" {
 		return v, nil
@@ -64,7 +50,7 @@ func DefaultDir() (string, error) {
 	return filepath.Join(home, ".bramble"), nil
 }
 
-// Ensure creates the data directory with mode 0700.
+// Ensure creates the directory.
 func (s *Store) Ensure() error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", s.Dir, err)
@@ -74,174 +60,110 @@ func (s *Store) Ensure() error {
 
 func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
 
-// writeFile writes atomically (temp file, then rename) with mode 0600.
+// CachePath is where the registry cache is saved.
+func (s *Store) CachePath() string { return s.path(cacheFile) }
+
 func (s *Store) writeFile(name string, data []byte) error {
-	if err := s.Ensure(); err != nil {
+	tmp := s.path(name + ".tmp")
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.Dir, "."+name+".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.path(name))
+	return os.Rename(tmp, s.path(name))
 }
 
 func (s *Store) readJSON(name string, v any) (bool, error) {
-	data, err := os.ReadFile(s.path(name))
+	raw, err := os.ReadFile(s.path(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return false, fmt.Errorf("reading %s: %w", s.path(name), err)
+	if err := json.Unmarshal(raw, v); err != nil {
+		return false, fmt.Errorf("%s is not valid JSON: %w", name, err)
 	}
 	return true, nil
 }
 
 func (s *Store) writeJSON(name string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
+	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	return s.writeFile(name, append(data, '\n'))
+	return s.writeFile(name, append(raw, '\n'))
 }
 
-func (s *Store) remove(name string) error {
-	err := os.Remove(s.path(name))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
-}
-
-// LoadOrCreateIdentity returns the stored identity, generating and saving a
-// fresh WireGuard key on first run.
+// LoadOrCreateIdentity returns the device key, creating it on first use.
 func (s *Store) LoadOrCreateIdentity() (Identity, error) {
 	var id Identity
 	ok, err := s.readJSON(identityFile, &id)
 	if err != nil {
-		return Identity{}, err
+		return id, err
 	}
 	if ok && id.PrivateKeyHex != "" {
-		if _, err := id.PublicKeyHex(); err != nil {
-			return Identity{}, fmt.Errorf("the device key in %s is unreadable: %w", s.path(identityFile), err)
-		}
 		return id, nil
 	}
 	priv, _, err := wgnode.GenerateKeyPair()
 	if err != nil {
-		return Identity{}, err
+		return id, err
 	}
 	id = Identity{PrivateKeyHex: priv, CreatedAt: time.Now().UTC()}
 	return id, s.writeJSON(identityFile, id)
 }
 
-// SaveIdentity overwrites the identity file.
-func (s *Store) SaveIdentity(id Identity) error { return s.writeJSON(identityFile, id) }
-
-// LoadJoin returns the remembered join request, if any.
-func (s *Store) LoadJoin() (*JoinRecord, error) {
-	var j JoinRecord
-	ok, err := s.readJSON(joinFile, &j)
-	if err != nil || !ok || j.JoinID == "" {
-		return nil, err
-	}
-	return &j, nil
+// LoadSaved reads the persisted daemon state.
+func (s *Store) LoadSaved() (Saved, error) {
+	var st Saved
+	_, err := s.readJSON(stateFile, &st)
+	return st, err
 }
 
-// SaveJoin remembers a join request.
-func (s *Store) SaveJoin(j JoinRecord) error { return s.writeJSON(joinFile, j) }
+// SaveSaved writes the persisted daemon state.
+func (s *Store) SaveSaved(st Saved) error { return s.writeJSON(stateFile, st) }
 
-// ClearJoin forgets the join request.
-func (s *Store) ClearJoin() error { return s.remove(joinFile) }
+// ClearCache removes the registry cache, for a new tailnet.
+func (s *Store) ClearCache() { _ = os.Remove(s.CachePath()) }
 
-// AdminToken returns the saved admin token, or "" when there is none.
-func (s *Store) AdminToken() string {
-	data, err := os.ReadFile(s.path(adminTokenFile))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// SaveAdminToken stores the admin token with mode 0600.
-func (s *Store) SaveAdminToken(token string) error {
-	return s.writeFile(adminTokenFile, []byte(strings.TrimSpace(token)+"\n"))
-}
-
-// ClearAdminToken removes the admin token.
-func (s *Store) ClearAdminToken() error { return s.remove(adminTokenFile) }
-
-// ConfigURL returns the saved node-config URL, or "".
-func (s *Store) ConfigURL() string {
-	data, err := os.ReadFile(s.path(configURLFile))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// SaveConfigURL remembers where the node config comes from.
-func (s *Store) SaveConfigURL(u string) error { return s.writeFile(configURLFile, []byte(u+"\n")) }
-
-// UIURL returns the URL a running daemon wrote, or "".
+// UIURL returns the running daemon's UI address, if one wrote it.
 func (s *Store) UIURL() string {
-	data, err := os.ReadFile(s.path(uiURLFile))
+	raw, err := os.ReadFile(s.path(uiURLFile))
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(raw))
 }
 
-// SaveRuntime records the running daemon's UI URL and process id.
+// SaveRuntime records the UI address and process ID.
 func (s *Store) SaveRuntime(uiURL string, pid int) error {
 	if err := s.writeFile(uiURLFile, []byte(uiURL+"\n")); err != nil {
 		return err
 	}
-	return s.writeFile(pidFile, []byte(fmt.Sprintf("%d\n", pid)))
+	return s.writeFile(pidFile, []byte(strconv.Itoa(pid)+"\n"))
 }
 
-// ClearRuntime removes the UI URL and pid files.
+// ClearRuntime removes the runtime files.
 func (s *Store) ClearRuntime() {
-	_ = s.remove(uiURLFile)
-	_ = s.remove(pidFile)
+	_ = os.Remove(s.path(uiURLFile))
+	_ = os.Remove(s.path(pidFile))
 }
 
-// PID returns the running daemon's process id, or 0.
+// PID returns the recorded daemon process ID, or 0.
 func (s *Store) PID() int {
-	data, err := os.ReadFile(s.path(pidFile))
+	raw, err := os.ReadFile(s.path(pidFile))
 	if err != nil {
 		return 0
 	}
-	var pid int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
-		return 0
-	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 	return pid
 }
 
-// OpenLog truncates and opens a log file under logs/.
+// OpenLog opens a log file under logs/ for appending.
 func (s *Store) OpenLog(name string) (*os.File, error) {
-	dir := s.path(logDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(s.path(logDir), 0o700); err != nil {
 		return nil, err
 	}
-	return os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	return os.OpenFile(s.path(filepath.Join(logDir, name)), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
-// RemoveAll deletes the whole data directory (bramble uninstall).
+// RemoveAll deletes the directory, key included.
 func (s *Store) RemoveAll() error { return os.RemoveAll(s.Dir) }

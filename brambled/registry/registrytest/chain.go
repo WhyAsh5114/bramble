@@ -31,6 +31,11 @@ type Chain struct {
 	Owner    string
 	Suffix   string
 	Start    uint64
+
+	// The relay directory: a second registry and resolver on the same chain.
+	RelayRegistry string
+	RelayResolver string
+	RelaySuffix   string
 }
 
 // New starts a chain with one tailnet registry and resolver.
@@ -38,11 +43,20 @@ func New(t testing.TB, suffix string) *Chain {
 	c := &Chain{
 		head: 100, Registry: "0x00000000000000000000000000000000000000a1", Resolver: "0x00000000000000000000000000000000000000b1",
 		Owner: "0x00000000000000000000000000000000000000c1", Suffix: suffix, Start: 100, nextID: 1,
+		RelayRegistry: "0x00000000000000000000000000000000000000a2", RelayResolver: "0x00000000000000000000000000000000000000b2",
+		RelaySuffix: "relay.test.eth",
 	}
 	srv := httptest.NewServer(c)
 	t.Cleanup(srv.Close)
 	c.URL = srv.URL
 	return c
+}
+
+// Network returns a registry.Network whose relay directory is this chain's.
+func (c *Chain) Network() registry.Network {
+	n := registry.Sepolia
+	n.RelayRegistry, n.RelayStart, n.RelaySuffix = c.RelayRegistry, c.Start, c.RelaySuffix
+	return n
 }
 
 // Config returns a TailnetConfig pointed at this chain.
@@ -122,8 +136,17 @@ func (c *Chain) Mine(n uint64) {
 	c.mu.Unlock()
 }
 
-// Enroll registers label with the given text records, in a new block.
+// Enroll registers label in the tailnet registry with the given text records, in a new block.
 func (c *Chain) Enroll(label string, texts map[string]string) {
+	c.enroll(c.Registry, c.Resolver, c.Suffix, label, texts)
+}
+
+// EnrollRelay lists a relay in the relay directory.
+func (c *Chain) EnrollRelay(label string, texts map[string]string) {
+	c.enroll(c.RelayRegistry, c.RelayResolver, c.RelaySuffix, label, texts)
+}
+
+func (c *Chain) enroll(reg, resolver, suffix, label string, texts map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.head++
@@ -133,18 +156,22 @@ func (c *Chain) Enroll(label string, texts map[string]string) {
 	padded := make([]byte, (len(label)+31)/32*32)
 	copy(padded, label)
 	labelData += word(uint64(len(label))) + hex.EncodeToString(padded)
-	c.add(c.Registry, []string{topic("LabelRegistered(uint256,bytes32,string,address,uint64,address)"), "0x" + word(tokenID), registry.LabelHash(label), "0x" + addrWord(c.Owner)}, labelData)
-	c.add(c.Registry, []string{topic("ResolverUpdated(uint256,address,address)"), "0x" + word(tokenID), "0x" + addrWord(c.Resolver), "0x" + addrWord(c.Owner)}, "0x")
-	name := label + "." + c.Suffix
+	c.add(reg, []string{topic("LabelRegistered(uint256,bytes32,string,address,uint64,address)"), "0x" + word(tokenID), registry.LabelHash(label), "0x" + addrWord(c.Owner)}, labelData)
+	c.add(reg, []string{topic("ResolverUpdated(uint256,address,address)"), "0x" + word(tokenID), "0x" + addrWord(resolver), "0x" + addrWord(c.Owner)}, "0x")
+	name := label + "." + suffix
 	dns, _ := registry.DNSEncode(name)
-	c.add(c.Resolver, []string{topic("Linked(uint256,bytes32,bytes)"), "0x" + word(tokenID), "0x" + hex.EncodeToString(registry.Namehash(name))}, dynamic(dns))
+	c.add(resolver, []string{topic("Linked(uint256,bytes32,bytes)"), "0x" + word(tokenID), "0x" + hex.EncodeToString(registry.Namehash(name))}, dynamic(dns))
 	for k, v := range texts {
-		c.setTextLocked(tokenID, k, v)
+		c.setTextOn(resolver, tokenID, k, v)
 	}
 }
 
 func (c *Chain) setTextLocked(recordID uint64, key, value string) {
-	c.add(c.Resolver, []string{topic("TextUpdated(uint256,string,string,string)"), "0x" + word(recordID), "0x" + hex.EncodeToString(registry.Keccak256([]byte(key)))}, dynamic([]byte(key), []byte(value)))
+	c.setTextOn(c.Resolver, recordID, key, value)
+}
+
+func (c *Chain) setTextOn(resolver string, recordID uint64, key, value string) {
+	c.add(resolver, []string{topic("TextUpdated(uint256,string,string,string)"), "0x" + word(recordID), "0x" + hex.EncodeToString(registry.Keccak256([]byte(key)))}, dynamic([]byte(key), []byte(value)))
 }
 
 // SetText writes a text record on label (enrolled earlier) in a new block.

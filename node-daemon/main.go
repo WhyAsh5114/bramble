@@ -1,12 +1,7 @@
-// bramble is the on-device Bramble daemon (ETH-177): it owns the device key
-// and local state under ~/.bramble, serves the local web UI and control API
-// on 127.0.0.1, runs the join flow against the tailnet's approval service,
-// and supervises brambled serve once the device is approved.
-//
-// It lives outside brambled/ on purpose: invariant 3 forbids local-state
-// writes in brambled and the sidecar, and the daemon is where the device's
-// identity files live (ETH-177 spec D1). Peer authorization still comes
-// only from ENS, read by brambled on every sync.
+// Command bramble is the one binary a person installs: it runs this device's
+// node and serves the local web UI where they create a tailnet, join one, and
+// manage devices and services. `bramble relay` runs a relay with the same
+// binary.
 package main
 
 import (
@@ -16,7 +11,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -27,11 +21,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled"
 	"github.com/WhyAsh5114/bramble/node-daemon/internal/daemon"
 	"github.com/WhyAsh5114/bramble/node-daemon/ui"
+	"github.com/WhyAsh5114/bramble/relay/relaysrv"
 )
 
-// version is set by the release build with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
@@ -49,11 +44,14 @@ func main() {
 		err = runStatus()
 	case "open":
 		err = runOpen()
-	case "admin":
-		err = runAdmin(os.Args[2:])
 	case "uninstall":
 		err = runUninstall(os.Args[2:])
-	case "version":
+	case "relay":
+		os.Exit(relaysrv.Main(os.Args[2:], version))
+	case "node":
+		// The node daemon on its own, configured by flags and environment (brambled).
+		os.Exit(brambled.Main(os.Args[2:]))
+	case "version", "-v", "--version":
 		fmt.Println(version)
 	case "help", "-h", "--help":
 		usage()
@@ -69,12 +67,13 @@ func main() {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
-  bramble up [-config <install host or URL>] [-port 7777] [-d] [-open=true] [-tun]
-  bramble down
-  bramble status
-  bramble open
-  bramble admin login | logout
-  bramble uninstall [-y]
+  bramble up [-port 7777] [-d] [-open=true] [-tun] [-listen-port 41641]
+                       start this device and its local UI
+  bramble down         stop it
+  bramble status       show this device's state
+  bramble open         open the local UI
+  bramble relay [...]  run a relay (bramble relay -h for options; bramble relay pin prints its key pin)
+  bramble uninstall    stop and delete this device's key and state
   bramble version
 `)
 }
@@ -87,7 +86,6 @@ func store() (*daemon.Store, error) {
 	return &daemon.Store{Dir: dir}, nil
 }
 
-// running returns the UI URL of a daemon that answers, or "".
 func running(s *daemon.Store) string {
 	u := s.UIURL()
 	if u == "" {
@@ -107,11 +105,11 @@ func running(s *daemon.Store) string {
 
 func runUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
-	configURL := fs.String("config", os.Getenv("BRAMBLE_CONFIG_URL"), "install host (https://host) or full node-config URL; saved for later runs")
 	port := fs.Int("port", 7777, "preferred local UI port; the next free port is used if taken")
 	detach := fs.Bool("d", false, "run in the background and return once the UI answers")
 	openUI := fs.Bool("open", true, "open the UI in a browser")
-	tun := fs.Bool("tun", false, "use a real WireGuard interface (needs root or cap_net_admin on brambled) instead of the default userspace mode")
+	tun := fs.Bool("tun", false, "use a real WireGuard interface (needs root) instead of userspace networking")
+	listenPort := fs.Uint("listen-port", 41641, "UDP port for WireGuard")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,26 +127,17 @@ func runUp(args []string) error {
 		}
 		return nil
 	}
-	if *configURL != "" {
-		if err := s.SaveConfigURL(daemon.NormalizeConfigURL(*configURL)); err != nil {
-			return err
-		}
-	}
 	if *detach {
 		return detachUp(s, args, *openUI)
 	}
 
-	brambled, err := daemon.FindBrambled()
-	if err != nil {
-		return fmt.Errorf("%w; reinstall Bramble", err)
-	}
 	logger := log.New(os.Stderr, "bramble: ", log.LstdFlags)
-	d := &daemon.Daemon{Store: s, ConfigURL: s.ConfigURL(), Brambled: brambled, TUN: *tun, Logger: logger}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := d.Init(ctx); err != nil {
+	d := &daemon.Daemon{Store: s, Logger: logger, Version: version, TUN: *tun, ListenPort: uint16(*listenPort)}
+	if err := d.Init(); err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	ln, boundPort, err := daemon.Listen(*port)
 	if err != nil {
 		return err
@@ -160,7 +149,6 @@ func runUp(args []string) error {
 		return err
 	}
 	defer s.ClearRuntime()
-
 	go func() {
 		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Printf("UI server stopped: %v", err)
@@ -181,8 +169,6 @@ func runUp(args []string) error {
 	return nil
 }
 
-// detachUp starts `bramble up` in its own session with output in
-// logs/bramble.log, then waits for its UI to answer.
 func detachUp(s *daemon.Store, args []string, openUI bool) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -287,28 +273,22 @@ func runStatus() error {
 		return err
 	}
 	fmt.Printf("UI:          %s\n", u)
-	fmt.Printf("Device:      %s (%s)\n", orDash(st.Name), st.Fingerprint)
+	fmt.Printf("Key:         %s\n", st.Fingerprint)
 	fmt.Printf("Status:      %s\n", st.Phase)
-	if st.Tailnet != "" {
-		fmt.Printf("Tailnet:     %s\n", st.Tailnet)
+	if st.Tailnet != nil {
+		fmt.Printf("Tailnet:     %s\n", st.Tailnet.Name)
+		fmt.Printf("Device:      %s\n", st.Label)
 	}
-	if st.MeshIP != "" {
-		fmt.Printf("Mesh IP:     %s\n", st.MeshIP)
+	if st.Node != nil && st.Node.Address != "" {
+		fmt.Printf("Address:     %s\n", st.Node.Address)
 	}
-	for _, p := range st.Peers {
-		fmt.Printf("Peer:        %-20s %-15s %s\n", p.Label, p.MeshIP, p.Path)
+	if st.Phase == daemon.PhaseWaiting {
+		fmt.Printf("Join code:   %s\n", st.JoinCode)
 	}
-	if st.Error != nil {
-		fmt.Printf("Problem:     %s\nNext step:   %s\n", st.Error.Message, st.Error.NextStep)
+	if st.Problem != "" {
+		fmt.Printf("Problem:     %s\n", st.Problem)
 	}
 	return nil
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 func runOpen() error {
@@ -323,92 +303,6 @@ func runOpen() error {
 	fmt.Println(u)
 	openBrowser(u)
 	return nil
-}
-
-func runAdmin(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: bramble admin login | logout")
-	}
-	s, err := store()
-	if err != nil {
-		return err
-	}
-	switch args[0] {
-	case "logout":
-		if err := s.ClearAdminToken(); err != nil {
-			return err
-		}
-		fmt.Println("Admin access removed from this device.")
-		return nil
-	case "login":
-	default:
-		return fmt.Errorf("usage: bramble admin login | logout")
-	}
-	token, err := readSecret("Admin token: ")
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return fmt.Errorf("no token entered")
-	}
-	if src := s.ConfigURL(); src != "" {
-		if cfg, err := daemon.FetchNodeConfig(context.Background(), src); err == nil {
-			switch checkAdminToken(cfg.JoinAPI, token) {
-			case http.StatusOK:
-			case http.StatusUnauthorized, http.StatusForbidden:
-				return fmt.Errorf("the approval service did not accept that token; check it and try again")
-			default:
-				fmt.Fprintln(os.Stderr, "Could not check the token with the approval service; saving it anyway.")
-			}
-		}
-	}
-	if err := s.SaveAdminToken(token); err != nil {
-		return err
-	}
-	fmt.Println("Admin access saved on this device. The Bramble page now shows the admin view.")
-	return nil
-}
-
-// checkAdminToken asks the join API's token-gated list route. It returns
-// the HTTP status, or 0 if the service could not be reached.
-func checkAdminToken(joinAPI, token string) int {
-	req, err := http.NewRequest(http.MethodGet, joinAPI+"/api/joins", nil)
-	if err != nil {
-		return 0
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		return 0
-	}
-	resp.Body.Close()
-	return resp.StatusCode
-}
-
-// readSecret reads one line without echo when stdin is a terminal.
-func readSecret(prompt string) (string, error) {
-	isTTY := false
-	if st, err := os.Stdin.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
-		isTTY = true
-	}
-	if isTTY {
-		fmt.Fprint(os.Stderr, prompt)
-		off := exec.Command("stty", "-echo")
-		off.Stdin = os.Stdin
-		if off.Run() == nil {
-			defer func() {
-				on := exec.Command("stty", "echo")
-				on.Stdin = os.Stdin
-				_ = on.Run()
-				fmt.Fprintln(os.Stderr)
-			}()
-		}
-	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
 }
 
 func runUninstall(args []string) error {

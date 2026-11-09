@@ -5,6 +5,7 @@ go 1.27.0
 require github.com/WhyAsh5114/bramble/brambled v0.0.0
 
 require (
+	github.com/WhyAsh5114/bramble/relay v0.0.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
 	golang.org/x/net v0.39.0 // indirect
@@ -16,3 +17,5 @@ require (
 )
 
 replace github.com/WhyAsh5114/bramble/brambled => ../brambled
+
+replace github.com/WhyAsh5114/bramble/relay => ../relay
