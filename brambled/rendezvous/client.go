@@ -58,6 +58,10 @@ type RelayStatus struct {
 	} `json:"budget"`
 }
 
+// ErrRelayUnreachable marks failures that are the relay's fault (no answer,
+// wrong key), as opposed to a peer that did not show up.
+var ErrRelayUnreachable = errors.New("relay unreachable")
+
 // AllowUnpinnedForTests lets tests talk to a relay with a throwaway key.
 var AllowUnpinnedForTests = false
 
@@ -70,7 +74,7 @@ func pinOf(cert *x509.Certificate) string {
 // dial opens a TLS connection to the relay and checks its key against the pin.
 func dial(r Relay, timeout time.Duration) (*tls.Conn, error) {
 	if r.Pin == "" && !AllowUnpinnedForTests {
-		return nil, fmt.Errorf("relay %s has no published pin; refusing to talk to an unauthenticated relay", r.Label)
+		return nil, fmt.Errorf("%w: relay %s has no published pin; refusing to talk to an unauthenticated relay", ErrRelayUnreachable, r.Label)
 	}
 	cfg := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -89,7 +93,7 @@ func dial(r Relay, timeout time.Duration) (*tls.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
 	conn, err := tls.DialWithDialer(d, "tcp", r.Address, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("dialing relay %s: %w", r.Address, err)
+		return nil, fmt.Errorf("%w: dialing relay %s: %w", ErrRelayUnreachable, r.Address, err)
 	}
 	return conn, nil
 }

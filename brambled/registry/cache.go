@@ -47,12 +47,15 @@ type Config struct {
 	Confirmations uint64
 	// Interval is the time between syncs in Run. Default 4 s.
 	Interval time.Duration
+	// ExtraResolvers are watched even before a registry entry points at them.
+	ExtraResolvers []string
 }
 
 // Cache is a node's local, event-sourced copy of the registries it watches.
 type Cache struct {
-	cfg Config
-	key string
+	cfg   Config
+	key   string
+	extra []string
 
 	syncMu    sync.Mutex // one sync at a time
 	mu        sync.RWMutex
@@ -96,6 +99,13 @@ func New(cfg Config) (*Cache, error) {
 	st.Block = c.startBlock() - 1
 	if saved, ok := c.load(); ok {
 		st = saved
+	}
+	for _, r := range cfg.ExtraResolvers {
+		addr, err := NormalizeAddress(r)
+		if err != nil {
+			return nil, err
+		}
+		c.extra = append(c.extra, addr)
 	}
 	c.confirmed = st
 	c.view = st.clone()
@@ -233,7 +243,7 @@ func (c *Cache) sync(ctx context.Context) error {
 		_ = probe.apply(l)
 	}
 	var fresh []string
-	for _, a := range append(confirmed.resolverAddresses(), probe.resolverAddresses()...) {
+	for _, a := range append(append(confirmed.resolverAddresses(), probe.resolverAddresses()...), c.extra...) {
 		if !known[a] {
 			known[a] = true
 			fresh = append(fresh, a)

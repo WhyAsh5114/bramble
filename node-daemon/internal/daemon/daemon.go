@@ -199,7 +199,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 		d.stopNodeLocked()
 		d.stopCacheLocked()
 		tn, err := registry.NewTailnet(registry.TailnetConfig{
-			RPC: d.rpc, Name: ref.Name, Registry: ref.Registry, RegistryStart: ref.Start,
+			RPC: d.rpc, Name: ref.Name, Registry: ref.Registry, RegistryStart: ref.Start, Resolver: ref.Resolver,
 			RelayRegistry: d.Network.RelayRegistry, RelayRegistryStart: d.Network.RelayStart, RelaySuffix: d.Network.RelaySuffix,
 			Path: d.Store.CachePath(),
 		})
@@ -263,17 +263,6 @@ func (d *Daemon) nodeArgsLocked() []string {
 	}
 	if d.saved.RelayFirst {
 		args = append(args, "-relay-first")
-	}
-	var stun []string
-	if relays, err := d.tn.Relays(); err == nil {
-		for _, r := range relays {
-			if r.STUN != "" {
-				stun = append(stun, r.STUN)
-			}
-		}
-	}
-	if len(stun) > 0 {
-		args = append(args, "-stun-servers", strings.Join(stun, ","))
 	}
 	return args
 }
@@ -866,6 +855,11 @@ func (d *Daemon) Relays() ([]RelayInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The directory is open; probe only the oldest entries, in parallel.
+	if len(relays) > maxListedRelays {
+		sort.SliceStable(relays, func(i, j int) bool { return relays[i].Block < relays[j].Block })
+		relays = relays[:maxListedRelays]
+	}
 	out := make([]RelayInfo, len(relays))
 	var wg sync.WaitGroup
 	for i, r := range relays {
@@ -874,7 +868,7 @@ func (d *Daemon) Relays() ([]RelayInfo, error) {
 		go func(i int, r registry.Relay) {
 			defer wg.Done()
 			start := time.Now()
-			st, err := rendezvous.Status(rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin}, 5*time.Second)
+			st, err := rendezvous.Status(rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin}, 3*time.Second)
 			if err != nil {
 				out[i].Error = err.Error()
 				return
@@ -886,6 +880,8 @@ func (d *Daemon) Relays() ([]RelayInfo, error) {
 	d.relayAt, d.relayOut = time.Now(), out
 	return out, nil
 }
+
+const maxListedRelays = 30
 
 // directoryOnly reads the relay directory without a tailnet (before setup).
 func (d *Daemon) directoryOnly() ([]registry.Relay, error) {

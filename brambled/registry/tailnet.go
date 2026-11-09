@@ -17,6 +17,11 @@ const (
 	KeyMeshIP      = "mesh-ip"
 )
 
+// KeyTailnetRelays is a text record on the tailnet's own name: the relay
+// labels its members use for rendezvous, comma-separated, most preferred first.
+// Every member reads the same record, so peers always share a relay.
+const KeyTailnetRelays = "relays"
+
 // Text record keys a relay publishes in the relay directory (ADR 0019).
 const (
 	KeyRendezvous = "rendezvous" // host:port of the rendezvous listener (TCP, TLS)
@@ -53,6 +58,8 @@ type Relay struct {
 	Price     string `json:"price"`
 	Region    string `json:"region,omitempty"`
 	Owner     string `json:"owner"`
+	// Block is the directory registration block; selection prefers older relays.
+	Block uint64 `json:"block"`
 }
 
 // ErrNotFound means the label is not registered in the watched registry.
@@ -76,7 +83,10 @@ type TailnetConfig struct {
 	RelayRegistryStart uint64
 	// RelaySuffix is the relay directory's name, e.g. "relay.bramble.eth".
 	RelaySuffix string
-	Path        string
+	// Resolver is the tailnet's own resolver; watching it from the start lets
+	// the cache read the tailnet's root records before any device is enrolled.
+	Resolver string
+	Path     string
 }
 
 // NewTailnet returns a cache over a tailnet registry and the relay directory.
@@ -92,12 +102,36 @@ func NewTailnet(cfg TailnetConfig) (*Tailnet, error) {
 		}
 		trees = append(trees, Tree{Registry: cfg.RelayRegistry, Suffix: cfg.RelaySuffix, Start: cfg.RelayRegistryStart})
 	}
-	c, err := New(Config{RPC: cfg.RPC, Trees: trees, Path: cfg.Path})
+	c, err := New(Config{RPC: cfg.RPC, Trees: trees, Path: cfg.Path, ExtraResolvers: nonEmpty(cfg.Resolver)})
 	if err != nil {
 		return nil, err
 	}
 	return &Tailnet{Cache: c, hasRelays: hasRelays}, nil
 }
+
+func nonEmpty(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return []string{s}
+}
+
+// TailnetTexts returns the text records on the tailnet's own name.
+func (t *Tailnet) TailnetTexts() map[string]string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := map[string]string{}
+	name := t.cfg.Trees[0].Suffix
+	for addr := range t.view.Resolvers {
+		for k, v := range t.view.texts(addr, name) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// PreferredRelays returns the labels in the tailnet's relays record.
+func (t *Tailnet) PreferredRelays() []string { return splitList(t.TailnetTexts()[KeyTailnetRelays]) }
 
 func splitList(s string) []string {
 	var out []string
@@ -174,7 +208,7 @@ func (t *Tailnet) Relays() ([]Relay, error) {
 		}
 		out = append(out, Relay{
 			Label: r.Label, Address: addr, Pin: pin, DataRelay: r.Texts[KeyDataRelay] == "on",
-			STUN: r.Texts[KeySTUN], Price: price, Region: r.Texts[KeyRegion], Owner: r.Owner,
+			STUN: r.Texts[KeySTUN], Price: price, Region: r.Texts[KeyRegion], Owner: r.Owner, Block: r.Block,
 		})
 	}
 	return out, nil

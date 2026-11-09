@@ -383,7 +383,8 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	var forwards forwardFlag
 	fs.Var(&forwards, "forward", "local port-forward to a peer's gateway service: local-port=gateway-label:service (repeatable) — lets an unmodified local client (psql, curl, ...) reach an ACL'd mesh service with no CONNECT knowledge of its own (docs/adr/0006-gateway-connect-protocol.md)")
 	localPrefix := fs.String("local-addr", "", "this node's address and mesh subnet (CIDR); omit to resolve it from -label's own on-chain mesh-ip record instead (docs/adr/0009) — explicit value always wins")
-	stunServers := fs.String("stun-servers", os.Getenv("BRAMBLE_STUN_SERVERS"), "comma-separated STUN host:port servers; empty disables public endpoint discovery")
+	stunServers := fs.String("stun-servers", os.Getenv("BRAMBLE_STUN_SERVERS"), "comma-separated STUN host:port servers; empty uses the chosen relays' STUN servers")
+	noSTUN := fs.Bool("no-stun", false, "turn off public endpoint discovery and hole punching")
 	listenPort := fs.Uint("listen-port", 51820, "UDP port this node's WireGuard transport binds to")
 	ttl := fs.Duration("ttl", 30*time.Second, "how often to re-resolve ENS state for tracked peers")
 	rediscover := fs.Duration("rediscover", defaultRediscoverInterval, "with auto-discovery (no -peer flags), how often to re-list the tailnet and start tracking devices enrolled after startup, without a restart (docs/adr/0010); 0 turns rediscovery off. Admission and ACL checks for a new device are unchanged")
@@ -513,32 +514,46 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// same fail-open-on-discovery posture the rest of this file already has.
 	rendezvousRelays := staticRendezvousRelays(*rendezvousAddr)
 	discoveryFailed := false
+	var directorySTUN []string
+	discover := func() ([]rendezvous.Relay, dataRelayFlag, error) {
+		dir, err := m.Relays()
+		if err != nil {
+			return nil, nil, err
+		}
+		rdv, data, stun := chooseRelays(dir, m.PreferredRelays())
+		if directorySTUN == nil {
+			directorySTUN = stun
+		}
+		return rdv, data, nil
+	}
 	if len(dataRelays) == 0 || len(rendezvousRelays) == 0 {
-		relays, relErr := m.Relays()
+		rdv, data, relErr := discover()
 		if relErr != nil {
 			discoveryFailed = true
 			fmt.Fprintf(os.Stderr, "relay discovery: %v (will retry)\n", relErr)
 		}
-		staticRendezvous := len(rendezvousRelays) > 0
-		staticData := len(dataRelays) > 0
-		for _, r := range relays {
-			rr := rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin}
-			if !staticRendezvous {
-				rendezvousRelays = append(rendezvousRelays, rr)
-			}
-			if !staticData && r.DataRelay {
-				dataRelays[r.Label] = rr
+		if len(rendezvousRelays) == 0 {
+			rendezvousRelays = rdv
+		}
+		if len(dataRelays) == 0 {
+			for k, v := range data {
+				dataRelays[k] = v
 			}
 		}
 		if len(rendezvousRelays) == 0 {
 			discoveryFailed = true
 		}
+		tracef("relays: rendezvous %v, data %v", rendezvousRelays, relayAddresses(dataRelays))
 	}
 	if len(relayPeers) > 0 && len(dataRelays) == 0 {
 		return fmt.Errorf("-relay-peer requires at least one data relay, from -data-relay or discovery")
 	}
 
 	var discoveryServers []string
+	if *stunServers == "" && !*noSTUN {
+		// The chosen relays' STUN servers; never the whole open directory.
+		discoveryServers = append(discoveryServers, directorySTUN...)
+	}
 	for _, server := range strings.Split(*stunServers, ",") {
 		if server = strings.TrimSpace(server); server != "" {
 			discoveryServers = append(discoveryServers, server)
@@ -634,7 +649,10 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// relaySet is what every consumer of the rendezvous set reads: the resolver below and both
 	// data-relay watchers. A start-up discovery failure that the pool later recovers from is
 	// therefore seen by the failover and adopt paths too, not only by the first connect.
-	pool := newRendezvousPool(rendezvousRelays, m.Relays, rendezvousDiscoveryRetry)
+	pool := newRendezvousPool(rendezvousRelays, func() ([]rendezvous.Relay, error) {
+		rdv, _, err := discover()
+		return rdv, err
+	}, rendezvousDiscoveryRetry)
 	relaySet := rendezvousSource(pool.Get)
 	paths.relaySet = relaySet
 	if len(rendezvousRelays) > 0 || discoveryFailed {

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
 
@@ -20,7 +19,7 @@ import (
 type rendezvousPool struct {
 	mu         sync.Mutex
 	relays     []rendezvous.Relay
-	fetch      func() ([]registry.Relay, error)
+	fetch      func() ([]rendezvous.Relay, error)
 	now        func() time.Time
 	retryAfter time.Duration
 	lastTry    time.Time
@@ -36,7 +35,7 @@ func staticRendezvous(relays []rendezvous.Relay) rendezvousSource {
 	return func() ([]rendezvous.Relay, error) { return relays, nil }
 }
 
-func newRendezvousPool(initial []rendezvous.Relay, fetch func() ([]registry.Relay, error), retryAfter time.Duration) *rendezvousPool {
+func newRendezvousPool(initial []rendezvous.Relay, fetch func() ([]rendezvous.Relay, error), retryAfter time.Duration) *rendezvousPool {
 	return &rendezvousPool{relays: initial, fetch: fetch, now: time.Now, retryAfter: retryAfter}
 }
 
@@ -57,9 +56,7 @@ func (p *rendezvousPool) Get() ([]rendezvous.Relay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay discovery retry: %w", err)
 	}
-	for _, r := range resp {
-		p.relays = append(p.relays, rendezvous.Relay{Label: r.Label, Address: r.Address, Pin: r.Pin})
-	}
+	p.relays = append(p.relays, resp...)
 	if len(p.relays) == 0 {
 		return nil, fmt.Errorf("relay discovery retry found no rendezvous relays")
 	}

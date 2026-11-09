@@ -5,19 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WhyAsh5114/bramble/brambled/registry"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
 
 func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
 	now := time.Unix(1000, 0)
 	calls := 0
-	fetch := func() ([]registry.Relay, error) {
+	fetch := func() ([]rendezvous.Relay, error) {
 		calls++
 		if calls == 1 {
 			return nil, errors.New("sidecar returned 502: Invalid parameters")
 		}
-		return []registry.Relay{{Label: "relay1", Address: "203.0.113.5:9420", Pin: "sha256/x"}}, nil
+		return []rendezvous.Relay{{Label: "relay1", Address: "203.0.113.5:9420", Pin: "sha256/x"}}, nil
 	}
 	pool := newRendezvousPool(nil, fetch, 10*time.Second)
 	pool.now = func() time.Time { return now }
@@ -42,7 +41,7 @@ func TestRendezvousPoolRetriesDiscoveryAfterFailure(t *testing.T) {
 }
 
 func TestRendezvousPoolKeepsStartupRelays(t *testing.T) {
-	fetch := func() ([]registry.Relay, error) { t.Fatal("fetch must not run"); return nil, nil }
+	fetch := func() ([]rendezvous.Relay, error) { t.Fatal("fetch must not run"); return nil, nil }
 	pool := newRendezvousPool([]rendezvous.Relay{{Label: "static", Address: "x:1"}}, fetch, time.Second)
 	if relays, err := pool.Get(); err != nil || len(relays) != 1 {
 		t.Fatalf("relays=%v err=%v", relays, err)
@@ -50,7 +49,7 @@ func TestRendezvousPoolKeepsStartupRelays(t *testing.T) {
 }
 
 func TestRendezvousPoolEmptyRegistryIsAnError(t *testing.T) {
-	pool := newRendezvousPool(nil, func() ([]registry.Relay, error) { return nil, nil }, time.Second)
+	pool := newRendezvousPool(nil, func() ([]rendezvous.Relay, error) { return nil, nil }, time.Second)
 	if _, err := pool.Get(); err == nil {
 		t.Fatal("want an error when discovery finds no rendezvous relay")
 	}

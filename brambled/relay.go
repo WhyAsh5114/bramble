@@ -3,6 +3,7 @@ package brambled
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -35,7 +36,10 @@ func tracef(format string, args ...any) {
 
 type freeSessions struct{}
 
-const dataRelayRequestTimeout = 8 * time.Second
+const (
+	dataRelayRequestTimeout = 8 * time.Second
+	dataRelayProbeTimeout   = 3 * time.Second
+)
 
 func (freeSessions) Session(r rendezvous.Relay, bytes int64) (*rendezvous.SessionGrant, error) {
 	return rendezvous.RequestSession(r, bytes, dataRelayRequestTimeout)
@@ -114,19 +118,41 @@ func buyDataRelaySession(m sessionSource, pool dataRelayFlag, bytes int64) (*dat
 	if bytes <= 0 {
 		return nil, fmt.Errorf("data-relay session bytes must be positive")
 	}
-	quotes := make([]datarelay.Quote, 0, len(pool))
+	// Probe in parallel with a short timeout: a slow or dead relay must not
+	// hold up the others.
+	type probe struct {
+		quote datarelay.Quote
+		err   error
+	}
+	probes := make(chan probe, len(pool))
 	for label, r := range pool {
-		start := time.Now()
-		st, err := rendezvous.Status(r, 5*time.Second)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: %v\n", label, err)
+		go func(label string, r rendezvous.Relay) {
+			if health.blocked(label) {
+				probes <- probe{err: fmt.Errorf("%s: skipped after repeated failures", label)}
+				return
+			}
+			start := time.Now()
+			st, err := rendezvous.Status(r, dataRelayProbeTimeout)
+			switch {
+			case err != nil:
+				health.fail(label)
+				probes <- probe{err: fmt.Errorf("%s: %w", label, err)}
+			case st.Budget.ForwardingPaused:
+				probes <- probe{err: fmt.Errorf("%s: its data budget is used up for now", label)}
+			default:
+				health.ok(label)
+				probes <- probe{quote: datarelay.Quote{Label: label, LatencyMS: time.Since(start).Milliseconds()}}
+			}
+		}(label, r)
+	}
+	quotes := make([]datarelay.Quote, 0, len(pool))
+	for range pool {
+		p := <-probes
+		if p.err != nil {
+			fmt.Fprintf(os.Stderr, "data-relay: skipping %v\n", p.err)
 			continue
 		}
-		if st.Budget.ForwardingPaused {
-			fmt.Fprintf(os.Stderr, "data-relay: skipping %s: its data budget is used up for now\n", label)
-			continue
-		}
-		quotes = append(quotes, datarelay.Quote{Label: label, LatencyMS: time.Since(start).Milliseconds()})
+		quotes = append(quotes, p.quote)
 	}
 	if len(quotes) == 0 {
 		return nil, fmt.Errorf("no data relay is reachable with budget left")
@@ -381,10 +407,17 @@ func exchangeAny(relays []rendezvous.Relay, ownPubkey, peerPubkey, myCandidate s
 		candidate, label string
 		err              error
 	}
+	relays = healthy(relays)
 	results := make(chan attemptResult, len(relays))
 	for _, r := range relays {
 		go func(r rendezvous.Relay) {
 			c, err := rendezvous.Exchange(r, ownPubkey, peerPubkey, myCandidate, exchangeTimeout)
+			switch {
+			case err == nil:
+				health.ok(r.Label)
+			case errors.Is(err, rendezvous.ErrRelayUnreachable):
+				health.fail(r.Label)
+			}
 			results <- attemptResult{candidate: c, label: r.Label, err: err}
 		}(r)
 	}

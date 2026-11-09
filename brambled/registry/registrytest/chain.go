@@ -61,7 +61,8 @@ func (c *Chain) Network() registry.Network {
 
 // Config returns a TailnetConfig pointed at this chain.
 func (c *Chain) Config(path string) registry.TailnetConfig {
-	return registry.TailnetConfig{RPC: registry.NewRPC([]string{c.URL}), Name: c.Suffix, Registry: c.Registry, RegistryStart: c.Start, Path: path}
+	return registry.TailnetConfig{RPC: registry.NewRPC([]string{c.URL}), Name: c.Suffix, Registry: c.Registry, RegistryStart: c.Start, Resolver: c.Resolver, Path: path,
+		RelayRegistry: c.RelayRegistry, RelayRegistryStart: c.Start, RelaySuffix: c.RelaySuffix}
 }
 
 func (c *Chain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +173,17 @@ func (c *Chain) setTextLocked(recordID uint64, key, value string) {
 
 func (c *Chain) setTextOn(resolver string, recordID uint64, key, value string) {
 	c.add(resolver, []string{topic("TextUpdated(uint256,string,string,string)"), "0x" + word(recordID), "0x" + hex.EncodeToString(registry.Keccak256([]byte(key)))}, dynamic([]byte(key), []byte(value)))
+}
+
+// SetTailnetText writes a text record on the tailnet's own name.
+func (c *Chain) SetTailnetText(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.head++
+	const rootRecord = 1_000_000
+	dns, _ := registry.DNSEncode(c.Suffix)
+	c.add(c.Resolver, []string{topic("Linked(uint256,bytes32,bytes)"), "0x" + word(rootRecord), "0x" + hex.EncodeToString(registry.Namehash(c.Suffix))}, dynamic(dns))
+	c.setTextOn(c.Resolver, rootRecord, key, value)
 }
 
 // SetText writes a text record on label (enrolled earlier) in a new block.
