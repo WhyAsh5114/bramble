@@ -302,20 +302,33 @@ func resolveMeshIPPrefix(resolver admission.Resolver, label string) (netip.Prefi
 // serviceFlag accumulates repeated -service name=port flags — this node's
 // local, non-ENS service→port config (docs/adr/0005 Q1: never published on
 // chain, mapped purely by the receiving gateway).
-type serviceFlag map[string]uint16
+// A "/open" suffix (name=port/open) opens the service to every admitted
+// peer; without it, a peer needs an ACL grant.
+type serviceFlag struct {
+	ports map[string]uint16
+	open  map[string]bool
+}
 
-func (s serviceFlag) String() string { return fmt.Sprintf("%v", map[string]uint16(s)) }
+func newServiceFlag() *serviceFlag {
+	return &serviceFlag{ports: map[string]uint16{}, open: map[string]bool{}}
+}
 
-func (s serviceFlag) Set(value string) error {
+func (s *serviceFlag) String() string { return fmt.Sprintf("%v open=%v", s.ports, s.open) }
+
+func (s *serviceFlag) Set(value string) error {
 	name, portStr, ok := strings.Cut(value, "=")
-	if !ok {
-		return fmt.Errorf("expected name=port, got %q", value)
+	if !ok || name == "" || strings.ContainsAny(name, " \n") {
+		return fmt.Errorf("expected name=port or name=port/open, got %q", value)
 	}
+	portStr, open := strings.CutSuffix(portStr, "/open")
 	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return fmt.Errorf("parsing port for service %q: %w", name, err)
+	if err != nil || port == 0 {
+		return fmt.Errorf("parsing port for service %q: %v", name, err)
 	}
-	s[name] = uint16(port)
+	s.ports[name] = uint16(port)
+	if open {
+		s.open[name] = true
+	}
 	return nil
 }
 
@@ -353,10 +366,19 @@ func (f *forwardFlag) Set(value string) error {
 }
 
 func runServe(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return Serve(ctx, nil, args, nil)
+}
+
+// Serve runs a node until ctx ends. tn is the registry cache to use; nil
+// starts one from the environment (chainConfig). onReady, if set, receives a
+// Handle once the node is up. The bramble daemon embeds the node this way.
+func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady func(*Handle)) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	var peers peerFlag
 	fs.Var(&peers, "peer", "peer to track: label=allowed-ip/prefix, or a bare label to resolve that peer's mesh-ip from ENS instead (repeatable, docs/adr/0009) — requires the label to have a mesh-ip record, written by enroll.ts. Omit entirely to auto-discover and track every other device on the tailnet instead (docs/adr/0010); any -peer given at all disables auto-discovery and uses exactly what was typed")
-	services := serviceFlag{}
+	services := newServiceFlag()
 	fs.Var(services, "service", "local service this node offers as a gateway: name=local-port (repeatable); omit to offer none (docs/adr/0006-gateway-connect-protocol.md)")
 	var forwards forwardFlag
 	fs.Var(&forwards, "forward", "local port-forward to a peer's gateway service: local-port=gateway-label:service (repeatable) — lets an unmodified local client (psql, curl, ...) reach an ACL'd mesh service with no CONNECT knowledge of its own (docs/adr/0006-gateway-connect-protocol.md)")
@@ -416,11 +438,11 @@ func runServe(args []string) error {
 		return fmt.Errorf("registering rendezvous identity: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	m, err := startChain(ctx)
-	if err != nil {
-		return err
+	m := tn
+	if m == nil {
+		if m, err = startChain(ctx); err != nil {
+			return err
+		}
 	}
 	var sessions sessionSource = freeSessions{}
 
@@ -742,7 +764,8 @@ func runServe(args []string) error {
 		Resolver:      m,
 		PrivateKeyHex: *privateKeyHex,
 		OwnLabel:      *ownLabel,
-		Services:      services,
+		Services:      services.ports,
+		Open:          services.open,
 		LookupPeer:    tracker.lookup,
 		OnDecision:    status.OnGatewayDecision,
 	}
@@ -751,14 +774,16 @@ func runServe(args []string) error {
 			fmt.Fprintf(os.Stderr, "gateway: listener stopped: %v\n", err)
 		}
 	}()
-	fmt.Fprintf(os.Stderr, "gateway: listening on %s:%d, offering %d service(s)\n", prefix.Addr(), *gatewayPort, len(services))
+	fmt.Fprintf(os.Stderr, "gateway: listening on %s:%d, offering %d service(s)\n", prefix.Addr(), *gatewayPort, len(services.ports))
 
-	go func() {
-		if err := status.ListenAndServe(ctx, *statusBind, *statusPort); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "status: listener stopped: %v\n", err)
-		}
-	}()
-	fmt.Fprintf(os.Stderr, "status: listening on %s:%d\n", *statusBind, *statusPort)
+	if *statusPort != 0 {
+		go func() {
+			if err := status.ListenAndServe(ctx, *statusBind, *statusPort); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "status: listener stopped: %v\n", err)
+			}
+		}()
+		fmt.Fprintf(os.Stderr, "status: listening on %s:%d\n", *statusBind, *statusPort)
+	}
 
 	for _, fwd := range forwards {
 		fwd := fwd
@@ -811,8 +836,11 @@ func runServe(args []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "serving on %s:%d (pubkey %s), tracking %d peer(s), ttl=%s, rediscover=%s (Ctrl+C to stop)\n", prefix.Addr(), *listenPort, ownPubkey, len(peers), *ttl, *rediscover)
+	if onReady != nil {
+		onReady(&Handle{node: node, tracker: tracker, status: status, gatewayPort: uint16(*gatewayPort), netstack: *netstackMode, Label: *ownLabel, Address: prefix.Addr(), PublicKey: ownPubkey})
+	}
 	err = loop.Run(ctx)
-	if err == context.Canceled {
+	if err == context.Canceled || ctx.Err() != nil {
 		return nil
 	}
 	return err

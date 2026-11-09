@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -54,6 +55,9 @@ type Server struct {
 	// port this node forwards an authorized CONNECT to. Purely local
 	// config — never read from or written to chain state (adr/0005 Q1).
 	Services map[string]uint16
+	// Open lists services every admitted peer may use without an ACL grant
+	// (the built-in ping service, or services the owner opened to the tailnet).
+	Open map[string]bool
 	// PeerLabels maps a peer's tunnel address to its ENS label, built from
 	// the same static -peer flags admission.Loop already tracks (see
 	// adr/0006's correction to adr/0005's speculative pubkey-reverse-lookup
@@ -127,6 +131,10 @@ func (s *Server) handle(conn net.Conn) {
 		s.logf("gateway: rejecting connection from %s: %v", conn.RemoteAddr(), err)
 		return
 	}
+	if service == listRequest {
+		s.writeList(conn, requesterLabel)
+		return
+	}
 
 	port, known := s.Services[service]
 	if !known {
@@ -136,7 +144,10 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	allowed, err := CheckACL(s.Resolver, s.PrivateKeyHex, s.OwnLabel, requesterLabel, service)
+	allowed, err := s.Open[service], error(nil)
+	if !allowed {
+		allowed, err = CheckACL(s.Resolver, s.PrivateKeyHex, s.OwnLabel, requesterLabel, service)
+	}
 	if err != nil {
 		s.logf("gateway: ACL check failed for %s requesting %q: %v", requesterLabel, service, err)
 		s.emit(Decision{RequesterLabel: requesterLabel, Service: service, Allowed: false, Detail: "ACL check failed: " + err.Error()})
@@ -207,6 +218,9 @@ func (s *Server) readRequest(conn net.Conn) (requesterLabel, service string, rea
 	}
 
 	line = strings.TrimSpace(line)
+	if line == "LIST" {
+		return label, listRequest, reader, nil
+	}
 	prefix, service, ok := strings.Cut(line, " ")
 	if !ok || prefix != "CONNECT" || service == "" {
 		return "", "", nil, fmt.Errorf("malformed request %q, expected \"CONNECT <service>\"", line)
@@ -222,6 +236,66 @@ func (s *Server) readRequest(conn net.Conn) (requesterLabel, service string, rea
 // straight to the embedded Conn. net.Conn already declares its own Read,
 // which would otherwise make embedding both an ambiguous selector — Read is
 // overridden explicitly instead of relying on embedding to pick one.
+// listRequest marks a LIST request internally; service names cannot contain a space.
+const listRequest = " list"
+
+// ServiceInfo is one entry of a LIST answer.
+type ServiceInfo struct {
+	Name string `json:"name"`
+	// Access is "tailnet" for an open service, "granted" for one the requester holds a grant for.
+	Access string `json:"access"`
+}
+
+// writeList answers LIST with the services this requester may connect to, as
+// one JSON line. Services the requester cannot use are not named.
+func (s *Server) writeList(conn net.Conn, requesterLabel string) {
+	out := []ServiceInfo{}
+	for name := range s.Services {
+		if s.Open[name] {
+			out = append(out, ServiceInfo{Name: name, Access: "tailnet"})
+			continue
+		}
+		if ok, err := CheckACL(s.Resolver, s.PrivateKeyHex, s.OwnLabel, requesterLabel, name); err == nil && ok {
+			out = append(out, ServiceInfo{Name: name, Access: "granted"})
+		}
+	}
+	_ = json.NewEncoder(conn).Encode(map[string]any{"services": out})
+}
+
+// ListServices asks a gateway over conn which services this node may use.
+func ListServices(conn net.Conn) ([]ServiceInfo, error) {
+	_ = conn.SetDeadline(time.Now().Add(gatewayDecisionDeadline))
+	if _, err := fmt.Fprintf(conn, "LIST\n"); err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Services []ServiceInfo `json:"services"`
+	}
+	if err := json.NewDecoder(bufio.NewReaderSize(conn, 64<<10)).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("reading service list: %w", err)
+	}
+	return resp.Services, nil
+}
+
+// Connect asks a gateway over conn for service and returns a connection that
+// carries the service's bytes once the gateway says OK.
+func Connect(conn net.Conn, service string) (net.Conn, error) {
+	if _, err := fmt.Fprintf(conn, "CONNECT %s\n", service); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(gatewayDecisionDeadline))
+	reader := bufio.NewReaderSize(conn, maxRequestLineLen)
+	status, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("reading gateway answer: %w", err)
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	if strings.TrimSpace(status) != "OK" {
+		return nil, fmt.Errorf("%s: access denied", service)
+	}
+	return bufferedConn{reader: reader, Conn: conn}, nil
+}
+
 type bufferedConn struct {
 	reader io.Reader
 	net.Conn

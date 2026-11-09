@@ -212,10 +212,19 @@ func (s *Server) wgPeersByPubkey() (map[string]wgnode.PeerInfo, error) {
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
-	byPubkey, err := s.wgPeersByPubkey()
+	out, err := s.Peers()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	writeJSON(w, out)
+}
+
+// Peers returns every tracked peer with its admission, WireGuard and path state.
+func (s *Server) Peers() ([]PeerStatus, error) {
+	byPubkey, err := s.wgPeersByPubkey()
+	if err != nil {
+		return nil, err
 	}
 
 	admitted := s.admission.snapshot()
@@ -235,8 +244,11 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, ps)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
-	writeJSON(w, out)
+	return out, nil
 }
+
+// Activity returns recent admission and gateway events, newest last.
+func (s *Server) Activity() []ActivityEvent { return s.activity.snapshot() }
 
 func (s *Server) handleActivity(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.activity.snapshot())
