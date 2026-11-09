@@ -528,8 +528,13 @@ network problem, not a config mismatch.
   `-private-key`/`BRAMBLE_PRIVATE_KEY` isn't set — a real node's identity
   eventually comes from enrollment (Ledger-backed, `docs/adr/0001`), not from
   this daemon.
-- **x402 metering of rendezvous relay usage is not implemented** — the
-  relay is currently free to use. That's Phase 4's job.
+- **Paying relays is opt-in and off by default** (docs/adr/0021). With
+  `-hedera-account` and `-hedera-key` a node pays a relay that charges, over
+  x402 on Hedera testnet, only when no free relay can serve, within
+  `-pay-max-session` and `-pay-max-day` (USDC's smallest unit). `-hedera-no-pay`
+  keeps the account for the audit log only. `-audit-topic 0.0.N` makes a
+  gateway post a salted commitment to each allow or deny to that HCS topic. The
+  daemon sets all of these from Settings.
 - **Resolver errors fail open, but bounded by default.** If the sidecar dies
   or its RPC breaks, `SyncOnce` logs the error but does not immediately
   remove an already-admitted peer — Gate 1.3's "bounded by TTL"

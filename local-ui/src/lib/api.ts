@@ -148,6 +148,34 @@ export interface PayInfo {
   error?: string
 }
 
+/** Commitments to this gateway's access decisions on the tailnet's HCS topic (ADR 0021). */
+export interface AuditInfo {
+  enabled: boolean
+  topic?: string
+  active: boolean
+  funded: boolean
+  posted: number
+  dropped: number
+  failed: number
+  openings: number
+  error?: string
+}
+
+/** What a gateway's owner keeps to prove a commitment; the topic never holds it. */
+export interface Opening {
+  v: number
+  event: Record<string, string>
+  salt: string
+  c?: string
+}
+
+export interface VerifyResult {
+  match: boolean
+  sequence?: number
+  consensusTimestamp?: string
+  topic: string
+}
+
 export interface ActivityEvent {
   time: string
   kind: string
@@ -198,6 +226,11 @@ export const api = {
   pay: () => call<PayInfo>('GET', '/api/pay'),
   setPay: (enabled: boolean, maxSession: number, maxDay: number) =>
     call<PayInfo>('PUT', '/api/pay', { enabled, maxSession, maxDay }),
+  audit: () => call<AuditInfo>('GET', '/api/audit'),
+  setAudit: (enabled: boolean) => call<AuditInfo>('PUT', '/api/audit', { enabled }),
+  createAuditTopic: () => call<{ topic: string }>('POST', '/api/audit/topic'),
+  auditOpenings: () => call<Opening[]>('GET', '/api/audit/openings'),
+  verifyOpening: (o: Opening) => call<VerifyResult>('POST', '/api/audit/verify', o),
   relays: () => call<RelayInfo[]>('GET', '/api/relays'),
 }
 

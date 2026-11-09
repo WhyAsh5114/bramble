@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/gateway"
 	"github.com/WhyAsh5114/bramble/brambled/hederapay"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 )
@@ -199,4 +201,23 @@ func (p *paidSessions) refund(n int64) {
 	p.mu.Lock()
 	p.spent = max(0, p.spent-n)
 	p.mu.Unlock()
+}
+
+// auditDecisions passes every gateway decision to next and, when the audit
+// log is on, commits to it. Only the commitment leaves the node.
+func auditDecisions(next func(gateway.Decision), audit *hederapay.Publisher, gatewayLabel string) func(gateway.Decision) {
+	if audit == nil {
+		return next
+	}
+	return func(d gateway.Decision) {
+		next(d)
+		outcome := "denied"
+		if d.Allowed {
+			outcome = "allowed"
+		}
+		audit.Record(hederapay.Event{
+			"gateway": gatewayLabel, "requester": d.RequesterLabel, "service": d.Service,
+			"outcome": outcome, "at": strconv.FormatInt(time.Now().Unix(), 10),
+		})
+	}
 }

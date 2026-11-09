@@ -41,6 +41,7 @@ export const Keys = {
   aclGranters: 'acl-granters',
   meshIp: 'mesh-ip',
   tailnetRelays: 'relays',
+  tailnetAudit: 'audit-topic',
   rendezvous: 'rendezvous',
   pin: 'pin',
   dataRelay: 'data-relay',
@@ -201,6 +202,17 @@ export function setTailnetRelays(tailnet: Tailnet, labels: string[]) {
     functionName: 'setText',
     args: [dnsName(tailnet.name), Keys.tailnetRelays, value],
     gas: textGas(value),
+  } as const
+}
+
+/** Publish the tailnet's HCS audit topic (0.0.N, Hedera testnet), or clear it with an empty string. */
+export function setTailnetAuditTopic(tailnet: Tailnet, topic: string) {
+  return {
+    address: tailnet.resolver,
+    abi: resolverAbi,
+    functionName: 'setText',
+    args: [dnsName(tailnet.name), Keys.tailnetAudit, topic],
+    gas: textGas(topic),
   } as const
 }
 

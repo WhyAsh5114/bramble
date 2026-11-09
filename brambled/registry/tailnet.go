@@ -22,6 +22,11 @@ const (
 // Every member reads the same record, so peers always share a relay.
 const KeyTailnetRelays = "relays"
 
+// KeyTailnetAudit is a text record on the tailnet's own name: the HCS topic
+// (0.0.N, Hedera testnet) where the tailnet's gateways post commitments to
+// their access decisions, if the tailnet's admin turned that on (ADR 0021).
+const KeyTailnetAudit = "audit-topic"
+
 // Text record keys a relay publishes in the relay directory (ADR 0019).
 const (
 	KeyRendezvous = "rendezvous" // host:port of the rendezvous listener (TCP, TLS)
@@ -132,6 +137,22 @@ func (t *Tailnet) TailnetTexts() map[string]string {
 
 // PreferredRelays returns the labels in the tailnet's relays record.
 func (t *Tailnet) PreferredRelays() []string { return splitList(t.TailnetTexts()[KeyTailnetRelays]) }
+
+// AuditTopic returns the tailnet's audit topic, or "" when it has none or the
+// record is not a topic ID.
+func (t *Tailnet) AuditTopic() string {
+	v := strings.TrimSpace(t.TailnetTexts()[KeyTailnetAudit])
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 || parts[0] != "0" || parts[1] != "0" {
+		return ""
+	}
+	for _, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return ""
+		}
+	}
+	return v
+}
 
 func splitList(s string) []string {
 	var out []string

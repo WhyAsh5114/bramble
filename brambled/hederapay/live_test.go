@@ -135,3 +135,41 @@ func TestLivePaymentThroughARealRelayBuysASession(t *testing.T) {
 		t.Fatalf("settlement does not match the payment: result %s payer %d payTo %d", tr.Result, paid, got)
 	}
 }
+
+// Creates an audit topic with the test account, posts one commitment as a
+// gateway would, and finds it again through the public mirror node. Costs a
+// fraction of a cent of test HBAR.
+func TestLiveAuditCommitmentReachesTheTopic(t *testing.T) {
+	s, _ := liveSigner(t)
+	topic, err := CreateTopic(s, "bramble audit trail v1 (test)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("topic %s", topic)
+	pub, err := NewPublisher(s, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	go pub.Run(ctx)
+	pub.Record(Event{"gateway": "server", "requester": "laptop", "service": "web", "outcome": "allowed", "at": "1700000000"})
+	o := pub.Openings()[0]
+	var e *Entry
+	for i := 0; i < 30 && e == nil; i++ {
+		time.Sleep(3 * time.Second)
+		if e, err = FindCommitment(ctx, http.DefaultClient, "https://testnet.mirrornode.hedera.com", topic, o.Commitment); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e == nil {
+		t.Fatalf("the commitment never reached the topic: %+v", pub.Stats())
+	}
+	t.Logf("found at sequence %d, consensus %s", e.Sequence, e.Timestamp)
+	forged := o
+	forged.Event = Event{"gateway": "server", "requester": "laptop", "service": "web", "outcome": "denied", "at": "1700000000"}
+	c, _ := forged.Recompute()
+	if f, _ := FindCommitment(ctx, http.DefaultClient, "https://testnet.mirrornode.hedera.com", topic, c); f != nil {
+		t.Fatal("a forged opening matched")
+	}
+}

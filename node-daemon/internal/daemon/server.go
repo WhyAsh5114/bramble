@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/WhyAsh5114/bramble/brambled/hederapay"
 	"io"
 	"io/fs"
 	"net"
@@ -146,6 +147,33 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, 200, d.Pay())
+	})
+	mux.HandleFunc("GET /api/audit", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, d.Audit()) })
+	mux.HandleFunc("PUT /api/audit", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := d.SetAudit(body.Enabled); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		writeJSON(w, 200, d.Audit())
+	})
+	mux.HandleFunc("POST /api/audit/topic", func(w http.ResponseWriter, _ *http.Request) {
+		id, err := d.CreateAuditTopic()
+		reply(w, map[string]string{"topic": id}, err)
+	})
+	mux.HandleFunc("GET /api/audit/openings", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, d.AuditOpenings()) })
+	mux.HandleFunc("POST /api/audit/verify", func(w http.ResponseWriter, r *http.Request) {
+		var o hederapay.Opening
+		if !decode(w, r, &o) {
+			return
+		}
+		res, err := d.VerifyOpening(r.Context(), o)
+		reply(w, res, err)
 	})
 	mux.HandleFunc("GET /api/peers/{label}/services", func(w http.ResponseWriter, r *http.Request) {
 		list, err := d.PeerServices(r.PathValue("label"))

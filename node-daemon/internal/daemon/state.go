@@ -22,6 +22,9 @@ type Saved struct {
 	RPCURLs    []string `json:"rpcUrls,omitempty"`
 	// Pay turns on paying relays that charge for data sessions (ADR 0021).
 	Pay *PaySettings `json:"pay,omitempty"`
+	// Audit turns on commitments to this gateway's access decisions on the
+	// tailnet's HCS topic (ADR 0021). It uses the same Hedera key as Pay.
+	Audit *AuditSettings `json:"audit,omitempty"`
 }
 
 // TailnetRef is where a tailnet lives on-chain.

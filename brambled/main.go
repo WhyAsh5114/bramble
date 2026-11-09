@@ -407,6 +407,8 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	relaySessionBytes := fs.Int64("relay-session-bytes", 256<<20, "bytes to ask for per data-relay session; the relay may grant less")
 	hederaAccount := fs.String("hedera-account", os.Getenv("BRAMBLE_HEDERA_ACCOUNT"), "this node's own Hedera testnet account (0.0.N); with -hedera-key it turns on paying relays that charge for data sessions over x402 (docs/adr/0021). Off when unset")
 	hederaKey := fs.String("hedera-key", os.Getenv("BRAMBLE_HEDERA_KEY"), "hex ECDSA private key of -hedera-account. It cannot write tailnet records and is never printed or logged")
+	hederaNoPay := fs.Bool("hedera-no-pay", false, "with -hedera-account, do not pay relays (the account is only for the audit log)")
+	auditTopic := fs.String("audit-topic", "", "HCS topic for this gateway's access decisions, as salted commitments (docs/adr/0021). Needs -hedera-account and -hedera-key with HBAR on the account; off when unset")
 	payMaxSession := fs.Int64("pay-max-session", defaultMaxSession, "most one paid data session may cost, in USDC's smallest unit (six decimals)")
 	payMaxDay := fs.Int64("pay-max-day", defaultMaxDay, "most this node pays in a UTC day, in USDC's smallest unit")
 	relayFirst := fs.Bool("relay-first", false, "route every tracked peer through the data-relay pool instead of a direct path, for a device with no direct path to the mesh")
@@ -451,16 +453,27 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		}
 	}
 	var sessions sessionSource = freeSessions{}
-	paying := *hederaAccount != "" && *hederaKey != ""
+	hasHedera := *hederaAccount != "" && *hederaKey != ""
+	paying := hasHedera && !*hederaNoPay
 	var paySource *paidSessions
-	if paying {
+	var audit *hederapay.Publisher
+	if hasHedera {
 		signer, err := hederapay.NewSigner(*hederaAccount, *hederaKey)
 		if err != nil {
 			return err
 		}
-		paySource = newPaidSessions(signer, *payMaxSession, *payMaxDay)
-		sessions = paySource
-		fmt.Fprintf(os.Stderr, "payments on: %s pays relays that charge, up to %d per session and %d per day (testnet USDC)\n", signer.Account(), *payMaxSession, *payMaxDay)
+		if paying {
+			paySource = newPaidSessions(signer, *payMaxSession, *payMaxDay)
+			sessions = paySource
+			fmt.Fprintf(os.Stderr, "payments on: %s pays relays that charge, up to %d per session and %d per day (testnet USDC)\n", signer.Account(), *payMaxSession, *payMaxDay)
+		}
+		if *auditTopic != "" {
+			if audit, err = hederapay.NewPublisher(signer, *auditTopic); err != nil {
+				return err
+			}
+			go audit.Run(ctx)
+			fmt.Fprintf(os.Stderr, "audit log on: gateway decisions go to HCS topic %s as salted commitments\n", *auditTopic)
+		}
 	}
 
 	// No -peer flags at all: auto-discover every other device on the
@@ -791,7 +804,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 		Services:      services.ports,
 		Open:          services.open,
 		LookupPeer:    tracker.lookup,
-		OnDecision:    status.OnGatewayDecision,
+		OnDecision:    auditDecisions(status.OnGatewayDecision, audit, *ownLabel),
 	}
 	go func() {
 		if err := gw.Serve(ctx); err != nil && ctx.Err() == nil {
@@ -861,7 +874,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 
 	fmt.Fprintf(os.Stderr, "serving on %s:%d (pubkey %s), tracking %d peer(s), ttl=%s, rediscover=%s (Ctrl+C to stop)\n", prefix.Addr(), *listenPort, ownPubkey, len(peers), *ttl, *rediscover)
 	if onReady != nil {
-		onReady(&Handle{pay: paySource, payAccount: *hederaAccount, node: node, tracker: tracker, status: status, gatewayPort: uint16(*gatewayPort), netstack: *netstackMode, Label: *ownLabel, Address: prefix.Addr(), PublicKey: ownPubkey})
+		onReady(&Handle{audit: audit, pay: paySource, payAccount: *hederaAccount, node: node, tracker: tracker, status: status, gatewayPort: uint16(*gatewayPort), netstack: *netstackMode, Label: *ownLabel, Address: prefix.Addr(), PublicKey: ownPubkey})
 	}
 	err = loop.Run(ctx)
 	if err == context.Canceled || ctx.Err() != nil {

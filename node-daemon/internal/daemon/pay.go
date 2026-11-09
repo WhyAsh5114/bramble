@@ -149,7 +149,7 @@ func fetchBalances(ctx context.Context, base, evm string) (payBalances, error) {
 // the reconciler so the node restarts with payments on.
 func (d *Daemon) refreshPay(ctx context.Context) {
 	d.mu.Lock()
-	enabled, evm := d.saved.Pay != nil && d.saved.Pay.Enabled, ""
+	enabled, evm := d.hederaOnLocked(), ""
 	if d.hedera != nil {
 		evm = d.hedera.EVMAddress
 	}
@@ -184,18 +184,31 @@ func (d *Daemon) payLoop(ctx context.Context) {
 	}
 }
 
-// payArgsLocked adds the node's payment flags. The key stays in-process.
+// hederaOnLocked is true when either opt-in needs the device's Hedera key.
+func (d *Daemon) hederaOnLocked() bool {
+	return (d.saved.Pay != nil && d.saved.Pay.Enabled) || (d.saved.Audit != nil && d.saved.Audit.Enabled)
+}
+
+// payArgsLocked adds the node's Hedera flags. The key stays in-process.
 func (d *Daemon) payArgsLocked() []string {
-	p := d.saved.Pay
-	if p == nil || !p.Enabled || d.hedera == nil || d.payBal.Account == "" {
+	if !d.hederaOnLocked() || d.hedera == nil || d.payBal.Account == "" {
 		return nil
 	}
 	args := []string{"-hedera-account", d.payBal.Account, "-hedera-key", d.hedera.PrivateKeyHex}
-	if p.MaxSession > 0 {
-		args = append(args, "-pay-max-session", strconv.FormatInt(p.MaxSession, 10))
+	if p := d.saved.Pay; p == nil || !p.Enabled {
+		args = append(args, "-hedera-no-pay")
+	} else {
+		if p.MaxSession > 0 {
+			args = append(args, "-pay-max-session", strconv.FormatInt(p.MaxSession, 10))
+		}
+		if p.MaxDay > 0 {
+			args = append(args, "-pay-max-day", strconv.FormatInt(p.MaxDay, 10))
+		}
 	}
-	if p.MaxDay > 0 {
-		args = append(args, "-pay-max-day", strconv.FormatInt(p.MaxDay, 10))
+	if a := d.saved.Audit; a != nil && a.Enabled && d.tn != nil {
+		if topic := d.tn.AuditTopic(); topic != "" {
+			args = append(args, "-audit-topic", topic)
+		}
 	}
 	return args
 }
@@ -205,6 +218,12 @@ func (d *Daemon) Pay() PayInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	info := PayInfo{Network: hederapay.NetworkTestnet, Asset: brambled.DefaultPayAsset, MaxSession: defaultPayMaxSession, MaxDay: defaultPayMaxDay, Recent: []brambled.Payment{}}
+	// The key and balances show whenever the device has a Hedera key, because
+	// the audit log uses it too.
+	if d.hedera != nil {
+		info.EVMAddress, info.KeyFile = d.hedera.EVMAddress, d.Store.KeyPath()
+		info.Account, info.HBAR, info.USDC, info.Error = d.payBal.Account, d.payBal.HBAR, d.payBal.USDC, d.payErr
+	}
 	p := d.saved.Pay
 	if p == nil {
 		return info
@@ -216,10 +235,6 @@ func (d *Daemon) Pay() PayInfo {
 	if p.MaxDay > 0 {
 		info.MaxDay = p.MaxDay
 	}
-	if d.hedera != nil {
-		info.EVMAddress, info.KeyFile = d.hedera.EVMAddress, d.Store.KeyPath()
-	}
-	info.Account, info.HBAR, info.USDC, info.Error = d.payBal.Account, d.payBal.HBAR, d.payBal.USDC, d.payErr
 	if d.node != nil && d.node.handle != nil {
 		if st, ok := d.node.handle.Payments(); ok {
 			info.Active, info.SpentToday = true, st.SpentToday

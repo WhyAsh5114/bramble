@@ -1,6 +1,7 @@
 package brambled
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/WhyAsh5114/bramble/brambled/gateway"
 	"github.com/WhyAsh5114/bramble/brambled/hederapay"
+	"github.com/WhyAsh5114/bramble/brambled/registry"
+	"github.com/WhyAsh5114/bramble/brambled/registry/registrytest"
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/relay/relaysrv"
 )
@@ -159,5 +163,50 @@ func TestANodeRefusesARelayThatChargesInAnotherAsset(t *testing.T) {
 	}
 	if settles.Load() != 0 {
 		t.Fatal("a payment settled")
+	}
+}
+
+func TestGatewayDecisionsAreCommittedOnlyWhenAuditIsOn(t *testing.T) {
+	var seen int
+	next := func(gateway.Decision) { seen++ }
+	if f := auditDecisions(next, nil, "server"); f == nil {
+		t.Fatal("no handler with audit off")
+	}
+	pub, err := hederapay.NewPublisher(testSigner(t), "0.0.77")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := auditDecisions(next, pub, "server")
+	f(gateway.Decision{RequesterLabel: "laptop", Service: "web", Allowed: true})
+	f(gateway.Decision{RequesterLabel: "stranger", Service: "db", Allowed: false})
+	if seen != 2 {
+		t.Fatalf("the activity feed saw %d decisions, want 2", seen)
+	}
+	o := pub.Openings()
+	if len(o) != 2 || o[0].Event["outcome"] != "allowed" || o[1].Event["outcome"] != "denied" || o[1].Event["requester"] != "stranger" || o[0].Event["gateway"] != "server" {
+		t.Fatalf("openings %+v", o)
+	}
+}
+
+func TestAuditTopicComesFromTheTailnetRecordAndMustBeATopicID(t *testing.T) {
+	for _, c := range []struct{ record, want string }{
+		{"0.0.4242", "0.0.4242"}, {" 0.0.7 ", "0.0.7"}, {"", ""}, {"0.0.x", ""}, {"1.0.5", ""}, {"0.0.5.6", ""}, {"https://evil", ""},
+	} {
+		chain := registrytest.New(t, "aud.net.bramble.eth")
+		if c.record != "" {
+			chain.SetTailnetText(registry.KeyTailnetAudit, c.record)
+		}
+		tn, err := registry.NewTailnet(chain.Config(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := tn.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if got := tn.AuditTopic(); got != c.want {
+			t.Errorf("record %q gave %q, want %q", c.record, got, c.want)
+		}
 	}
 }

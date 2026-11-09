@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/WhyAsh5114/bramble/brambled/gateway"
+	"github.com/WhyAsh5114/bramble/brambled/hederapay"
 	"github.com/WhyAsh5114/bramble/brambled/statusapi"
 	"github.com/WhyAsh5114/bramble/brambled/wgnode"
 )
@@ -23,8 +24,18 @@ type Handle struct {
 	status      *statusapi.Server
 	gatewayPort uint16
 	netstack    bool
+	audit       *hederapay.Publisher
 	pay         *paidSessions
 	payAccount  string
+}
+
+// Audit reports the HCS audit log of gateway decisions and the openings this
+// gateway keeps, or false when it is off.
+func (h *Handle) Audit() (hederapay.AuditStats, []hederapay.Opening, bool) {
+	if h.audit == nil {
+		return hederapay.AuditStats{}, nil, false
+	}
+	return h.audit.Stats(), h.audit.Openings(), true
 }
 
 // Payments reports what this node has paid relays since it started, or false

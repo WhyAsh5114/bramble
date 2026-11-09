@@ -113,7 +113,7 @@ func (d *Daemon) Init() error {
 	if d.Network.ChainID == 0 {
 		d.Network = registry.Sepolia
 	}
-	if saved.Pay != nil && saved.Pay.Enabled {
+	if (saved.Pay != nil && saved.Pay.Enabled) || (saved.Audit != nil && saved.Audit.Enabled) {
 		if k, ok, err := d.Store.LoadHederaKey(); err != nil {
 			return err
 		} else if ok {

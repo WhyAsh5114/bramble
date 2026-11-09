@@ -95,7 +95,7 @@ export function PayCard() {
         {status(info)}
       </div>
 
-      {info.enabled && (
+      {info.evmAddress && (
         <dl className="m-0 grid gap-3 text-sm">
           <div className="grid gap-0.5 sm:grid-cols-[200px_minmax(0,1fr)] sm:gap-4">
             <dt className="eyebrow pt-0.5">Fund this address</dt>
@@ -106,6 +106,7 @@ export function PayCard() {
                 Send test HBAR from the <Link href={FAUCET}>Hedera faucet</Link> to this address; that creates the
                 account. Then send testnet USDC (token 0.0.429274) from <Link href={CIRCLE}>Circle&apos;s faucet</Link>{' '}
                 by the same address. A relay&apos;s facilitator pays the network fee, so USDC is all a payment needs.
+                The audit log needs a little HBAR instead.
               </span>
             </dd>
           </div>
