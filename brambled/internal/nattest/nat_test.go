@@ -57,19 +57,8 @@ func receive(t *testing.T, c net.PacketConn, want string) net.Addr {
 	return from
 }
 
-// requireLoopbackRange skips the test on hosts that route only 127.0.0.1
-// (macOS). Linux answers on all of 127.0.0.0/8, which the NAT lab needs.
-func requireLoopbackRange(t *testing.T) {
-	t.Helper()
-	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.10")})
-	if err != nil {
-		t.Skipf("NAT lab needs 127.0.0.0/8 on loopback: %v", err)
-	}
-	c.Close()
-}
-
 func TestFullCone(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	_, inside := client(t, nattest.FullCone, "127.0.0.2")
 	stun := server(t, "127.0.0.10")
 	peer := server(t, "127.0.0.11")
@@ -101,7 +90,7 @@ func expectTimeout(t *testing.T, c net.PacketConn) {
 }
 
 func TestRestrictedCone(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	_, inside := client(t, nattest.RestrictedCone, "127.0.0.2")
 	stun := server(t, "127.0.0.10")
 	peer := server(t, "127.0.0.11")
@@ -127,7 +116,7 @@ func TestRestrictedCone(t *testing.T) {
 }
 
 func TestSymmetric(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	_, inside := client(t, nattest.Symmetric, "127.0.0.2")
 	stun := server(t, "127.0.0.10")
 	stunOtherPort := server(t, "127.0.0.10")
@@ -182,7 +171,7 @@ func discover(t *testing.T, inside net.PacketConn, reflector *net.UDPConn) net.A
 }
 
 func TestTwoNATs(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	for _, kind := range []nattest.Type{nattest.FullCone, nattest.RestrictedCone, nattest.Symmetric} {
 		t.Run(string(kind), func(t *testing.T) {
 			_, alice := client(t, kind, "127.0.0.2")
@@ -211,7 +200,7 @@ func TestTwoNATs(t *testing.T) {
 }
 
 func TestBlockDirectPathKeepsRelayReachable(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	n, alice := client(t, nattest.RestrictedCone, "127.0.0.2")
 	_, bob := client(t, nattest.RestrictedCone, "127.0.0.3")
 	stun := server(t, "127.0.0.10")
@@ -264,7 +253,7 @@ func TestBlockDirectPathKeepsRelayReachable(t *testing.T) {
 }
 
 func TestPacketConnLifecycle(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	n, inside := client(t, nattest.FullCone, "127.0.0.2")
 	other, err := n.ListenPacket()
 	if err != nil {
@@ -339,7 +328,7 @@ func TestPacketConnLifecycle(t *testing.T) {
 }
 
 func TestConcurrentPackets(t *testing.T) {
-	requireLoopbackRange(t)
+	nattest.RequireLoopbackRange(t)
 	_, inside := client(t, nattest.RestrictedCone, "127.0.0.2")
 	const peers = 12
 	completed := make(chan struct{}, peers)

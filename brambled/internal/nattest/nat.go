@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -268,4 +269,15 @@ func (c *packetConn) setDeadline(t time.Time, read, write bool) error {
 		c.writeDeadline = t
 	}
 	return nil
+}
+
+// RequireLoopbackRange skips the test on hosts that route only 127.0.0.1
+// (macOS). Linux answers on all of 127.0.0.0/8, which the NAT lab needs.
+func RequireLoopbackRange(t testing.TB) {
+	t.Helper()
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.10")})
+	if err != nil {
+		t.Skipf("NAT lab needs 127.0.0.0/8 on loopback: %v", err)
+	}
+	c.Close()
 }

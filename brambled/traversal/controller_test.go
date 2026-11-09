@@ -162,6 +162,7 @@ func start(t *testing.T, a, b testPeer, relay func(context.Context) (netip.AddrP
 	return events
 }
 func TestConeNATDirectWireGuard(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.RestrictedCone, "127.0.0.3", "10.77.0.2", stun)
@@ -216,6 +217,7 @@ func relayServer(t *testing.T) netip.AddrPort {
 }
 
 func TestSymmetricNATFallsBackToRelay(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.Symmetric, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.Symmetric, "127.0.0.3", "10.77.0.2", stun)
@@ -243,6 +245,7 @@ func pingUntil(t *testing.T, a, b testPeer) {
 }
 
 func TestBlockedDirectFallsBackAndRecovers(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.RestrictedCone, "127.0.0.3", "10.77.0.2", stun)
@@ -265,6 +268,7 @@ func TestBlockedDirectFallsBackAndRecovers(t *testing.T) {
 }
 
 func TestRevokedPeerCannotBeRecreatedByLatePathResult(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.RestrictedCone, "127.0.0.3", "10.77.0.2", stun)
@@ -285,6 +289,7 @@ func TestRevokedPeerCannotBeRecreatedByLatePathResult(t *testing.T) {
 }
 
 func TestProbeReplyDoesNotCountAsAuthenticatedDirectPath(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.FullCone, "127.0.0.3", "10.77.0.2", stun)
@@ -309,6 +314,7 @@ func TestProbeReplyDoesNotCountAsAuthenticatedDirectPath(t *testing.T) {
 }
 
 func TestFailedDirectRetriesDoNotPostponeStalledRelayRenewal(t *testing.T) {
+	nattest.RequireLoopbackRange(t)
 	stun := stunServer(t)
 	a := newPeer(t, nattest.RestrictedCone, "127.0.0.2", "10.77.0.1", stun)
 	b := newPeer(t, nattest.FullCone, "127.0.0.3", "10.77.0.2", stun)
