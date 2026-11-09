@@ -1,0 +1,33 @@
+# get-bramble.whyash5114.com: the landing page and install scripts, behind
+# Dokploy's Traefik (Let's Encrypt). A Dokploy "Compose" app or plain
+# `docker compose`; runs under gVisor like every project on this host.
+name: bramble-landing
+services:
+  landing:
+    build:
+      context: ../../..
+      dockerfile: deploy/projects-host/landing/Dockerfile
+    image: bramble-landing:${LANDING_VERSION:-dev}
+    runtime: runsc
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    networks: [dokploy-network]
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: dokploy-network
+      traefik.http.routers.bramble-landing.rule: Host(`get-bramble.whyash5114.com`)
+      traefik.http.routers.bramble-landing.entrypoints: websecure
+      traefik.http.routers.bramble-landing.tls.certresolver: letsencrypt
+      traefik.http.routers.bramble-landing-http.rule: Host(`get-bramble.whyash5114.com`)
+      traefik.http.routers.bramble-landing-http.entrypoints: web
+      traefik.http.routers.bramble-landing-http.middlewares: redirect-to-https@file
+      traefik.http.services.bramble-landing.loadbalancer.server.port: '8080'
+networks:
+  dokploy-network:
+    external: true

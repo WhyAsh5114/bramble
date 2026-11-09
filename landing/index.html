@@ -3,151 +3,107 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bramble — private access for agents</title>
+    <title>bramble</title>
     <meta
       name="description"
-      content="A private WireGuard mesh for teams and agents, with ENS-based access and pay-as-you-go relays."
+      content="A WireGuard mesh whose membership lives in an ENS registry you own. Create a tailnet with your own wallet, join one with a join code."
     />
     <link rel="icon" href="assets/bramble-logo-512.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <nav class="topbar">
-      <span class="dot"></span>
-      <span class="brand">bramble</span>
-      <span class="topbar-tag">PRIVATE ACCESS / PEER-VERIFIED</span>
+      <a class="brand" href="/"><img src="assets/bramble-logo-512.png" alt="" width="26" height="26" />bramble</a>
+      <a class="nav-link" href="https://github.com/WhyAsh5114/bramble">GitHub</a>
     </nav>
 
     <header class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Networking for teams and agents</p>
-        <h1>Private access. Precise permissions.</h1>
-        <p class="lede">
-          A private WireGuard mesh for teams and agents, with ENS-based access and pay-as-you-go relays.
-        </p>
-        <div class="cta-row">
-          <a class="btn primary" href="https://github.com/WhyAsh5114/bramble" target="_blank" rel="noopener"
-            >View on GitHub</a
-          >
-          <a class="btn" href="https://ethglobal.com/showcase/bramble-wvkne" target="_blank" rel="noopener"
-            >ETHGlobal showcase + demo video</a
-          >
-        </div>
+      <p class="eyebrow">Open source · Sepolia testnet</p>
+      <h1>A private network with no coordination server.</h1>
+      <p class="lede">
+        bramble is a WireGuard mesh. Who belongs to it lives in an ENS registry your own wallet owns, so there is no
+        account, no control plane and nothing for us to run except a free relay.
+      </p>
+      <div class="install" id="install">
+        <code id="cmd">curl -fsSL https://get-bramble.whyash5114.com/install.sh | sh</code>
+        <button type="button" id="copy">Copy</button>
       </div>
-      <div class="hero-mark">
-        <img src="assets/bramble-logo-512.png" alt="Bramble logo: four nodes joined by thorny vines" />
-      </div>
+      <p class="small">
+        Linux and macOS, amd64 and arm64. The script verifies a SHA-256 checksum, installs one binary to
+        <code>~/.bramble/bin</code> and opens the console in your browser. <a href="install.sh">Read the script</a> ·
+        <a href="uninstall.sh">uninstall script</a>
+      </p>
     </header>
 
-    <div class="banner">
-      <img
-        src="assets/bramble-cover-1280x720.png"
-        alt="Bramble: a private mesh connecting laptops, phones, agents and servers"
-        loading="lazy"
-      />
-    </div>
-
     <main>
-      <section class="prose">
-        <h2>What it is</h2>
-        <p>
-          Bramble is a private WireGuard network for small teams and the agents they run. Each device checks an ENSv2
-          registry for membership and service permissions, so a relay can help with connectivity but cannot decide who
-          joins. A team can give a worker access to one internal API, approve a wider grant when it needs one, and
-          revoke its network access later. The API stays off the public internet. Peers can use ENS-listed relays for
-          rendezvous or traffic forwarding, paying per session or byte allotment through x402 on Hedera rather than
-          buying a seat for each device.
-        </p>
+      <section class="shot">
+        <img src="assets/overview.png" alt="The bramble console: a member device with its mesh address and peers" />
       </section>
 
-      <section class="system">
-        <h2>The system</h2>
-        <div class="cards">
-          <div class="card">
-            <p class="card-tag">01 / LEDGER</p>
-            <h3>Enroll with human approval</h3>
-            <p>Device-signed worker identity, confirmed on a physical Ledger.</p>
-          </div>
-          <div class="card">
-            <p class="card-tag">02 / ENSv2</p>
-            <h3>Grant, then revoke</h3>
-            <p>Service access checked by the gateway against on-chain state.</p>
-          </div>
-          <div class="card">
-            <p class="card-tag">03 / HEDERA</p>
-            <h3>Pay for forwarding</h3>
-            <p>x402 sessions, priced by bytes, settled in testnet USDC.</p>
-          </div>
+      <section class="grid">
+        <article>
+          <h2>Create</h2>
+          <p>
+            Pick a name. Your wallet claims <code>name.net.bramble.eth</code> and deploys a registry and resolver you
+            administer. Three Sepolia transactions, about half a minute. You pay the test gas; nothing is sponsored.
+          </p>
+        </article>
+        <article>
+          <h2>Join</h2>
+          <p>
+            Install on the other machine and enter the tailnet name. It shows a join code and a key fingerprint. The
+            admin pastes the code, checks the fingerprint and signs. No wallet needed to join.
+          </p>
+        </article>
+        <article>
+          <h2>Connect</h2>
+          <p>
+            Devices find each other through sealed introductions at a relay, punch through NAT when they can and fall
+            back to a relayed path when they cannot. Every device shares a ping service, plus whatever ports you add.
+          </p>
+        </article>
+      </section>
+
+      <section class="split">
+        <div>
+          <h2>Relays can't read your traffic</h2>
+          <p>
+            Anyone can run a relay and list it under <code>relay.bramble.eth</code>. Relays see only packets sealed to
+            the two devices and WireGuard ciphertext. Devices pin each relay's TLS key, prefer the tailnet's chosen
+            relays and the oldest directory entries, and drop relays that stop answering.
+          </p>
+          <p>
+            Ours is free, in ap-south-1, with a daily byte budget. When the budget runs out it keeps introducing devices
+            but stops carrying traffic.
+          </p>
+          <pre><code>bramble relay -public-host &lt;public IP&gt;</code></pre>
         </div>
+        <img src="assets/network-dark.png" alt="The network graph: a relay, this device and a peer on a relayed path" />
       </section>
 
-      <section class="evidence">
-        <h2>Real state, not mockups</h2>
-        <p class="section-note">
-          Every screenshot below is a live read from Sepolia, the Hedera public mirror node, or this node's own runtime
-          — not staged data.
-        </p>
-        <div class="shots">
-          <figure>
-            <img
-              src="assets/devices.png"
-              alt="Bramble dashboard Devices page showing enrolled devices with pubkey, ACL grants, and resolver addresses"
-              loading="lazy"
-            />
-            <figcaption>Devices — each one an ENSv2 subname with its own resolver</figcaption>
-          </figure>
-          <figure>
-            <img
-              src="assets/relays.png"
-              alt="Bramble dashboard Relays page showing relays discovered from the ENS relay registry with live per-byte prices"
-              loading="lazy"
-            />
-            <figcaption>Relays — discovered from ENS, priced live, not a static list</figcaption>
-          </figure>
-          <figure>
-            <img
-              src="assets/payments.png"
-              alt="Bramble dashboard Payments page showing real testnet USDC settlements read from Hedera's public mirror node"
-              loading="lazy"
-            />
-            <figcaption>Payments — real settlements, independently confirmed via Hedera's mirror node</figcaption>
-          </figure>
-          <figure>
-            <img
-              src="assets/hashscan.png"
-              alt="HashScan transaction detail page showing a successful real crypto transfer on Hedera testnet"
-              loading="lazy"
-            />
-            <figcaption>Every payment lands a real, checkable HashScan transaction</figcaption>
-          </figure>
-          <figure>
-            <img
-              src="assets/activity.png"
-              alt="Bramble dashboard Activity page showing a real deny, grant, allow, and revoke sequence for a device"
-              loading="lazy"
-            />
-            <figcaption>Activity — a real deny, grant, allow, revoke cycle for one worker</figcaption>
-          </figure>
+      <section class="split">
+        <div>
+          <h2>Membership is on-chain, reads are local</h2>
+          <p>
+            Each device keeps an event-sourced copy of its tailnet's registry on disk and follows new blocks from public
+            Sepolia RPCs. Enrolling, revoking and granting access to a private service are wallet transactions; peers
+            pick them up within seconds.
+          </p>
         </div>
-      </section>
-
-      <section class="prose">
-        <h2>How it's made</h2>
-        <p>
-          The Go node runs userspace WireGuard with local service forwarding. A TypeScript sidecar manages ENSv2 records
-          and relay payments. Sepolia hosts Permissioned Registries and per-device resolvers storing device keys, mesh
-          addresses, and access state. ENS Enhanced Access Control governs enrollment, key changes, access revocation,
-          and grant management. Each node independently verifies records and updates its peers. The gateway validates
-          scoped grants before forwarding requests. Ledger hardware wallets sign enrollment transactions; Key Ring
-          encrypts the access grant secret. Relays are ENS-discoverable; nodes pay for relay sessions in testnet USDC
-          via Hedera's x402 flow, priced per byte.
-        </p>
+        <img src="assets/devices.png" alt="The devices page: enrolling a device from its join code" />
       </section>
     </main>
 
     <footer>
-      <span class="brand">bramble</span>
-      <a href="https://github.com/WhyAsh5114/bramble" target="_blank" rel="noopener">github.com/WhyAsh5114/bramble</a>
+      <span>bramble · a portfolio project. Testnet only; do not rely on it for anything that matters.</span>
+      <a href="https://github.com/WhyAsh5114/bramble">Source and docs</a>
     </footer>
+    <script>
+      document.getElementById('copy').addEventListener('click', function () {
+        navigator.clipboard.writeText(document.getElementById('cmd').textContent)
+        this.textContent = 'Copied'
+        setTimeout(() => (this.textContent = 'Copy'), 1500)
+      })
+    </script>
   </body>
 </html>
