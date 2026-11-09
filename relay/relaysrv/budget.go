@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 // cap. When either is reached the relay stops forwarding data until the
 // period rolls over; rendezvous keeps working, so direct paths still form.
 // Counters are saved to disk so a restart does not reset them.
-type budget struct {
+type Budget struct {
 	mu       sync.Mutex
 	path     string
 	perDay   int64
@@ -28,8 +28,8 @@ type budgetState struct {
 	MonthBytes int64  `json:"monthBytes"`
 }
 
-func newBudget(path string, perDay, perMonth int64) *budget {
-	b := &budget{path: path, perDay: perDay, perMonth: perMonth}
+func NewBudget(path string, perDay, perMonth int64) *Budget {
+	b := &Budget{path: path, perDay: perDay, perMonth: perMonth}
 	if path != "" {
 		if raw, err := os.ReadFile(path); err == nil {
 			_ = json.Unmarshal(raw, &b.state)
@@ -39,7 +39,7 @@ func newBudget(path string, perDay, perMonth int64) *budget {
 	return b
 }
 
-func (b *budget) roll(now time.Time) {
+func (b *Budget) roll(now time.Time) {
 	day, month := now.UTC().Format("2006-01-02"), now.UTC().Format("2006-01")
 	if b.state.Day != day {
 		b.state.Day, b.state.DayBytes, b.dirty = day, 0, true
@@ -50,7 +50,7 @@ func (b *budget) roll(now time.Time) {
 }
 
 // take reserves n bytes. It returns false when a cap would be exceeded.
-func (b *budget) take(n int64, now time.Time) bool {
+func (b *Budget) take(n int64, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.roll(now)
@@ -71,7 +71,7 @@ func (b *budget) take(n int64, now time.Time) bool {
 }
 
 // exhausted reports whether no data can be forwarded right now.
-func (b *budget) exhausted(now time.Time) bool {
+func (b *Budget) exhausted(now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.roll(now)
@@ -87,7 +87,7 @@ type BudgetStatus struct {
 	ForwardingPaused bool  `json:"forwardingPaused"`
 }
 
-func (b *budget) status(now time.Time) BudgetStatus {
+func (b *Budget) status(now time.Time) BudgetStatus {
 	paused := b.exhausted(now)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -95,7 +95,7 @@ func (b *budget) status(now time.Time) BudgetStatus {
 }
 
 // save writes the counters if they changed.
-func (b *budget) save() error {
+func (b *Budget) Save() error {
 	b.mu.Lock()
 	if !b.dirty || b.path == "" {
 		b.mu.Unlock()

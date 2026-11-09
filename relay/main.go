@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/WhyAsh5114/bramble/relay/relaysrv"
 )
 
 var version = "dev"
@@ -43,11 +45,11 @@ const gib = 1 << 30
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "pin" {
 		dir := envStr("RELAY_STATE_DIR", "./state")
-		key, err := loadOrCreateKey(dir)
+		key, err := relaysrv.LoadOrCreateKey(dir)
 		if err != nil {
 			fail(err)
 		}
-		pin, err := pinOf(&key.PublicKey)
+		pin, err := relaysrv.PinOf(&key.PublicKey)
 		if err != nil {
 			fail(err)
 		}
@@ -71,21 +73,21 @@ func main() {
 	noData := flag.Bool("rendezvous-only", os.Getenv("RELAY_RENDEZVOUS_ONLY") == "1", "offer rendezvous and STUN only, no data relay")
 	flag.Parse()
 
-	key, err := loadOrCreateKey(*stateDir)
+	key, err := relaysrv.LoadOrCreateKey(*stateDir)
 	if err != nil {
 		fail(fmt.Errorf("loading TLS key: %w", err))
 	}
-	pin, err := pinOf(&key.PublicKey)
+	pin, err := relaysrv.PinOf(&key.PublicKey)
 	if err != nil {
 		fail(err)
 	}
-	cfg, err := tlsConfig(key)
+	cfg, err := relaysrv.TLSConfig(key)
 	if err != nil {
 		fail(err)
 	}
 
-	var data *dataRelay
-	b := newBudget(filepath.Join(*stateDir, "budget.json"), *perDay, *perMonth)
+	var data *relaysrv.DataRelay
+	b := relaysrv.NewBudget(filepath.Join(*stateDir, "budget.json"), *perDay, *perMonth)
 	if !*noData {
 		if *publicHost == "" {
 			fail(errors.New("-public-host (RELAY_PUBLIC_HOST) is required for the data relay; use -rendezvous-only to run without it"))
@@ -93,7 +95,7 @@ func main() {
 		if *portMin <= 0 || *portMax < *portMin || *portMax > 65535 {
 			fail(errors.New("invalid data port range"))
 		}
-		data = newDataRelay(*dataHost, dataLimits{
+		data = relaysrv.NewDataRelay(*dataHost, relaysrv.Limits{
 			SessionBytes: *sessionBytes, SessionTTL: *sessionTTL, MaxSessions: *maxSessions,
 			SessionsPerHour: *perHour, PortMin: *portMin, PortMax: *portMax,
 		}, b)
@@ -118,7 +120,7 @@ func main() {
 			fail(err)
 		}
 		log.Printf("stun on %s", uc.LocalAddr())
-		go func() { _ = serveSTUN(uc) }()
+		go func() { _ = relaysrv.ServeSTUN(uc) }()
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -131,7 +133,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := b.save(); err != nil {
+				if err := b.Save(); err != nil {
 					log.Printf("saving budget: %v", err)
 				}
 			}
@@ -139,11 +141,11 @@ func main() {
 	}()
 	go func() {
 		<-ctx.Done()
-		_ = b.save()
+		_ = b.Save()
 		ln.Close()
 	}()
 
-	srv := NewServer(data, *publicHost, version)
+	srv := relaysrv.NewServer(data, *publicHost, version)
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		fail(err)
 	}

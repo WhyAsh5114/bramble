@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"bufio"
@@ -72,7 +72,7 @@ type peerRoute struct{ id, remote string }
 
 // Server is the rendezvous relay.
 type Server struct {
-	data       *dataRelay // nil: no data relay
+	data       *DataRelay // nil: no data relay
 	publicHost string
 	version    string
 
@@ -82,7 +82,7 @@ type Server struct {
 }
 
 // NewServer returns a rendezvous server. data may be nil.
-func NewServer(data *dataRelay, publicHost, version string) *Server {
+func NewServer(data *DataRelay, publicHost, version string) *Server {
 	return &Server{data: data, publicHost: publicHost, version: version, peers: map[peerRoute]*peer{}, connsIP: map[string]int{}}
 }
 

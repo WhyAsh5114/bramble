@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"encoding/binary"
@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// serveSTUN answers RFC 5389 Binding requests with XOR-MAPPED-ADDRESS, so
+// ServeSTUN answers RFC 5389 Binding requests with XOR-MAPPED-ADDRESS, so
 // nodes learn their public endpoint. A reply is 32 bytes for a 20-byte request
 // (IPv4); a per-source rate limit keeps the relay from being a useful reflector.
-func serveSTUN(conn *net.UDPConn) error {
+func ServeSTUN(conn *net.UDPConn) error {
 	const cookie = 0x2112A442
 	const perSourcePerSecond = 20
 	type bucket struct {

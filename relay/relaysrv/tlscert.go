@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"crypto/ecdsa"
@@ -21,7 +21,7 @@ import (
 // in the relay directory, so clients authenticate the relay without a CA or a
 // domain name. The certificate around the key is regenerated freely.
 
-func loadOrCreateKey(dir string) (*ecdsa.PrivateKey, error) {
+func LoadOrCreateKey(dir string) (*ecdsa.PrivateKey, error) {
 	path := filepath.Join(dir, "relay-key.pem")
 	if raw, err := os.ReadFile(path); err == nil {
 		block, _ := pem.Decode(raw)
@@ -47,8 +47,8 @@ func loadOrCreateKey(dir string) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// pinOf returns "sha256/<base64url SPKI hash>", the value published as the relay's "pin" record.
-func pinOf(pub *ecdsa.PublicKey) (string, error) {
+// PinOf returns "sha256/<base64url SPKI hash>", the value published as the relay's "pin" record.
+func PinOf(pub *ecdsa.PublicKey) (string, error) {
 	spki, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return "", err
@@ -57,7 +57,7 @@ func pinOf(pub *ecdsa.PublicKey) (string, error) {
 	return "sha256/" + base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
-func tlsConfig(key *ecdsa.PrivateKey) (*tls.Config, error) {
+func TLSConfig(key *ecdsa.PrivateKey) (*tls.Config, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		Subject:      pkix.Name{CommonName: "bramble-relay"},

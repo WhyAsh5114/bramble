@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"bufio"
@@ -12,15 +12,15 @@ import (
 	"time"
 )
 
-func startRelay(t *testing.T, limits dataLimits, b *budget) (addr string, pin string) {
+func startRelay(t *testing.T, limits Limits, b *Budget) (addr string, pin string) {
 	t.Helper()
 	dir := t.TempDir()
-	key, err := loadOrCreateKey(dir)
+	key, err := LoadOrCreateKey(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pin, _ = pinOf(&key.PublicKey)
-	cfg, err := tlsConfig(key)
+	pin, _ = PinOf(&key.PublicKey)
+	cfg, err := TLSConfig(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,9 +30,9 @@ func startRelay(t *testing.T, limits dataLimits, b *budget) (addr string, pin st
 	}
 	t.Cleanup(func() { ln.Close() })
 	if b == nil {
-		b = newBudget("", 0, 0)
+		b = NewBudget("", 0, 0)
 	}
-	srv := NewServer(newDataRelay("127.0.0.1", limits, b), "127.0.0.1", "test")
+	srv := NewServer(NewDataRelay("127.0.0.1", limits, b), "127.0.0.1", "test")
 	go func() { _ = srv.Serve(ln) }()
 	return ln.Addr().String(), pin
 }
@@ -74,7 +74,7 @@ func (c *client) recv(t *testing.T) message {
 	return m
 }
 
-var defaultLimits = dataLimits{SessionBytes: 1 << 20, SessionTTL: time.Minute, MaxSessions: 8, SessionsPerHour: 4, PortMin: 46000, PortMax: 46099}
+var defaultLimits = Limits{SessionBytes: 1 << 20, SessionTTL: time.Minute, MaxSessions: 8, SessionsPerHour: 4, PortMin: 46000, PortMax: 46099}
 
 func TestRendezvousRoutesOpaqueOffers(t *testing.T) {
 	addr, _ := startRelay(t, defaultLimits, nil)
@@ -93,10 +93,10 @@ func TestRendezvousRoutesOpaqueOffers(t *testing.T) {
 
 func TestPinIsStableAcrossRestarts(t *testing.T) {
 	dir := t.TempDir()
-	k1, _ := loadOrCreateKey(dir)
-	k2, _ := loadOrCreateKey(dir)
-	p1, _ := pinOf(&k1.PublicKey)
-	p2, _ := pinOf(&k2.PublicKey)
+	k1, _ := LoadOrCreateKey(dir)
+	k2, _ := LoadOrCreateKey(dir)
+	p1, _ := PinOf(&k1.PublicKey)
+	p2, _ := PinOf(&k2.PublicKey)
 	if p1 != p2 {
 		t.Fatal("pin changed after reload")
 	}
@@ -151,8 +151,8 @@ func TestDataSessionForwardsOnlyBetweenBoundPeers(t *testing.T) {
 
 	// Before binding, nothing is forwarded.
 	_, _ = stranger.WriteToUDP([]byte("hello?"), relayAddr)
-	_, _ = a.WriteToUDP(makeBind(secret, '0', id, time.Now()), relayAddr)
-	_, _ = b.WriteToUDP(makeBind(secret, '1', id, time.Now()), relayAddr)
+	_, _ = a.WriteToUDP(MakeBind(secret, '0', id, time.Now()), relayAddr)
+	_, _ = b.WriteToUDP(MakeBind(secret, '1', id, time.Now()), relayAddr)
 	time.Sleep(50 * time.Millisecond)
 	if _, ok := readWithin(a, 100*time.Millisecond); ok {
 		t.Fatal("a received the stranger's packet")
@@ -168,7 +168,7 @@ func TestDataSessionForwardsOnlyBetweenBoundPeers(t *testing.T) {
 	}
 
 	// A stranger with a forged bind cannot take a slot.
-	forged := makeBind([]byte("wrong-secret-wrong-secret-wrong!"), '1', id, time.Now())
+	forged := MakeBind([]byte("wrong-secret-wrong-secret-wrong!"), '1', id, time.Now())
 	_, _ = stranger.WriteToUDP(forged, relayAddr)
 	time.Sleep(50 * time.Millisecond)
 	_, _ = a.WriteToUDP([]byte("still-b"), relayAddr)
@@ -183,21 +183,21 @@ func TestDataSessionForwardsOnlyBetweenBoundPeers(t *testing.T) {
 func TestStaleBindIsIgnored(t *testing.T) {
 	var id [8]byte
 	secret := []byte("s")
-	old := makeBind(secret, '0', id, time.Now().Add(-10*time.Minute))
+	old := MakeBind(secret, '0', id, time.Now().Add(-10*time.Minute))
 	if _, isBind, ok := parseBind(old, id, secret, time.Now()); !isBind || ok {
 		t.Fatalf("stale bind accepted: isBind=%v ok=%v", isBind, ok)
 	}
 }
 
 func TestSessionCapAndBudgetStopForwarding(t *testing.T) {
-	b := newBudget(filepath.Join(t.TempDir(), "b.json"), 50, 0)
+	b := NewBudget(filepath.Join(t.TempDir(), "b.json"), 50, 0)
 	addr, _ := startRelay(t, defaultLimits, b)
 	g := grant(t, addr, 1000)
 	id, secret := sessionKey(t, g)
 	relayAddr, _ := net.ResolveUDPAddr("udp", g.Endpoint)
 	x, y := udp(t), udp(t)
-	_, _ = x.WriteToUDP(makeBind(secret, '0', id, time.Now()), relayAddr)
-	_, _ = y.WriteToUDP(makeBind(secret, '1', id, time.Now()), relayAddr)
+	_, _ = x.WriteToUDP(MakeBind(secret, '0', id, time.Now()), relayAddr)
+	_, _ = y.WriteToUDP(MakeBind(secret, '1', id, time.Now()), relayAddr)
 	time.Sleep(50 * time.Millisecond)
 	payload := make([]byte, 40)
 	_, _ = x.WriteToUDP(payload, relayAddr)
@@ -214,10 +214,10 @@ func TestSessionCapAndBudgetStopForwarding(t *testing.T) {
 	if m := c.recv(t); m.Type != "error" {
 		t.Fatalf("session granted with no budget: %+v", m)
 	}
-	if err := b.save(); err != nil {
+	if err := b.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if reloaded := newBudget(b.path, 50, 0); !reloaded.exhausted(time.Now()) {
+	if reloaded := NewBudget(b.path, 50, 0); !reloaded.exhausted(time.Now()) {
 		t.Fatal("budget reset after restart")
 	}
 }
@@ -243,7 +243,7 @@ func TestGrantIsClampedToSessionCap(t *testing.T) {
 
 func TestSTUNAnswersWithTheSourceAddress(t *testing.T) {
 	server := udp(t)
-	go func() { _ = serveSTUN(server) }()
+	go func() { _ = ServeSTUN(server) }()
 	c := udp(t)
 	req := make([]byte, 20)
 	binary.BigEndian.PutUint16(req[0:2], 0x0001)

@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"crypto/hmac"
@@ -61,8 +61,8 @@ func parseBind(packet []byte, id [8]byte, secret []byte, now time.Time) (side in
 	return int(s - '0'), true, true
 }
 
-// makeBind builds a bind packet; the relay tests use it as the client would.
-func makeBind(secret []byte, side byte, id [8]byte, now time.Time) []byte {
+// MakeBind builds a bind packet; the relay tests use it as the client would.
+func MakeBind(secret []byte, side byte, id [8]byte, now time.Time) []byte {
 	ts := uint64(now.Unix())
 	out := make([]byte, 0, bindLen)
 	out = append(out, bindMagic...)

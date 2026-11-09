@@ -1,4 +1,4 @@
-package main
+package relaysrv
 
 import (
 	"crypto/rand"
@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// dataLimits bounds what one relay gives away.
-type dataLimits struct {
+// Limits bounds what one relay gives away.
+type Limits struct {
 	SessionBytes     int64         // cap of one session
 	SessionTTL       time.Duration // lifetime of one session
 	MaxSessions      int           // concurrent sessions
@@ -32,9 +32,9 @@ type dataSession struct {
 	slots [2]*net.UDPAddr
 }
 
-type dataRelay struct {
-	limits dataLimits
-	budget *budget
+type DataRelay struct {
+	limits Limits
+	budget *Budget
 	host   string // interface sessions bind to
 
 	mu       sync.Mutex
@@ -43,8 +43,8 @@ type dataRelay struct {
 	nextPort int
 }
 
-func newDataRelay(host string, limits dataLimits, b *budget) *dataRelay {
-	return &dataRelay{limits: limits, budget: b, host: host, sessions: map[[8]byte]*dataSession{}, perIP: map[string][]time.Time{}, nextPort: limits.PortMin}
+func NewDataRelay(host string, limits Limits, b *Budget) *DataRelay {
+	return &DataRelay{limits: limits, budget: b, host: host, sessions: map[[8]byte]*dataSession{}, perIP: map[string][]time.Time{}, nextPort: limits.PortMin}
 }
 
 var (
@@ -54,7 +54,7 @@ var (
 )
 
 // allocate opens a session for the requester at ip. The grant is clamped to the session cap.
-func (r *dataRelay) allocate(ip string, bytes int64, now time.Time) (*dataSession, error) {
+func (r *DataRelay) allocate(ip string, bytes int64, now time.Time) (*dataSession, error) {
 	if r.budget.exhausted(now) {
 		return nil, errBudget
 	}
@@ -96,7 +96,7 @@ func (r *dataRelay) allocate(ip string, bytes int64, now time.Time) (*dataSessio
 }
 
 // listenLocked binds the next free port in the configured range.
-func (r *dataRelay) listenLocked() (*net.UDPConn, error) {
+func (r *DataRelay) listenLocked() (*net.UDPConn, error) {
 	span := r.limits.PortMax - r.limits.PortMin + 1
 	for i := 0; i < span; i++ {
 		port := r.nextPort
@@ -112,7 +112,7 @@ func (r *dataRelay) listenLocked() (*net.UDPConn, error) {
 	return nil, fmt.Errorf("no free UDP port in %d-%d", r.limits.PortMin, r.limits.PortMax)
 }
 
-func (r *dataRelay) forward(s *dataSession) {
+func (r *DataRelay) forward(s *dataSession) {
 	defer func() {
 		s.conn.Close()
 		r.mu.Lock()
@@ -159,7 +159,16 @@ func (r *dataRelay) forward(s *dataSession) {
 	}
 }
 
-func (r *dataRelay) count() int {
+// CloseAll ends every session.
+func (r *DataRelay) CloseAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sessions {
+		s.conn.Close()
+	}
+}
+
+func (r *DataRelay) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.sessions)

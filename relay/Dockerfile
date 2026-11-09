@@ -4,6 +4,7 @@ ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
+COPY relaysrv ./relaysrv
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /relay .
 
 FROM gcr.io/distroless/static-debian12:nonroot
