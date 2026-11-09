@@ -4,17 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun mock/server.ts",
+    "dev": "next dev --webpack",
     "build": "next build --webpack",
     "embed": "node scripts/embed.mjs",
     "lint": "eslint",
     "format": "prettier --write . --ignore-path .gitignore",
     "format:check": "prettier --check . --ignore-path .gitignore",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test test",
-    "test:ui": "playwright test"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@xyflow/react": "12.12.1",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.2.6",
     "lucide-react": "1.43.0",
@@ -27,9 +26,7 @@
     "viem": "2.56.3"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
     "@tailwindcss/postcss": "^4",
-    "@types/bun": "^1.4.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

@@ -835,6 +835,8 @@ type RelayInfo struct {
 	Status *rendezvous.RelayStatus `json:"status,omitempty"`
 	Error  string                  `json:"error,omitempty"`
 	Millis int64                   `json:"millis,omitempty"`
+	// Preferred marks a relay named in the tailnet's own relays record.
+	Preferred bool `json:"preferred,omitempty"`
 }
 
 // Relays lists the relay directory with each relay's status (cached for 30 s).
@@ -860,10 +862,16 @@ func (d *Daemon) Relays() ([]RelayInfo, error) {
 		sort.SliceStable(relays, func(i, j int) bool { return relays[i].Block < relays[j].Block })
 		relays = relays[:maxListedRelays]
 	}
+	preferred := map[string]bool{}
+	if tn != nil {
+		for _, l := range tn.PreferredRelays() {
+			preferred[l] = true
+		}
+	}
 	out := make([]RelayInfo, len(relays))
 	var wg sync.WaitGroup
 	for i, r := range relays {
-		out[i] = RelayInfo{Relay: r, Name: r.Label + "." + d.Network.RelaySuffix}
+		out[i] = RelayInfo{Relay: r, Name: r.Label + "." + d.Network.RelaySuffix, Preferred: preferred[r.Label]}
 		wg.Add(1)
 		go func(i int, r registry.Relay) {
 			defer wg.Done()

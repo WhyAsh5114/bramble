@@ -2,7 +2,15 @@
 // Each returns a viem writeContract request; the caller's wallet signs and
 // pays. Nothing here holds a key. The UI and scripts/rehearse-chain.ts share
 // this module, so the calls the UI makes are the calls the rehearsal tested.
-import { encodeFunctionData, parseAbi, parseEventLogs, toHex, type Address, type Hex, type TransactionReceipt } from 'viem'
+import {
+  encodeFunctionData,
+  parseAbi,
+  parseEventLogs,
+  toHex,
+  type Address,
+  type Hex,
+  type TransactionReceipt,
+} from 'viem'
 import { packetToBytes } from 'viem/ens'
 
 export const openRegistrarAbi = parseAbi([
@@ -89,23 +97,47 @@ function setText(name: string, key: string, value: string): Hex {
 
 /** Claim `label` under the open net registry: deploys the caller's registry and resolver. */
 export function claimTailnet(netRegistrar: Address, label: string) {
-  return { address: netRegistrar, abi: openRegistrarAbi, functionName: 'claimWithSubregistry', args: [label], gas: Gas.claimTailnet } as const
+  return {
+    address: netRegistrar,
+    abi: openRegistrarAbi,
+    functionName: 'claimWithSubregistry',
+    args: [label],
+    gas: Gas.claimTailnet,
+  } as const
 }
 
 /** The new tailnet's registry and resolver, from a claim receipt. */
 export function claimedFromReceipt(receipt: TransactionReceipt) {
   const [log] = parseEventLogs({ abi: openRegistrarAbi, eventName: 'Claimed', logs: receipt.logs })
   if (!log) throw new Error('the transaction did not claim a name')
-  return { label: log.args.label, owner: log.args.owner, registry: log.args.subregistry, resolver: log.args.resolver, block: receipt.blockNumber }
+  return {
+    label: log.args.label,
+    owner: log.args.owner,
+    registry: log.args.subregistry,
+    resolver: log.args.resolver,
+    block: receipt.blockNumber,
+  }
 }
 
 /** Register a device label in the tailnet registry, pointing at the tailnet resolver. */
-export function registerDevice(tailnet: Tailnet, label: string, owner: Address, nowSeconds = BigInt(Math.floor(Date.now() / 1000))) {
+export function registerDevice(
+  tailnet: Tailnet,
+  label: string,
+  owner: Address,
+  nowSeconds = BigInt(Math.floor(Date.now() / 1000))
+) {
   return {
     address: tailnet.registry,
     abi: registryAbi,
     functionName: 'register',
-    args: [label, owner, '0x0000000000000000000000000000000000000000', tailnet.resolver, 0n, nowSeconds + DEVICE_TERM_SECONDS],
+    args: [
+      label,
+      owner,
+      '0x0000000000000000000000000000000000000000',
+      tailnet.resolver,
+      0n,
+      nowSeconds + DEVICE_TERM_SECONDS,
+    ],
     gas: Gas.register,
   } as const
 }
@@ -174,7 +206,13 @@ export function setTailnetRelays(tailnet: Tailnet, labels: string[]) {
 
 /** Claim a relay name in the open relay directory. */
 export function claimRelay(relayRegistrar: Address, label: string) {
-  return { address: relayRegistrar, abi: openRegistrarAbi, functionName: 'claim', args: [label], gas: Gas.claimRelay } as const
+  return {
+    address: relayRegistrar,
+    abi: openRegistrarAbi,
+    functionName: 'claim',
+    args: [label],
+    gas: Gas.claimRelay,
+  } as const
 }
 
 export interface RelayRecords {

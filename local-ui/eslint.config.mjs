@@ -13,6 +13,14 @@ const eslintConfig = defineConfig([
     'build/**',
     'next-env.d.ts',
   ]),
+  {
+    // A static export reads browser-only state (wallet, localStorage, the
+    // daemon) after mount, which these React Compiler checks flag.
+    rules: {
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+    },
+  },
 ])
 
 export default eslintConfig

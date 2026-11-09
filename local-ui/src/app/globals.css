@@ -1,127 +1,14 @@
 @import './console.css';
+@import '@xyflow/react/dist/style.css';
 
-/* Local UI additions. The palette, nav, cards and summary row come from the approval console. */
-.lead {
-  max-width: 56ch;
-  font-size: 15px;
-}
-.tabs {
-  display: flex;
-  height: 100%;
-  gap: 24px;
-}
-.tabs button {
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: none;
-  padding: 0 4px;
-  min-height: 0;
-  height: 100%;
-  font-weight: 500;
-  color: var(--muted-foreground);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.tabs button:hover:not(:disabled) {
-  background: none;
-  color: var(--foreground);
-}
-.tabs button[aria-current='page'] {
-  border-bottom-color: var(--primary);
-  color: var(--foreground);
-}
-.count {
-  background: var(--primary);
-  color: var(--on-primary);
-  border-radius: 999px;
-  font-size: 11px;
-  min-width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-}
-.page-heading {
-  margin-bottom: 28px;
-}
-.connection {
-  margin-left: auto;
-}
-.connection.online .status-dot {
-  color: var(--primary);
-}
-.connection.negative {
-  color: var(--destructive);
-}
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 20px;
-  align-items: start;
-}
-.panel {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 28px;
-}
-.panel.quiet {
-  background: oklch(0.99 0 0);
-}
-.panel.declined {
-  max-width: 640px;
-  display: grid;
-  gap: 12px;
-}
-.panel-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 24px;
-}
-.field-label {
-  display: block;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-.panel input {
-  width: 100%;
-  font-size: 15px;
-}
-.panel input[aria-invalid='true'] {
-  border-color: var(--destructive);
-}
-.field-hint {
-  margin-top: 8px;
-  font-size: 12px;
-}
-.spaced {
-  margin-top: 20px;
-}
-.small-print {
-  font-size: 12px;
-  margin-top: 16px;
-}
-.device-name {
-  display: block;
-  margin-top: 6px;
-  font-size: 16px;
-  font-weight: 500;
-}
-.fingerprint {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  line-height: 1.7;
-}
-.live {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 15px;
-  margin-bottom: 24px;
+/* Additions for the device console. Palette, type and spacing come from console.css. */
+.bramble-flow {
+  --xy-background-color: transparent;
+  --xy-background-pattern-dots-color-default: var(--divider);
+  --xy-controls-button-background-color-default: var(--card);
+  --xy-controls-button-background-color-hover-default: var(--secondary);
+  --xy-controls-button-color-default: var(--foreground);
+  --xy-controls-button-border-color-default: var(--divider);
 }
 .pulse {
   width: 9px;
@@ -145,219 +32,35 @@
     animation: none;
   }
 }
-.facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 20px;
-}
-.fact strong {
-  display: block;
-  margin-top: 5px;
-  font-weight: 500;
-}
-.callout {
-  display: grid;
-  gap: 4px;
-  margin-top: 16px;
-  border-left: 3px solid var(--destructive);
-}
-.callout.neutral {
-  border-left-color: var(--border);
-}
-.callout strong {
-  color: var(--foreground);
-  font-weight: 600;
-}
-.copy-value {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.copy-value button {
-  min-height: 0;
-  height: 26px;
-  padding: 0 8px;
-  font-size: 12px;
-}
-.address {
-  font-size: 20px;
-}
-.test-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.test-panel p {
-  margin-top: 3px;
-}
-.service-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.service {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-}
-.open-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 42px;
-  padding: 10px 16px;
-  border-radius: 6px;
-  background: var(--primary);
-  color: var(--on-primary);
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.open-link:hover {
-  filter: brightness(0.9);
-}
-.open-link:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.outcome-slot {
-  min-height: 8px;
-}
-.outcome {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  margin-top: 12px;
-  padding: 12px 16px;
-  border-radius: 6px;
-  background: var(--muted);
-}
-.outcome .status-dot {
-  margin-top: 8px;
-}
-.outcome.ok {
-  color: var(--primary);
-}
-.outcome.bad {
-  color: var(--destructive);
-}
-.peer-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.peer {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) 130px 120px 100px auto;
-  grid-template-areas: 'id badge contact rtt test';
-  align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-}
-.peer + .peer {
-  border-top: 1px solid var(--border);
-}
-.peer-id {
-  display: grid;
-  grid-area: id;
-}
-.peer .badge {
-  grid-area: badge;
-}
-.peer-meta {
-  display: grid;
-  font-size: 12px;
-}
-.peer-meta.contact {
-  grid-area: contact;
-}
-.peer-meta.rtt {
-  grid-area: rtt;
-}
-.peer > button {
-  grid-area: test;
-}
-.peer-meta span:last-child {
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 13px;
 }
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
+.data-table th {
+  text-align: left;
   font-weight: 500;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  width: fit-content;
-}
-.badge.path-direct {
-  color: var(--primary);
-  border-color: color-mix(in oklch, var(--primary), white 60%);
-}
-.badge.path-relay {
-  color: oklch(0.45 0.1 75);
-  border-color: oklch(0.85 0.08 85);
-}
-.badge.path-none {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted-foreground);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--divider);
 }
-.device-section {
-  margin-top: 8px;
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+  vertical-align: middle;
 }
-.device-section .panel {
-  margin-bottom: 16px;
+.data-table tr:last-child td {
+  border-bottom: 0;
 }
-.leave {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.device-section .callout {
-  margin-bottom: 16px;
-}
-main > .callout:first-child {
-  margin: 0 0 24px;
-}
-@media (max-width: 760px) {
-  .split {
-    grid-template-columns: 1fr;
-  }
-  .peer {
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      'id id'
-      'badge test'
-      'contact rtt';
-    gap: 12px 16px;
-  }
-  .peer > button {
-    justify-self: end;
-  }
-}
-@media (max-width: 600px) {
-  .panel {
-    padding: 20px;
-  }
-  .test-panel {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .nav-inner {
-    gap: 14px;
-  }
-  .connection {
-    font-size: 11px;
-  }
-  .address {
-    font-size: 16px;
-  }
+select.field {
+  height: 36px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 14px;
 }
