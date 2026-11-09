@@ -25,12 +25,12 @@ type relaySets struct {
 }
 
 // relayDirectory is the live view of the relays a node uses. serve reads it on
-// every use instead of keeping a copy from start-up, so a relay registered
+// every use instead of keeping a copy from startup, so a relay registered
 // after the node started is used without a restart (docs/adr/0020).
 //
 // Each refresh merges what chooseRelays picked into the sets that are not
-// Fixed. Relays are added, never removed: a live session may be using one, and
-// relayHealth already steers new work away from a failing relay. Each set is
+// Fixed. A refresh adds relays and never removes one: a live session may be
+// using it, and relayHealth already steers new work away from a failing relay. Each set is
 // capped at the size chooseRelays itself returns.
 type relayDirectory struct {
 	mu    sync.Mutex
@@ -83,7 +83,7 @@ func (d *relayDirectory) refresh() error {
 	}
 	if !d.sets.FixedSTUN {
 		for _, server := range stun {
-			if !slices.Contains(d.sets.STUN, server) && len(d.sets.STUN) < maxRendezvousRelays {
+			if !slices.Contains(d.sets.STUN, server) && len(d.sets.STUN) < maxSTUNServers {
 				d.sets.STUN = append(d.sets.STUN, server)
 				tracef("relays: STUN server %s added", server)
 			}
@@ -144,7 +144,7 @@ func copyDataRelays(pool dataRelayFlag) dataRelayFlag {
 
 // rendezvousSource returns the rendezvous relays known right now, or an error
 // when there are none yet. It is a function, not a slice, so a set recovered
-// after a start-up discovery failure reaches every consumer.
+// after a startup discovery failure reaches every consumer.
 type rendezvousSource func() ([]rendezvous.Relay, error)
 
 // staticRendezvous is a rendezvousSource over a fixed set.

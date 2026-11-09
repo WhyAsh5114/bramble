@@ -507,7 +507,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 	// Relay discovery (docs/adr/0003, docs/adr/0020). -rendezvous,
 	// -data-relay and -stun-servers/-no-stun override the directory for their
 	// own set; a set left unset comes from the directory and is refreshed
-	// while the node runs, so a relay registered after start-up is picked up
+	// while the node runs, so a relay registered after startup is picked up
 	// without a restart. An unreachable or empty directory is not fatal.
 	usesDirectory := *rendezvousAddr == "" || len(dataRelays) == 0
 	relays := newRelayDirectory(func() ([]rendezvous.Relay, dataRelayFlag, []string, error) {
@@ -627,7 +627,7 @@ func Serve(ctx context.Context, tn *registry.Tailnet, args []string, onReady fun
 
 	// relaySet is what every consumer of the rendezvous set reads: the
 	// resolver below, traversal and both data-relay watchers. It reads the
-	// live directory, so a relay found after start-up reaches all of them.
+	// live directory, so a relay found after startup reaches all of them.
 	relaySet := rendezvousSource(relays.Rendezvous)
 	paths.relaySet = relaySet
 	{
@@ -858,7 +858,6 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// relayAddresses reports the data-relay pool as label -> rendezvous address for the status API.
 // splitServers splits a comma-separated host:port list, dropping empty entries.
 func splitServers(list string) []string {
 	var out []string
@@ -870,6 +869,7 @@ func splitServers(list string) []string {
 	return out
 }
 
+// relayAddresses reports the data-relay pool as label -> rendezvous address for the status API.
 func relayAddresses(pool dataRelayFlag) map[string]string {
 	out := make(map[string]string, len(pool))
 	for label, r := range pool {

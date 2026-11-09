@@ -131,7 +131,7 @@ func TestJunkRelaysInTheDirectoryDoNotStallAConnect(t *testing.T) {
 }
 
 // ADR 0020: a node started before any relay was listed must pick up the first
-// relay without a restart. With no relay at start-up, neither node has a data
+// relay without a restart. With no relay at startup, neither node has a data
 // relay or a rendezvous relay; loopback candidates are refused outside tests,
 // so the only way the two can connect is through the relay listed later.
 func TestRelayListedAfterStartIsUsedWithoutRestart(t *testing.T) {
@@ -197,10 +197,10 @@ func TestRelayListedAfterStartIsUsedWithoutRestart(t *testing.T) {
 			if string(body) != "pong" {
 				t.Fatalf("ping answered %q", body)
 			}
-			t.Logf("connected through a relay listed after start-up, %s after listing it", time.Since(start).Round(10*time.Millisecond))
+			t.Logf("connected through a relay listed after startup, %s after listing it", time.Since(start).Round(10*time.Millisecond))
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("a relay listed after start-up was never used")
+	t.Fatal("a relay listed after startup was never used")
 }

@@ -62,7 +62,7 @@ func (n *Node) DiscoverEndpoint(ctx context.Context, servers []string) (netip.Ad
 }
 
 // RunSTUN refreshes the observation every 30 seconds after each discovery pass.
-// servers is called before every pass, so STUN servers found after start-up
+// servers is called before every pass, so STUN servers found after startup
 // are used. While it returns none, the status is "unavailable" and the pass
 // is retried on the same schedule. The caller cancels ctx before closing the
 // node.

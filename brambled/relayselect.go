@@ -18,6 +18,9 @@ import (
 const (
 	maxRendezvousRelays = 4
 	maxDataRelays       = 5
+	// maxSTUNServers matches maxRendezvousRelays: chooseRelays takes at most
+	// one STUN server from each rendezvous relay it picks.
+	maxSTUNServers = maxRendezvousRelays
 	// directoryFallback is how many of the oldest directory relays every node adds.
 	directoryFallback = 3
 )

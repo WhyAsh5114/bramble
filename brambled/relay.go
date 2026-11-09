@@ -578,8 +578,8 @@ const failoverMaxBackoff = 3 * time.Minute
 // so a long call could adopt a stale one.
 const dataRelayAdoptExchangeTimeout = 3 * time.Second
 
-// relayRefreshInterval is how often serve re-reads the relay directory. The
-// directory is read from the local registry cache, so a pass is cheap. A var
+// relayRefreshInterval is how often serve re-reads the relay directory. Each
+// pass reads the local registry cache, so it is cheap. A var
 // so tests can shorten it.
 var relayRefreshInterval = 15 * time.Second
 
