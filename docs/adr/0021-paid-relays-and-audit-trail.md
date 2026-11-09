@@ -13,7 +13,7 @@ The old designs are in the `archive/hackathon` tag: [ADR 0007](0007-rendezvous-r
 
 ## Decision
 
-1. **Hedera is the payment rail and the audit chain.** Relay payments are small and frequent, and the maintainer expects Hedera fees to suit pay-per-byte pricing better than Ethereum. **Open:** confirm current Hedera transfer fees and USDC availability on the network used. On Sepolia the gas is free, so the cost gap shows only on mainnet. That comparison is reasoning, not a measurement.
+1. **Hedera is the payment rail and the audit chain.** Relay payments are small and frequent, and Hedera charges a fixed USD fee per operation. The cost comparison is in the next section. It supports Hedera but by a smaller margin than first assumed.
 2. **Both features are opt-in.** A node, tailnet or relay that does not opt in needs no Hedera account, and the free relay path works with none. Defaults stay as they are today.
 3. **Payment and audit never gate admission.** Peers still enforce access from ENS state. A failed payment check stops a paid relay forwarding for that payer. A failed audit post changes nothing (ADR 0014, decision 5).
 4. **Hedera testnet only until the maintainer decides otherwise.** `AGENTS.md` forbids mainnet writes and real money.
@@ -27,6 +27,28 @@ ADR 0019 kept chain keys out of the node. This proposal gives an opt-in node a *
 - A node that does not opt in holds no Hedera key.
 
 `AGENTS.md` says "never add a server-side component that holds chain keys". The node is user-side, and the key is the user's own, but the wording needs a maintainer decision (D3).
+
+## Fee comparison
+
+Figures from public sources on 10 Nov 2026. Ethereum figures come from gas trackers, which disagree with each other and move with gas and ETH price. Treat them as estimates. None is a measurement made in this repo.
+
+| Operation | Hedera | Ethereum mainnet |
+|---|---|---|
+| Token transfer (USDC) | $0.001 (`TokenTransfer`) | about $0.01 to $0.06 (an ERC-20 transfer uses about 65,000 gas; trackers show 0.13 to 0.35 gwei) |
+| Log one message | $0.0008 (`ConsensusSubmitMessage`, no custom fees) | A contract event costs gas like any call. No tracker figure was checked. |
+| One-time setup | $0.05 to associate an account with a token (`TokenAssociate`) | None for ERC-20 |
+| Testnet | Identical fee schedule, paid in free test HBAR | Free test ETH on Sepolia |
+
+What this shows:
+
+- Hedera is about 10 to 60 times cheaper per token transfer, and its fee is fixed in USD. Ethereum's fee depends on gas, which has been low in late 2026 but can spike.
+- Both are cheap in absolute terms. At today's gas, an Ethereum transfer is cents, not dollars. The bundle design makes few transfers, so the saving per user is small.
+- Hedera's real advantages are the predictable USD fee and a logging price that suits many small messages.
+- Hedera adds a cost Ethereum lacks. The payer and the relay operator each pay $0.05 once to associate their accounts with USDC. Circle's testnet faucet supplies Hedera testnet USDC (token `0.0.429274`), and HBAR comes from Hedera's faucet. Faucet limits conflict between sources and are **Open**.
+- A layer 2 network would probably be cheaper than Ethereum mainnet. It was not compared here.
+- On testnets both chains are free, so the comparison matters only if payments move to mainnet (D4).
+
+Sources: [Hedera fees](https://docs.hedera.com/networks/fees), [the January 2026 HCS price update](https://hedera.com/blog/price-update-to-consensussubmitmessage-in-consensus-service-january-2026/), [a gas tracker snapshot of 9 Nov 2026](https://chaingate.dev/gas-tracker/ethereum), [a second tracker, 4 Nov 2026](https://chainscorelabs.com/fees/ethereum), [Circle's USDC on Hedera page](https://www.circle.com/multi-chain-usdc/hedera).
 
 ## Paid relays
 
@@ -48,7 +70,7 @@ The relay only receives payment. It needs a mirror-node reader but no signing ke
 
 - Relay (Go): a mirror-node check, a per-key byte balance, and enforcement behind a flag. **Open:** keep the balance across restarts in the state volume so a restart does not erase paid bytes.
 - Registry: `price` and `hedera-account` on the relay record.
-- Node: a Hedera client that signs one transfer. The product is one Go binary, and the archived payment client was TypeScript. **Open:** whether the Hedera Go SDK covers this. I believe an SDK exists and have not checked it. This is the largest implementation risk, and the answer decides whether the "one binary" rule holds.
+- Node: a Hedera client that signs one transfer. The product is one Go binary, and the archived payment client was TypeScript. **Verified 10 Nov 2026:** the Hiero Go SDK (`github.com/hiero-ledger/hiero-sdk-go/v2` v2.85.1) builds with `CGO_ENABLED=0` for linux/arm64, linux/amd64 and darwin/arm64. A probe program generated an Ed25519 key, built a fungible `TransferTransaction` with `AddTokenTransfer` and set a transaction memo, and built a `TopicMessageSubmitTransaction`. The probe did not contact a network. A probe binary with the SDK is 25 to 27 MB uncompressed, so it will enlarge the release binary. **Open:** measure the size increase in `bramble` and the cost of `grpc` and the generated protobufs. The SDK has no general mirror REST client, so the relay uses plain HTTPS for transfer lookups.
 - UI: an opt-in switch, the Hedera account ID and balance, and a balance per relay.
 - The project's free relay is unchanged.
 
@@ -101,7 +123,7 @@ Carried over from ADR 0014. A match shows the mirror node returned bytes whose c
 
 ## Order of work
 
-1. Check that a Go client can sign a Hedera token transfer. If it cannot, decide between a TypeScript helper and dropping the one-binary rule. This comes first because it can change the design.
+1. Measure the release-binary size with the Hiero Go SDK added. The signing question is settled (see above).
 2. Settle D3 and mark this ADR Decided.
 3. Add `price` and `hedera-account` to the relay record. Test them in the registry cache.
 4. Relay: mirror-node verification, byte balance and enforcement behind a flag. Test that forwarding stops at zero credit and that peers still connect directly.
