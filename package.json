@@ -8,7 +8,10 @@
       "keccak",
       "node-hid",
       "usb"
-    ]
+    ],
+    "overrides": {
+      "source-map-js": "^1.2.2"
+    }
   },
   "scripts": {
     "build": "turbo run build",
