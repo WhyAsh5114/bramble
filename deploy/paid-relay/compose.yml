@@ -28,10 +28,9 @@ services:
       RELAY_MAX_BYTES_PER_DAY: ${RELAY_MAX_BYTES_PER_DAY:-3221225472}
       RELAY_MAX_BYTES_PER_MONTH: ${RELAY_MAX_BYTES_PER_MONTH:-85899345920}
       RELAY_TRACE: ${RELAY_TRACE:-0}
-    ports:
-      - '9420:9420/tcp'
-      - '3478:3478/udp'
-      - '40000-40999:40000-40999/udp'
+    # Host networking: publishing 1,000 UDP ports through Docker's proxy
+    # overwhelms a small host, and a relay wants the real source addresses.
+    network_mode: host
     volumes:
       - state:/state
     logging:
