@@ -19,7 +19,7 @@ func dirRelay(label string, block uint64) registry.Relay {
 	return registry.Relay{Label: label, Address: "203.0.113.1:9420", Pin: "sha256/x", Price: "0", DataRelay: true, Block: block}
 }
 
-func TestChooseRelaysPrefersTheTailnetRecordThenTheOldest(t *testing.T) {
+func TestChooseRelaysUsesTheTailnetRecordAlone(t *testing.T) {
 	dir := []registry.Relay{dirRelay("c", 30), dirRelay("a", 10), dirRelay("b", 20), dirRelay("mine", 90), dirRelay("e", 50)}
 	paid := dirRelay("paid", 1)
 	paid.Price = "5"
@@ -32,14 +32,33 @@ func TestChooseRelaysPrefersTheTailnetRecordThenTheOldest(t *testing.T) {
 	for _, r := range rdv {
 		labels = append(labels, r.Label)
 	}
-	if fmt.Sprint(labels) != "[mine a b c]" {
-		t.Fatalf("rendezvous set %v, want the tailnet's relay then the three oldest", labels)
+	if fmt.Sprint(labels) != "[mine]" {
+		t.Fatalf("rendezvous set %v, want only the tailnet's relay", labels)
+	}
+	if len(data) != 1 {
+		t.Fatalf("data pool %v", data)
+	}
+	// Nothing in the record is usable: the three oldest directory relays.
+	rdv, data, _ = chooseRelays(dir, []string{"unknown", "paid", "nopin"}, false)
+	labels = nil
+	for _, r := range rdv {
+		labels = append(labels, r.Label)
+	}
+	if fmt.Sprint(labels) != "[a b c]" {
+		t.Fatalf("fallback set %v, want the three oldest", labels)
 	}
 	if _, ok := data["paid"]; ok {
-		t.Fatal("a paid relay was chosen")
+		t.Fatal("a paid relay was chosen by a node that does not pay")
 	}
-	if len(data) != 4 {
-		t.Fatalf("data pool %v", data)
+}
+
+func TestAPaidRelayNamedInTheRecordBeatsAFreeOneInTheDirectory(t *testing.T) {
+	paid := dirRelay("paid", 50)
+	paid.Price = "5"
+	dir := []registry.Relay{dirRelay("old-free", 1), paid}
+	rdv, data, _ := chooseRelays(dir, []string{"paid"}, true)
+	if len(rdv) != 1 || rdv[0].Label != "paid" || len(data) != 1 {
+		t.Fatalf("set %v pool %v, want only the paid relay the record names", rdv, data)
 	}
 }
 

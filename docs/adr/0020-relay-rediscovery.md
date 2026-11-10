@@ -22,5 +22,5 @@ Because the STUN server list was empty at startup, the node turned STUN off. Tha
 - A node that reads the directory now always takes the traversal path, even with no STUN server yet. Until one appears, traversal announces only the static candidate and the relay candidate. Before this change, such a node used the static resolver and never punched.
 - Removing a relay from the directory does not remove it from running nodes while it keeps working.
 - A relay the tailnet's relays record stops naming stays in use while it works. A restart drops it.
-- Two members can drop different relays if only one of them cannot reach a relay. They still share the relays both can reach, and `chooseRelays` adds the same oldest fallbacks for both.
+- Two members can drop different relays if only one of them cannot reach a relay. They still share the relays both can reach, and `chooseRelays` uses the tailnet's `relays` record alone when any of it is usable and adds the same oldest fallbacks for both only when none is (changed 10 Nov 2026, so a free relay in the directory cannot outrank a paid one the record names).
 - `-relay-peer` still needs a data relay at startup and exits without one. That flag is an explicit choice to route through a relay, so failing fast is kept.

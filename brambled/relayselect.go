@@ -65,11 +65,16 @@ func chooseRelays(directory []registry.Relay, preferred []string, allowPaid bool
 			add(r)
 		}
 	}
-	// Oldest first, skipping relays this node has seen failing. A dead relay
-	// fails for every member, so members converge on the same fallback set.
+	// The tailnet's own record comes first and stands alone: the user chose
+	// those relays, so a free relay in the directory must not outrank a paid
+	// one they named. Only when none of the record is usable does the node
+	// fall back to the directory, oldest first, skipping relays this node has
+	// seen failing. A dead relay fails for every member, so members converge
+	// on the same fallback set.
+	fromRecord := len(picked) > 0
 	fallback := 0
 	for _, r := range usable {
-		if fallback >= directoryFallback {
+		if fromRecord || fallback >= directoryFallback {
 			break
 		}
 		if health.blocked(r.Label) || seen[r.Label] {
