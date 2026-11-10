@@ -73,10 +73,11 @@ type Daemon struct {
 	hedera     *HederaKey
 	activateAt time.Time
 	// activateFn sends an account's first transaction; tests replace it.
-	activateFn func(ctx context.Context, account, key string) error
-	payBal     payBalances
-	payAt      time.Time
-	payErr     string
+	activateFn  func(ctx context.Context, account, key string) error
+	associateFn func(ctx context.Context, account, key string) error
+	payBal      payBalances
+	payAt       time.Time
+	payErr      string
 }
 
 type nodeRun struct {

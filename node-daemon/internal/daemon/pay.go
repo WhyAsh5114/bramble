@@ -70,6 +70,8 @@ type payBalances struct {
 	USDC    int64 // smallest unit
 	// Hollow is true while the account has no key: it can receive but not send.
 	Hollow bool
+	// Associated is true once the account is linked to the USDC token.
+	Associated bool
 }
 
 // PayInfo is what the UI shows about paying relays.
@@ -144,12 +146,35 @@ func fetchBalances(ctx context.Context, base, evm string) (payBalances, error) {
 	}
 	out.Account, out.HBAR = body.Account, body.Balance.Balance
 	out.Hollow = len(body.Key) == 0 || string(body.Key) == "null"
+	out.Associated = associated(ctx, base, out.Account)
 	for _, t := range body.Balance.Tokens {
 		if t.TokenID == brambled.DefaultPayAsset {
 			out.USDC = t.Balance
 		}
 	}
 	return out, nil
+}
+
+// associated asks the mirror node whether the account is linked to USDC.
+func associated(ctx context.Context, base, account string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/accounts/"+account+"/tokens?token.id="+brambled.DefaultPayAsset, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Tokens []struct {
+			TokenID string `json:"token_id"`
+		} `json:"tokens"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 1<<20)).Decode(&body) != nil {
+		return false
+	}
+	return len(body.Tokens) > 0
 }
 
 // refreshPay updates the balances and, when the account first appears, wakes
@@ -173,8 +198,8 @@ func (d *Daemon) refreshPay(ctx context.Context) {
 		d.payErr, d.payBal, d.payAt = "", bal, time.Now()
 	}
 	d.mu.Unlock()
-	if err == nil && bal.Account != "" && bal.Hollow && bal.HBAR > 0 {
-		d.activate(ctx, bal.Account)
+	if err == nil && bal.Account != "" && bal.HBAR > 0 {
+		d.activate(ctx, bal)
 	}
 	if err == nil && bal.Account != prev {
 		d.poke()
@@ -184,28 +209,48 @@ func (d *Daemon) refreshPay(ctx context.Context) {
 // activateRetry spaces out attempts to finish a hollow account.
 const activateRetry = 2 * time.Minute
 
-// activate sends the account's first signed transaction, so it can pay.
-func (d *Daemon) activate(ctx context.Context, account string) {
+// activate gets a funded account ready to pay, one step per attempt: its
+// first signed transaction while it is hollow, then the USDC association,
+// which Circle's faucet needs before it will send. Each attempt waits for the
+// last. The association is only for devices that pay relays.
+func (d *Daemon) activate(ctx context.Context, bal payBalances) {
 	d.mu.Lock()
-	if d.hedera == nil || time.Since(d.activateAt) < activateRetry {
+	pay := d.saved.Pay != nil && d.saved.Pay.Enabled
+	if d.hedera == nil || time.Since(d.activateAt) < activateRetry || (!bal.Hollow && (bal.Associated || !pay)) {
 		d.mu.Unlock()
 		return
 	}
 	d.activateAt = time.Now()
 	key := d.hedera.PrivateKeyHex
 	d.mu.Unlock()
-	fn := d.activateFn
-	if fn == nil {
-		fn = hederapay.Activate
+	var err error
+	switch {
+	case bal.Hollow:
+		fn := d.activateFn
+		if fn == nil {
+			fn = hederapay.Activate
+		}
+		err = fn(ctx, bal.Account, key)
+	default:
+		fn := d.associateFn
+		if fn == nil {
+			fn = func(ctx context.Context, a, k string) error {
+				return hederapay.Associate(ctx, a, k, brambled.DefaultPayAsset)
+			}
+		}
+		err = fn(ctx, bal.Account, key)
 	}
-	err := fn(ctx, account, key)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err != nil {
-		d.payErr = "Could not send the account's first transaction: " + err.Error()
+		d.payErr = "Could not finish setting up the account: " + err.Error()
 		return
 	}
-	d.payBal.Hollow = false
+	if bal.Hollow {
+		d.payBal.Hollow = false
+	} else {
+		d.payBal.Associated = true
+	}
 }
 
 func (d *Daemon) payLoop(ctx context.Context) {

@@ -82,6 +82,10 @@ func TestTurningPayOnMakesAKeyOnlyThisDeviceHolds(t *testing.T) {
 
 func TestAFundedAccountTurnsPaymentOnInTheNode(t *testing.T) {
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tokens") {
+			_, _ = io.WriteString(w, `{"tokens":[{"token_id":"0.0.429274"}]}`)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/accounts/0x") {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -165,5 +169,56 @@ func TestAnAccountWithAKeyIsLeftAlone(t *testing.T) {
 	d.refreshPay(context.Background())
 	if d.Pay().Hollow {
 		t.Fatal("an account with a key was called hollow")
+	}
+}
+
+func TestAFundedAccountIsAssociatedWithUSDCOnce(t *testing.T) {
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tokens") {
+			_, _ = io.WriteString(w, `{"tokens":[]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"account":"0.0.4242","key":{"key":"02ab"},"balance":{"balance":99000,"tokens":[]}}`)
+	}))
+	defer mirror.Close()
+	d := payDaemon(t, mirror.URL)
+	var calls int
+	d.associateFn = func(_ context.Context, a, key string) error {
+		calls++
+		if a != "0.0.4242" || key != d.hedera.PrivateKeyHex {
+			t.Error("associated the wrong account or key")
+		}
+		return nil
+	}
+	if err := d.SetPay(true, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	d.refreshPay(context.Background())
+	d.refreshPay(context.Background())
+	if calls != 1 {
+		t.Fatalf("associations %d, want one", calls)
+	}
+}
+
+func TestAuditOnlyDevicesAreNotAssociatedWithUSDC(t *testing.T) {
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tokens") {
+			_, _ = io.WriteString(w, `{"tokens":[]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"account":"0.0.4242","key":{"key":"02ab"},"balance":{"balance":99000,"tokens":[]}}`)
+	}))
+	defer mirror.Close()
+	d := payDaemon(t, mirror.URL)
+	d.associateFn = func(context.Context, string, string) error {
+		t.Error("associated a device that does not pay")
+		return nil
+	}
+	if err := d.SetAudit(true); err != nil {
+		t.Fatal(err)
+	}
+	d.refreshPay(context.Background())
+	if d.Pay().Account != "0.0.4242" {
+		t.Fatal("the refresh did not run for an audit-only device")
 	}
 }

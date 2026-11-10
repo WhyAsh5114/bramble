@@ -64,3 +64,38 @@ func Activate(ctx context.Context, accountID, privateKeyHex string) error {
 		return rc.Err()
 	}
 }
+
+// Associate links the account to a token, so it can hold it. An account with
+// automatic associations still needs this for faucets that check it first.
+func Associate(ctx context.Context, accountID, privateKeyHex, tokenID string) error {
+	acct, err := hiero.AccountIDFromString(accountID)
+	if err != nil {
+		return errors.New("hedera account ID is not valid")
+	}
+	token, err := hiero.TokenIDFromString(tokenID)
+	if err != nil {
+		return errors.New("hedera token ID is not valid")
+	}
+	key, err := hiero.PrivateKeyFromStringECDSA(privateKeyHex)
+	if err != nil {
+		return errors.New("hedera private key is not a valid ECDSA key")
+	}
+	c := client(acct, key)
+	defer c.Close()
+	tx, err := hiero.NewTokenAssociateTransaction().SetAccountID(acct).AddTokenID(token).FreezeWith(c)
+	if err != nil {
+		return err
+	}
+	resp, err := tx.Sign(key).Execute(c)
+	if err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { _, err := resp.GetReceipt(c); done <- err }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		return errors.New("timed out waiting for the Hedera receipt")
+	}
+}

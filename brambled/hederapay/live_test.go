@@ -249,3 +249,36 @@ func TestLiveActivateFinishesAHollowAccount(t *testing.T) {
 	}
 	t.Logf("account %s was hollow and now has a key", account)
 }
+
+// The Circle faucet only sends USDC to an account that is associated with it.
+// This associates the client account, if it is not already.
+func TestLiveAssociateUSDC(t *testing.T) {
+	id, key := os.Getenv("HEDERA_CLIENT_ACCOUNT_ID"), os.Getenv("HEDERA_CLIENT_PRIVATE_KEY")
+	if id == "" || key == "" {
+		t.Skip("HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY are not set")
+	}
+	const usdc = "0.0.429274"
+	has := func() bool {
+		r, err := http.Get("https://testnet.mirrornode.hedera.com/api/v1/accounts/" + id + "/tokens?token.id=" + usdc)
+		if err != nil {
+			return false
+		}
+		defer r.Body.Close()
+		var b struct {
+			Tokens []struct{} `json:"tokens"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		return len(b.Tokens) > 0
+	}
+	if !has() {
+		if err := Associate(context.Background(), id, key, usdc); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 15 && !has(); i++ {
+			time.Sleep(3 * time.Second)
+		}
+	}
+	if !has() {
+		t.Fatal("the account is not associated with USDC")
+	}
+}
