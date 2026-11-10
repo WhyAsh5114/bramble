@@ -1,7 +1,9 @@
 package hederapay
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	hiero "github.com/hiero-ledger/hiero-sdk-go/v2/sdk"
 )
@@ -26,4 +28,39 @@ func EVMAddress(privateKeyHex string) (string, error) {
 		return "", errors.New("hedera private key is not a valid ECDSA key")
 	}
 	return "0x" + key.PublicKey().ToEvmAddress(), nil
+}
+
+// Activate finishes an account that auto-creation left hollow. Sending HBAR to
+// an EVM address makes an account with no key; it can receive but not send
+// until its own key signs a first transaction. This one updates the account's
+// memo, which costs a fraction of a cent of test HBAR and needs no recipient.
+func Activate(ctx context.Context, accountID, privateKeyHex string) error {
+	acct, err := hiero.AccountIDFromString(accountID)
+	if err != nil {
+		return errors.New("hedera account ID is not valid")
+	}
+	key, err := hiero.PrivateKeyFromStringECDSA(privateKeyHex)
+	if err != nil {
+		return errors.New("hedera private key is not a valid ECDSA key")
+	}
+	c := client(acct, key)
+	defer c.Close()
+	tx, err := hiero.NewAccountUpdateTransaction().SetAccountID(acct).SetAccountMemo("bramble").FreezeWith(c)
+	if err != nil {
+		return err
+	}
+	resp, err := tx.Sign(key).Execute(c)
+	if err != nil {
+		return err
+	}
+	rc, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := resp.GetReceipt(c); done <- err }()
+	select {
+	case err := <-done:
+		return err
+	case <-rc.Done():
+		return rc.Err()
+	}
 }

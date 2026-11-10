@@ -68,6 +68,8 @@ type payBalances struct {
 	Account string
 	HBAR    int64 // tinybar
 	USDC    int64 // smallest unit
+	// Hollow is true while the account has no key: it can receive but not send.
+	Hollow bool
 }
 
 // PayInfo is what the UI shows about paying relays.
@@ -79,8 +81,11 @@ type PayInfo struct {
 	// Account is the Hedera account ID. It is empty until the address has
 	// been funded, because sending test HBAR or USDC to the address creates it.
 	Account string `json:"account,omitempty"`
-	HBAR    int64  `json:"hbarTinybar"`
-	USDC    int64  `json:"usdc"`
+	// Hollow is true until the account's first signed transaction; the daemon
+	// sends one once the account holds HBAR.
+	Hollow bool  `json:"hollow"`
+	HBAR   int64 `json:"hbarTinybar"`
+	USDC   int64 `json:"usdc"`
 	// Active is true when the running node pays relays that charge.
 	Active     bool               `json:"active"`
 	MaxSession int64              `json:"maxSession"`
@@ -124,7 +129,8 @@ func fetchBalances(ctx context.Context, base, evm string) (payBalances, error) {
 		return out, fmt.Errorf("the Hedera mirror node answered %d", resp.StatusCode)
 	}
 	var body struct {
-		Account string `json:"account"`
+		Account string          `json:"account"`
+		Key     json.RawMessage `json:"key"`
 		Balance struct {
 			Balance int64 `json:"balance"`
 			Tokens  []struct {
@@ -137,6 +143,7 @@ func fetchBalances(ctx context.Context, base, evm string) (payBalances, error) {
 		return out, errors.New("the Hedera mirror node sent a reply this device cannot read")
 	}
 	out.Account, out.HBAR = body.Account, body.Balance.Balance
+	out.Hollow = len(body.Key) == 0 || string(body.Key) == "null"
 	for _, t := range body.Balance.Tokens {
 		if t.TokenID == brambled.DefaultPayAsset {
 			out.USDC = t.Balance
@@ -166,9 +173,39 @@ func (d *Daemon) refreshPay(ctx context.Context) {
 		d.payErr, d.payBal, d.payAt = "", bal, time.Now()
 	}
 	d.mu.Unlock()
+	if err == nil && bal.Account != "" && bal.Hollow && bal.HBAR > 0 {
+		d.activate(ctx, bal.Account)
+	}
 	if err == nil && bal.Account != prev {
 		d.poke()
 	}
+}
+
+// activateRetry spaces out attempts to finish a hollow account.
+const activateRetry = 2 * time.Minute
+
+// activate sends the account's first signed transaction, so it can pay.
+func (d *Daemon) activate(ctx context.Context, account string) {
+	d.mu.Lock()
+	if d.hedera == nil || time.Since(d.activateAt) < activateRetry {
+		d.mu.Unlock()
+		return
+	}
+	d.activateAt = time.Now()
+	key := d.hedera.PrivateKeyHex
+	d.mu.Unlock()
+	fn := d.activateFn
+	if fn == nil {
+		fn = hederapay.Activate
+	}
+	err := fn(ctx, account, key)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		d.payErr = "Could not send the account's first transaction: " + err.Error()
+		return
+	}
+	d.payBal.Hollow = false
 }
 
 func (d *Daemon) payLoop(ctx context.Context) {
@@ -223,6 +260,7 @@ func (d *Daemon) Pay() PayInfo {
 	if d.hedera != nil {
 		info.EVMAddress, info.KeyFile = d.hedera.EVMAddress, d.Store.KeyPath()
 		info.Account, info.HBAR, info.USDC, info.Error = d.payBal.Account, d.payBal.HBAR, d.payBal.USDC, d.payErr
+		info.Hollow = d.payBal.Account != "" && d.payBal.Hollow
 	}
 	p := d.saved.Pay
 	if p == nil {

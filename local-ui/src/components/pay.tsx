@@ -114,7 +114,14 @@ export function PayCard() {
             <dt className="eyebrow pt-0.5">Account</dt>
             <dd className="m-0">
               {info.account ? (
-                <Link href={`${HASHSCAN}/account/${info.account}`}>{info.account}</Link>
+                <>
+                  <Link href={`${HASHSCAN}/account/${info.account}`}>{info.account}</Link>
+                  {info.hollow && (
+                    <span className="ml-2 text-muted-foreground">
+                      Sending a first transaction to finish setting it up; this takes a few seconds.
+                    </span>
+                  )}
+                </>
               ) : (
                 <span className="text-muted-foreground">Not created yet. It appears once the address is funded.</span>
               )}

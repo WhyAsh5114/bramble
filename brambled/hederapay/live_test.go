@@ -13,6 +13,7 @@ import (
 
 	"github.com/WhyAsh5114/bramble/brambled/rendezvous"
 	"github.com/WhyAsh5114/bramble/relay/relaysrv"
+	hiero "github.com/hiero-ledger/hiero-sdk-go/v2/sdk"
 )
 
 // Live tests talk to the Blocky402 testnet facilitator and spend a few
@@ -172,4 +173,79 @@ func TestLiveAuditCommitmentReachesTheTopic(t *testing.T) {
 	if f, _ := FindCommitment(ctx, http.DefaultClient, "https://testnet.mirrornode.hedera.com", topic, c); f != nil {
 		t.Fatal("a forged opening matched")
 	}
+}
+
+// A fresh key is funded by sending HBAR to its EVM address, which makes a
+// hollow account. Activate must give it a key, so it can sign.
+func TestLiveActivateFinishesAHollowAccount(t *testing.T) {
+	id, key := os.Getenv("HEDERA_CLIENT_ACCOUNT_ID"), os.Getenv("HEDERA_CLIENT_PRIVATE_KEY")
+	if id == "" || key == "" {
+		t.Skip("HEDERA_CLIENT_ACCOUNT_ID and HEDERA_CLIENT_PRIVATE_KEY are not set")
+	}
+	priv, evm, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct, err := hiero.AccountIDFromString(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opKey, err := hiero.PrivateKeyFromStringECDSA(key)
+	if err != nil {
+		opKey, err = hiero.PrivateKeyFromString(key)
+		if err != nil {
+			t.Fatal("client key is not readable")
+		}
+	}
+	c := client(acct, opKey)
+	defer c.Close()
+	to, err := hiero.AccountIDFromEvmAddress(0, 0, evm[2:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := hiero.NewTransferTransaction().AddHbarTransfer(acct, hiero.HbarFromTinybar(-50_000_000)).AddHbarTransfer(to, hiero.HbarFromTinybar(50_000_000)).Execute(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resp.GetReceipt(c); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	look := func() (account string, hollow bool) {
+		for i := 0; i < 30; i++ {
+			r, err := http.Get("https://testnet.mirrornode.hedera.com/api/v1/accounts/" + evm)
+			if err == nil {
+				var b struct {
+					Account string          `json:"account"`
+					Key     json.RawMessage `json:"key"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&b)
+				r.Body.Close()
+				if b.Account != "" {
+					return b.Account, len(b.Key) == 0 || string(b.Key) == "null"
+				}
+			}
+			time.Sleep(2 * time.Second)
+		}
+		return "", false
+	}
+	account, hollow := look()
+	if account == "" || !hollow {
+		t.Fatalf("expected a hollow account after funding, got %q hollow=%v", account, hollow)
+	}
+	if err := Activate(ctx, account, priv); err != nil {
+		t.Fatal(err)
+	}
+	var now bool
+	for i := 0; i < 15; i++ {
+		time.Sleep(3 * time.Second)
+		if _, now = look(); !now {
+			break
+		}
+	}
+	if now {
+		t.Fatal("the account is still hollow after Activate")
+	}
+	t.Logf("account %s was hollow and now has a key", account)
 }

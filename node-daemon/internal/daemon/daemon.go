@@ -53,27 +53,30 @@ type Daemon struct {
 	// Mirror replaces the Hedera testnet mirror node (tests).
 	Mirror string
 
-	mu       sync.Mutex
-	id       Identity
-	pub      string
-	saved    Saved
-	rpc      *registry.RPC
-	tn       *registry.Tailnet
-	tnCancel context.CancelFunc
-	tnRef    string
-	node     *nodeRun
-	phase    string
-	problem  string
-	ping     *pingServer
-	forwards map[string]*forward
-	wake     chan struct{}
-	relayMu  sync.Mutex
-	relayAt  time.Time
-	relayOut []RelayInfo
-	hedera   *HederaKey
-	payBal   payBalances
-	payAt    time.Time
-	payErr   string
+	mu         sync.Mutex
+	id         Identity
+	pub        string
+	saved      Saved
+	rpc        *registry.RPC
+	tn         *registry.Tailnet
+	tnCancel   context.CancelFunc
+	tnRef      string
+	node       *nodeRun
+	phase      string
+	problem    string
+	ping       *pingServer
+	forwards   map[string]*forward
+	wake       chan struct{}
+	relayMu    sync.Mutex
+	relayAt    time.Time
+	relayOut   []RelayInfo
+	hedera     *HederaKey
+	activateAt time.Time
+	// activateFn sends an account's first transaction; tests replace it.
+	activateFn func(ctx context.Context, account, key string) error
+	payBal     payBalances
+	payAt      time.Time
+	payErr     string
 }
 
 type nodeRun struct {

@@ -137,6 +137,8 @@ export interface PayInfo {
   asset: string
   evmAddress?: string
   account?: string
+  /** True until the account's first signed transaction, which the daemon sends once the account holds HBAR. */
+  hollow?: boolean
   hbarTinybar: number
   usdc: number
   active: boolean
